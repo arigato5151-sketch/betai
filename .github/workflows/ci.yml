@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      API_FOOTBALL_KEY: DEMO_KEY
+      DATABASE_URL: sqlite:///./ci_matches.db
+      REDIS_URL: redis://localhost:6379/0
+      JWT_SECRET_KEY: ci-access-secret-that-is-not-used-in-production
+      JWT_REFRESH_SECRET_KEY: ci-refresh-secret-that-is-not-used-in-production
+      ADMIN_USERNAME: ci-admin
+      ADMIN_PASSWORD: ci-password-only
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+      - name: Frontend lint
+        run: npm --prefix frontend run lint
+      - name: Frontend tests
+        run: npm --prefix frontend run test --if-present
+      - name: Ruff
+        run: python -m ruff check backend/app backend/migrations tests scripts
+      - name: Black
+        run: python -m black --check backend/app backend/migrations tests scripts
+      - name: Mypy (typed domain boundary)
+        run: python -m mypy backend/app
+      - name: Alembic migration smoke test
+        run: |
+          python -m alembic -c backend/alembic.ini upgrade head
+          python -m alembic -c backend/alembic.ini check
+      - name: Pytest
+        run: >-
+          python -m pytest tests -q
+          --cov=backend/app
+          --cov-report=term-missing
+          --cov-report=xml
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+          verbose: true
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - name: Build production images
+        run: docker compose build backend frontend worker beat migration bootstrap-admin

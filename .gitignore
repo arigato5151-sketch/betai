@@ -1,0 +1,25 @@
+# Local environment and secret-bearing configuration
+.env
+.env.*
+!.env.example
+
+# Virtual environments and generated model data
+.venv/
+backend/artifacts/
+
+# Python caches, coverage and local databases
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+*.db
+
+# Frontend generated files
+frontend/node_modules/
+frontend/dist/
+
+# Local runtime logs
+*.log

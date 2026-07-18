@@ -1,0 +1,104 @@
+ALLOWED_LEAGUES = [
+    {
+        "id": 39,
+        "name": "Premier League",
+        "country": "England",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.13,
+    },
+    {
+        "id": 140,
+        "name": "La Liga",
+        "country": "Spain",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.11,
+    },
+    {
+        "id": 135,
+        "name": "Serie A",
+        "country": "Italy",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.15,
+    },
+    {
+        "id": 78,
+        "name": "Bundesliga",
+        "country": "Germany",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.09,
+    },
+    {
+        "id": 61,
+        "name": "Ligue 1",
+        "country": "France",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.12,
+    },
+    {
+        "id": 40,
+        "name": "Championship",
+        "country": "England",
+        "tier": "2. Lig",
+        "dixon_coles_rho": -0.14,
+    },
+    {
+        "id": 94,
+        "name": "Liga Portugal",
+        "country": "Portugal",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.12,
+    },
+    {
+        "id": 203,
+        "name": "Super Lig",
+        "country": "Turkey",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.10,
+    },
+    {
+        "id": 88,
+        "name": "Eredivisie",
+        "country": "Netherlands",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.08,
+    },
+    {
+        "id": 144,
+        "name": "Jupiler Pro League",
+        "country": "Belgium",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.12,
+    },
+    {
+        "id": 235,
+        "name": "Premier Liga",
+        "country": "Russia",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.11,
+    },
+    {
+        "id": 79,
+        "name": "2. Bundesliga",
+        "country": "Germany",
+        "tier": "2. Lig",
+        "dixon_coles_rho": -0.10,
+    },
+    {
+        "id": 136,
+        "name": "Serie B",
+        "country": "Italy",
+        "tier": "2. Lig",
+        "dixon_coles_rho": -0.14,
+    },
+    {
+        "id": 62,
+        "name": "Ligue 2",
+        "country": "France",
+        "tier": "2. Lig",
+        "dixon_coles_rho": -0.13,
+    },
+]
+
+ALLOWED_LEAGUE_IDS = {league["id"] for league in ALLOWED_LEAGUES}
+
+LEAGUE_PRIORITY = {league["id"]: index for index, league in enumerate(ALLOWED_LEAGUES)}
