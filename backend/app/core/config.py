@@ -146,6 +146,10 @@ class Settings(BaseSettings):
     ENSEMBLE_ML_WEIGHT: float = Field(default=0.2, ge=0, le=1)
     # TODO: kalibrasyon kaynağını doğrula — ensemble içindeki de-vig market payı.
     ENSEMBLE_MARKET_WEIGHT: float = Field(default=0.4, ge=0, le=1)
+    MIN_ENSEMBLE_CALIBRATION_SAMPLES: int = Field(default=100, ge=30)
+    ENSEMBLE_HOLDOUT_FRACTION: float = Field(default=0.2, ge=0.1, le=0.4)
+    ENSEMBLE_MIN_SOURCE_WEIGHT: float = Field(default=0.05, ge=0, le=0.3)
+    ENSEMBLE_MIN_LOG_LOSS_IMPROVEMENT: float = Field(default=0.001, ge=0)
 
     # Son form feature'ları için beklenen tamamlanmış maç sayısı.
     RECENT_FORM_MATCH_COUNT: int = Field(default=5, ge=1, le=20)
@@ -170,6 +174,12 @@ class Settings(BaseSettings):
         "artifacts",
         "models",
         "active_model.pkl",
+    )
+    ENSEMBLE_WEIGHTS_PATH: str = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "artifacts",
+        "models",
+        "ensemble_weights.json",
     )
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")

@@ -2,12 +2,12 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-from app.core.config import settings
+from app.prediction.ensemble_weights import ensemble_weight_manager
 from app.prediction.stats_engine import StatsEngine
 
 
 class ProbabilityEnsembler:
-    VERSION = "weighted_probability_ensemble_v1"
+    VERSION = "weighted_probability_ensemble_v2"
     OUTCOME_KEYS = ("HOME_WIN", "DRAW", "AWAY_WIN")
 
     @classmethod
@@ -57,11 +57,9 @@ class ProbabilityEnsembler:
             raise ValueError("Stats analysis must contain valid 1X2 probabilities")
 
         sources: dict[str, dict[str, float]] = {"stats": stats_probabilities}
-        configured_weights = {
-            "stats": settings.ENSEMBLE_STATS_WEIGHT,
-            "ml": settings.ENSEMBLE_ML_WEIGHT,
-            "market": settings.ENSEMBLE_MARKET_WEIGHT,
-        }
+        configured_weights, weight_metadata = (
+            ensemble_weight_manager.get_active_weights()
+        )
 
         if ml_result and ml_result.get("ready"):
             ml_probabilities = cls._normalize(ml_result.get("all_probabilities"))
@@ -94,6 +92,7 @@ class ProbabilityEnsembler:
                     "applied": False,
                     "weights": {"stats": 1.0},
                     "components": component_snapshot,
+                    "weight_metadata": weight_metadata,
                 },
             }
 
@@ -128,5 +127,6 @@ class ProbabilityEnsembler:
                     for source, weight in effective_weights.items()
                 },
                 "components": component_snapshot,
+                "weight_metadata": weight_metadata,
             },
         }

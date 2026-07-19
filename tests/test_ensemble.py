@@ -79,6 +79,55 @@ def test_missing_market_renormalizes_available_source_weights() -> None:
     assert sum(result["all_probabilities"].values()) == 100.0
 
 
+def test_learned_weight_metadata_is_applied_and_snapshotted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.prediction import ensemble
+
+    monkeypatch.setattr(
+        ensemble.ensemble_weight_manager,
+        "get_active_weights",
+        lambda: (
+            {"stats": 0.1, "ml": 0.2, "market": 0.7},
+            {"source": "learned", "artifact_version": "weights-1"},
+        ),
+    )
+
+    result = ProbabilityEnsembler.apply(
+        stats_analysis({"HOME_WIN": 60.0, "DRAW": 20.0, "AWAY_WIN": 20.0}),
+        ml_result={
+            "ready": True,
+            "all_probabilities": {
+                "HOME_WIN": 30.0,
+                "DRAW": 30.0,
+                "AWAY_WIN": 40.0,
+            },
+        },
+        market={
+            "fair_probability": {
+                "HOME_WIN": 20.0,
+                "DRAW": 30.0,
+                "AWAY_WIN": 50.0,
+            }
+        },
+    )
+
+    assert result["ensemble"]["weights"] == {
+        "stats": 0.1,
+        "ml": 0.2,
+        "market": 0.7,
+    }
+    assert result["ensemble"]["weight_metadata"] == {
+        "source": "learned",
+        "artifact_version": "weights-1",
+    }
+    assert result["all_probabilities"] == {
+        "HOME_WIN": 26.0,
+        "DRAW": 29.0,
+        "AWAY_WIN": 45.0,
+    }
+
+
 @pytest.mark.parametrize(
     "optional_source",
     [

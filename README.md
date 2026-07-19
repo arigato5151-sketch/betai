@@ -214,6 +214,15 @@ rating farkının varsayılan `%25` bölümü lig ortalaması olan `1500` değer
 hızı, ev avantajı ve sezon regresyonu sırasıyla `ELO_K_FACTOR`,
 `ELO_HOME_ADVANTAGE_POINTS` ve `ELO_SEASON_REGRESSION` ile kalibre edilebilir.
 
+Ensemble ağırlıkları başlangıçta config'teki stats/ML/market değerlerini kullanır.
+Üç kaynağın bileşenleri ve gerçek sonucu bulunan en az 100 kronolojik örnek
+oluştuğunda haftalık eğitim görevi ağırlıkları optimize eder. Aday ağırlıklar son
+`%20` holdout kümesinde mevcut ağırlıklardan en az `0.001` log-loss daha iyi değilse
+reddedilir. Kabul edilen atomik artifact `backend/artifacts/models/ensemble_weights.json`
+altında tutulur; her kaynağın çökmesini önlemek için minimum ağırlık varsayılan `%5`'tir.
+Eşikler `MIN_ENSEMBLE_CALIBRATION_SAMPLES`, `ENSEMBLE_HOLDOUT_FRACTION`,
+`ENSEMBLE_MIN_SOURCE_WEIGHT` ve `ENSEMBLE_MIN_LOG_LOSS_IMPROVEMENT` ile değiştirilebilir.
+
 ### Temel analiz algoritması
 
 Aktif analiz akışı kavramsal olarak aşağıdaki kodla özetlenebilir:

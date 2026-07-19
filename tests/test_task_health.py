@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import redis
 
@@ -59,3 +59,28 @@ def test_celery_connection_recovery_and_delivery_guards_are_enabled() -> None:
         "sync-completed-matches-daily",
         "retrain-ml-model-weekly",
     }
+
+
+def test_retraining_task_calibrates_ensemble_before_training(monkeypatch) -> None:
+    from app.tasks import jobs
+
+    labeled_rows = [Mock(id=1)]
+    session_context = MagicMock()
+    repository = Mock()
+    repository.get_all_labeled.return_value = labeled_rows
+    calibrate = Mock(return_value={"status": "insufficient_data"})
+    train = Mock(return_value=True)
+    monkeypatch.setattr(jobs, "SessionLocal", Mock(return_value=session_context))
+    monkeypatch.setattr(
+        jobs, "MatchPredictionRepository", Mock(return_value=repository)
+    )
+    monkeypatch.setattr(
+        jobs.ensemble_weight_manager, "optimize_and_activate", calibrate
+    )
+    monkeypatch.setattr(jobs.ml_pipeline, "train_pipeline", train)
+
+    result = jobs.retrain_ml_model_task.run()
+
+    assert result == "Retraining success."
+    calibrate.assert_called_once_with(labeled_rows)
+    train.assert_called_once_with(labeled_rows)

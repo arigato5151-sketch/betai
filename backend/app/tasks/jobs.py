@@ -10,6 +10,7 @@ from app.db.repository import MatchPredictionRepository
 from app.db.models import MatchPrediction
 from app.services.api_football import APIFootballClient
 from app.prediction.ml.model import ml_pipeline
+from app.prediction.ensemble_weights import ensemble_weight_manager
 from app.prediction.audit import PredictionAuditor
 
 logger = logging.getLogger("bet-ai-pro.tasks")
@@ -78,6 +79,8 @@ def retrain_ml_model_task() -> str:
         repo = MatchPredictionRepository(db)
         labeled_rows = repo.get_all_labeled()
 
+        weight_result = ensemble_weight_manager.optimize_and_activate(labeled_rows)
+        logger.info("Ensemble weight calibration result: %s", weight_result)
         success = ml_pipeline.train_pipeline(labeled_rows)
 
         if success:
