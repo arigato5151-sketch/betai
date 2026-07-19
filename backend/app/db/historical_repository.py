@@ -119,3 +119,26 @@ class HistoricalFixtureRepository:
             .limit(limit)
             .all()
         )
+
+    def get_team_history(
+        self,
+        *,
+        team_id: int,
+        league_id: int,
+        before: datetime,
+        limit: int = 5,
+    ) -> list[HistoricalFixture]:
+        return (
+            self.db.query(HistoricalFixture)
+            .filter(
+                HistoricalFixture.league_id == league_id,
+                or_(
+                    HistoricalFixture.home_team_id == team_id,
+                    HistoricalFixture.away_team_id == team_id,
+                ),
+                HistoricalFixture.kickoff < before,
+            )
+            .order_by(HistoricalFixture.kickoff.desc())
+            .limit(limit)
+            .all()
+        )

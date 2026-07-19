@@ -147,6 +147,11 @@ class Settings(BaseSettings):
     # TODO: kalibrasyon kaynağını doğrula — ensemble içindeki de-vig market payı.
     ENSEMBLE_MARKET_WEIGHT: float = Field(default=0.4, ge=0, le=1)
 
+    # Son form feature'ları için beklenen tamamlanmış maç sayısı.
+    RECENT_FORM_MATCH_COUNT: int = Field(default=5, ge=1, le=20)
+    # Eski yerel snapshot yerine canlı API fallback'ine geçiş eşiği.
+    HISTORICAL_FORM_MAX_AGE_DAYS: int = Field(default=45, ge=1, le=365)
+
     MIN_TRAINING_SAMPLES: int = 200
     RETRAIN_EVERY_N_NEW: int = 25
     MODEL_ARTIFACTS_DIR: str = os.path.join(

@@ -7,9 +7,11 @@ from app.api.endpoints import (
     AnalysisRequest,
     _build_analysis_response,
     _compute_analysis,
+    _fetch_ml_match_data,
 )
 from app.core.config import settings
 from app.prediction.ml.features import FeatureEngine
+from app.prediction.ml.historical import HistoricalFeatureContext
 from app.prediction.value_calc import ValueCalc
 
 
@@ -96,6 +98,120 @@ async def test_analysis_collects_feature_snapshot_before_first_model(
     assert computed["feature_vector"]["rest_days_diff"] == -1.0
     assert computed["feature_vector"]["h2h_home_win_rate"] == 0.6
     assert computed["ml_result"] == {"ready": False}
+
+
+@pytest.mark.asyncio
+async def test_analysis_prefers_complete_point_in_time_history_over_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    match_dates = pd.date_range("2026-07-01T18:00:00Z", periods=5, freq="3D", tz="UTC")
+    home_matches = pd.DataFrame(
+        {
+            "match_date": match_dates,
+            "points": [3.0, 3.0, 1.0, 3.0, 3.0],
+            "result": ["W", "W", "D", "W", "W"],
+            "clean_sheet": [1, 0, 0, 1, 1],
+            "scoring": [1, 1, 1, 1, 1],
+            "goals_for": [2, 3, 1, 2, 1],
+            "goals_against": [0, 1, 1, 0, 0],
+        }
+    )
+    away_matches = home_matches.assign(
+        points=[0.0, 1.0, 0.0, 0.0, 1.0],
+        result=["L", "D", "L", "L", "D"],
+    )
+    context = HistoricalFeatureContext(
+        home_elo=1580.0,
+        away_elo=1460.0,
+        h2h_rates={
+            "home_win_rate": 0.6,
+            "draw_rate": 0.2,
+            "home_loss_rate": 0.2,
+        },
+        h2h_matches=[{"home_goals": 2, "away_goals": 0}],
+        home_matches_df=home_matches,
+        away_matches_df=away_matches,
+    )
+    monkeypatch.setattr(endpoints, "_get_historical_feature_context", lambda _: context)
+    monkeypatch.setattr(endpoints.ml_pipeline, "is_ready", False)
+    home_api = AsyncMock(side_effect=AssertionError("form API should not be called"))
+    h2h_api = AsyncMock(side_effect=AssertionError("H2H API should not be called"))
+    monkeypatch.setattr(endpoints.football_api, "get_team_last_matches_df", home_api)
+    monkeypatch.setattr(endpoints.football_api, "get_h2h", h2h_api)
+    payload = AnalysisRequest(
+        home_team="Home",
+        away_team="Away",
+        home_team_id=1,
+        away_team_id=2,
+        league_id=203,
+        season=2026,
+        kickoff="2026-07-20T18:00:00Z",
+        home_stats={"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
+        away_stats={"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        odd=2.1,
+    )
+
+    computed = await _compute_analysis(payload)
+
+    assert computed["feature_vector"]["home_elo"] == 1580.0
+    assert computed["feature_vector"]["away_elo"] == 1460.0
+    assert computed["feature_vector"]["home_gf_last5"] == 1.8
+    assert computed["feature_vector"]["h2h_avg_goals_home"] == 2.0
+    home_api.assert_not_awaited()
+    h2h_api.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stale_point_in_time_form_uses_api_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    stale_frame = pd.DataFrame(
+        {
+            "match_date": pd.date_range("2026-01-01", periods=5, freq="7D", tz="UTC"),
+            "points": [3.0] * 5,
+        }
+    )
+    api_frame = pd.DataFrame(
+        {
+            "match_date": [pd.Timestamp("2026-07-17T18:00:00Z")],
+            "points": [1.0],
+        }
+    )
+    context = HistoricalFeatureContext(
+        h2h_rates={
+            "home_win_rate": 0.4,
+            "draw_rate": 0.3,
+            "home_loss_rate": 0.3,
+        },
+        home_matches_df=stale_frame,
+        away_matches_df=stale_frame,
+    )
+    form_api = AsyncMock(return_value=api_frame)
+    h2h_api = AsyncMock(side_effect=AssertionError("local H2H should be used"))
+    monkeypatch.setattr(endpoints.football_api, "get_team_last_matches_df", form_api)
+    monkeypatch.setattr(endpoints.football_api, "get_h2h", h2h_api)
+    payload = AnalysisRequest(
+        home_team="Home",
+        away_team="Away",
+        home_team_id=1,
+        away_team_id=2,
+        kickoff="2026-07-20T18:00:00Z",
+        home_stats={"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
+        away_stats={"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        odd=2.1,
+    )
+
+    home_matches, away_matches, h2h_rates = await _fetch_ml_match_data(payload, context)
+
+    assert home_matches is api_frame
+    assert away_matches is api_frame
+    assert h2h_rates is context.h2h_rates
+    assert form_api.await_count == 2
+    h2h_api.assert_not_awaited()
 
 
 @pytest.mark.asyncio

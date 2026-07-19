@@ -87,6 +87,12 @@ def test_history_queries_exclude_future_matches(
 
     assert [row.fixture_id for row in league_history] == [100]
     assert [row.fixture_id for row in h2h] == [100]
+    assert [
+        row.fixture_id
+        for row in historical_repository.get_team_history(
+            team_id=1, league_id=203, before=cutoff
+        )
+    ] == [100]
 
 
 def test_historical_context_builds_elo_and_normalizes_reversed_h2h(
@@ -126,6 +132,12 @@ def test_historical_context_builds_elo_and_normalizes_reversed_h2h(
         "home_loss_rate": 0.5,
         "source": "historical_fixtures",
     }
+    assert context.home_matches_df is not None
+    assert context.away_matches_df is not None
+    assert context.home_matches_df["result"].tolist() == ["W", "L"]
+    assert context.home_matches_df["points"].tolist() == [3.0, 0.0]
+    assert context.away_matches_df["result"].tolist() == ["L", "W"]
+    assert str(context.home_matches_df["match_date"].dt.tz) == "UTC"
 
 
 @pytest.mark.parametrize(

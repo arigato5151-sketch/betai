@@ -202,6 +202,12 @@ Demo API anahtarı tarihsel veri üretmez; gerçek backfill için geçerli API-F
 anahtarı gerekir. Aynı `fixture_id` yeniden çekildiğinde skor ve durum güncellenir,
 yeni bir satır oluşturulmaz.
 
+Son maç formu, dinlenme günü, gol ortalaması, clean-sheet ve gol serisi feature'ları
+da aynı zaman kesitli tablodan üretilir. Yerel geçmişte varsayılan olarak en az 5 maç
+yoksa veya son kayıt 45 günden eskiyse API-Football verisine fallback yapılır. Bu
+eşikler `RECENT_FORM_MATCH_COUNT` ve `HISTORICAL_FORM_MAX_AGE_DAYS` ortam
+değişkenleriyle ayarlanabilir.
+
 ### Temel analiz algoritması
 
 Aktif analiz akışı kavramsal olarak aşağıdaki kodla özetlenebilir:

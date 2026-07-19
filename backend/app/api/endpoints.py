@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
 from fastapi import (
@@ -421,19 +422,58 @@ def _build_analysis_response(
     }
 
 
-async def _fetch_ml_match_data(payload: AnalysisRequest) -> Tuple[Any, Any, Any]:
-    """External API calls — no DB session held."""
-    if not payload.home_team_id or not payload.away_team_id:
-        return None, None, None
+async def _fetch_ml_match_data(
+    payload: AnalysisRequest, historical: HistoricalFeatureContext
+) -> Tuple[Any, Any, Any]:
+    """Fill missing point-in-time sources from API without holding a DB session."""
+    home_team_id = payload.home_team_id
+    away_team_id = payload.away_team_id
+    if home_team_id is None or away_team_id is None:
+        return historical.home_matches_df, historical.away_matches_df, None
 
-    home_matches_df = await football_api.get_team_last_matches_df(
-        payload.home_team_id, last=5
-    )
-    away_matches_df = await football_api.get_team_last_matches_df(
-        payload.away_team_id, last=5
-    )
-    h2h_rates = await football_api.get_h2h(
-        payload.home_team_id, payload.away_team_id, last=5
+    def local_history_is_usable(local_frame: Any) -> bool:
+        if (
+            local_frame is None
+            or len(local_frame) < settings.RECENT_FORM_MATCH_COUNT
+            or payload.kickoff is None
+            or "match_date" not in local_frame.columns
+        ):
+            return False
+        latest = local_frame["match_date"].max()
+        latest_datetime = (
+            latest.to_pydatetime() if hasattr(latest, "to_pydatetime") else latest
+        )
+        if latest_datetime.tzinfo is None:
+            latest_datetime = latest_datetime.replace(tzinfo=timezone.utc)
+        kickoff = payload.kickoff
+        if kickoff.tzinfo is None:
+            kickoff = kickoff.replace(tzinfo=timezone.utc)
+        age_days = (kickoff - latest_datetime).total_seconds() / 86400.0
+        return 0 <= age_days <= settings.HISTORICAL_FORM_MAX_AGE_DAYS
+
+    async def recent_matches(local_frame: Any, team_id: int) -> Any:
+        if local_history_is_usable(local_frame):
+            return local_frame
+        api_frame = await football_api.get_team_last_matches_df(
+            team_id, last=settings.RECENT_FORM_MATCH_COUNT
+        )
+        if api_frame is not None and not api_frame.empty:
+            return api_frame
+        return local_frame
+
+    async def h2h() -> Any:
+        if historical.h2h_rates:
+            return historical.h2h_rates
+        return await football_api.get_h2h(
+            home_team_id,
+            away_team_id,
+            last=settings.RECENT_FORM_MATCH_COUNT,
+        )
+
+    home_matches_df, away_matches_df, h2h_rates = await asyncio.gather(
+        recent_matches(historical.home_matches_df, home_team_id),
+        recent_matches(historical.away_matches_df, away_team_id),
+        h2h(),
     )
     return home_matches_df, away_matches_df, h2h_rates
 
@@ -458,6 +498,7 @@ def _get_historical_feature_context(
             league_id=payload.league_id,
             season=payload.season,
             before=payload.kickoff,
+            recent_match_count=settings.RECENT_FORM_MATCH_COUNT,
         )
 
 
@@ -472,11 +513,10 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     ml_result: dict = {"ready": False}
     ml_explanations: List[str] = []
 
-    home_matches_df, away_matches_df, api_h2h_rates = await _fetch_ml_match_data(
-        payload
-    )
     historical = _get_historical_feature_context(payload)
-    h2h_rates = historical.h2h_rates or api_h2h_rates
+    home_matches_df, away_matches_df, h2h_rates = await _fetch_ml_match_data(
+        payload, historical
+    )
     feature_vector = FeatureEngine.build_inference_features(
         home_stats=payload.home_stats.model_dump(),
         away_stats=payload.away_stats.model_dump(),

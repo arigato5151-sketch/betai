@@ -17,12 +17,7 @@ logger = logging.getLogger("bet-ai-pro.tasks")
 
 def _run_async(coro):
     """Utility helper to run async coroutines in synchronous Celery task threads."""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _current_football_season(today: date | None = None) -> int:
