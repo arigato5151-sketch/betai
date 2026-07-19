@@ -188,3 +188,84 @@ def test_professional_evaluation_returns_neutral_result_without_market() -> None
         "value_options": [],
         "market": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("probability_pct", "odd", "expected_stake"),
+    [
+        (99.0, 1.01, 0.0),
+        (100.0, 1.01, 5.0),
+        (0.0, 2.0, 0.0),
+        (50.0, 999.0, 1.5),
+    ],
+    ids=[
+        "odd-near-one-without-positive-kelly",
+        "probability-one-near-one-odd-cap",
+        "probability-zero-no-stake",
+        "extreme-odd-max-kelly-cap",
+    ],
+)
+def test_kelly_edge_case_boundaries(
+    probability_pct: float, odd: float, expected_stake: float
+) -> None:
+    assert ValueCalc._kelly_stake(probability_pct, odd) == expected_stake
+    assert ValueCalc._kelly_stake(probability_pct, odd) <= ValueCalc._max_kelly_pct(
+        odd
+    )
+
+
+@pytest.mark.parametrize(
+    "model_probs",
+    [
+        {"HOME_WIN": 20.0, "DRAW": 40.0, "AWAY_WIN": 40.0},
+        {"HOME_WIN": 0.0, "DRAW": 0.0, "AWAY_WIN": 0.0},
+    ],
+    ids=["negative-edge-market", "zero-probability-market"],
+)
+def test_professional_evaluation_rejects_non_value_edges(model_probs: dict) -> None:
+    market = ValueCalc.devig_1x2(2.0, 2.0, 2.0)
+
+    result = ValueCalc._evaluate_with_market(model_probs, market)
+
+    assert result["value_bet"] is False
+    assert result["best_pick"] is None
+    assert result["value_options"] == []
+    assert result["edge"] <= 0
+
+
+@pytest.mark.parametrize(
+    ("odds", "expected_overround"),
+    [
+        ((2.0, 4.0, 4.0), 0.0),
+        ((4.0, 4.0, 4.0), -25.0),
+    ],
+    ids=["zero-overround-normalized", "negative-overround-normalized"],
+)
+def test_devig_safely_normalizes_non_positive_overround(
+    odds: tuple[float, float, float], expected_overround: float
+) -> None:
+    market = ValueCalc.devig_1x2(*odds)
+
+    assert market["overround_pct"] == expected_overround
+    assert sum(market["fair_probability"].values()) == pytest.approx(100.0, abs=0.02)
+    assert all(probability > 0 for probability in market["fair_probability"].values())
+
+
+@pytest.mark.parametrize(
+    ("probability_pct", "odd", "expected_stake"),
+    [
+        (55.0, 2.0, 2.5),
+        (40.0, 3.0, 2.5),
+    ],
+    ids=["quarter-kelly-even-odds", "quarter-kelly-three-to-one"],
+)
+def test_quarter_kelly_fraction_is_applied_before_cap(
+    probability_pct: float, odd: float, expected_stake: float
+) -> None:
+    probability = probability_pct / 100.0
+    full_kelly = (((odd - 1.0) * probability) - (1.0 - probability)) / (odd - 1.0)
+
+    assert full_kelly * ValueCalc.KELLY_FRACTION * 100 == pytest.approx(
+        expected_stake
+    )
+    assert ValueCalc._kelly_stake(probability_pct, odd) == expected_stake
