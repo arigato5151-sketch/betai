@@ -105,6 +105,32 @@ def test_sqlite_upsert_creates_then_updates_same_fixture() -> None:
         session.close()
 
 
+def test_sqlite_upsert_persists_versioned_feature_snapshot() -> None:
+    session, repository = build_repository()
+    snapshot = {"home_form": 72.0, "away_form": 61.0}
+    try:
+        repository.upsert_prediction(
+            {
+                "fixture_id": 100,
+                "home_team": "Snapshot FC",
+                "away_team": "Parity FC",
+                "feature_snapshot": snapshot,
+                "feature_schema_version": "ml_features_v1",
+                "feature_snapshot_at": datetime(2026, 7, 19, tzinfo=UTC),
+            }
+        )
+
+        session.expire_all()
+        persisted = repository.get_by_fixture_id(100)
+
+        assert persisted is not None
+        assert persisted.feature_snapshot == snapshot
+        assert persisted.feature_schema_version == "ml_features_v1"
+        assert persisted.feature_snapshot_at is not None
+    finally:
+        session.close()
+
+
 def test_repository_lists_labeled_unlabeled_and_counts() -> None:
     session, repository = build_repository()
     try:

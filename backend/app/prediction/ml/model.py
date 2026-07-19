@@ -11,6 +11,7 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.metrics import log_loss
 from app.core.config import settings
 from app.core.logging_config import logger
+from app.prediction.ml.features import FeatureEngine
 
 # Try imports with robust fallbacks
 try:
@@ -42,28 +43,7 @@ class MLModelPipeline:
     def __init__(self):
         self.model: Optional[Any] = None
         self.calibrator: Optional[Any] = None
-        self.feature_names = [
-            "home_form",
-            "home_attack",
-            "home_defense",
-            "home_xg",
-            "away_form",
-            "away_attack",
-            "away_defense",
-            "away_xg",
-            "home_form_ema",
-            "away_form_ema",
-            "rest_days_diff",
-            "home_clean_sheet_streak",
-            "away_clean_sheet_streak",
-            "home_scoring_streak",
-            "away_scoring_streak",
-            "h2h_home_win_rate",
-            "h2h_draw_rate",
-            "h2h_home_loss_rate",
-            "home_elo",
-            "away_elo",
-        ]
+        self.feature_names = list(FeatureEngine.FEATURE_NAMES)
         self.is_ready = False
         self.active_model_name: Optional[str] = None
         self.metrics: Dict[str, float] = {}
@@ -143,6 +123,7 @@ class MLModelPipeline:
             "model": model,
             "calibrator": calibrator,
             "feature_names": self.feature_names,
+            "feature_schema_version": FeatureEngine.SCHEMA_VERSION,
             "model_name": model_name,
             "metrics": metrics,
         }
@@ -265,6 +246,9 @@ class MLModelPipeline:
             )
             return False
 
+        # Retraining upgrades legacy artifacts to the current inference schema.
+        self.feature_names = list(FeatureEngine.FEATURE_NAMES)
+
         # Extract features and targets from DB rows
         X_list = []
         y_list = []
@@ -273,29 +257,8 @@ class MLModelPipeline:
             if not row.actual_result:
                 continue
 
-            # Build feature array in strict order
-            feats = [
-                float(row.home_form or 50),
-                float(row.home_attack or 50),
-                float(row.home_defense or 50),
-                float(row.home_xg or 1.2),
-                float(row.away_form or 50),
-                float(row.away_attack or 50),
-                float(row.away_defense or 50),
-                float(row.away_xg or 1.2),
-                float(row.home_form or 50),  # home_form_ema fallback
-                float(row.away_form or 50),  # away_form_ema fallback
-                0.0,  # rest_days_diff fallback
-                0.0,  # streaks
-                0.0,
-                0.0,
-                0.0,
-                0.33,  # H2H rates
-                0.33,
-                0.34,
-                1500.0,  # Elo rates
-                1500.0,
-            ]
+            feature_dict = FeatureEngine.build_training_features(row)
+            feats = [feature_dict[name] for name in self.feature_names]
             label = self.LABEL_MAP.get(row.actual_result)
             if label is None or not all(math.isfinite(value) for value in feats):
                 continue

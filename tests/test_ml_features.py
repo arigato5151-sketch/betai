@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -129,3 +130,45 @@ def test_empty_feature_sources_use_documented_defaults() -> None:
     assert features["home_form_ema"] == 50.0
     assert features["rest_days_diff"] == 0.0
     assert features["home_elo"] == 1500.0
+
+
+def test_training_uses_same_versioned_snapshot_schema_as_inference() -> None:
+    snapshot = {
+        **FeatureEngine.FEATURE_DEFAULTS,
+        "home_form_ema": 82.5,
+        "rest_days_diff": -2.0,
+        "home_elo": 1612.0,
+        "home_gf_last5": 2.4,
+    }
+    row = SimpleNamespace(
+        feature_snapshot=snapshot,
+        feature_schema_version=FeatureEngine.SCHEMA_VERSION,
+    )
+
+    features = FeatureEngine.build_training_features(row)
+
+    assert list(features) == FeatureEngine.FEATURE_NAMES
+    assert features == snapshot
+
+
+def test_legacy_training_rows_receive_explicit_full_schema_defaults() -> None:
+    row = SimpleNamespace(
+        feature_snapshot=None,
+        feature_schema_version=None,
+        home_form=71.0,
+        home_attack=68.0,
+        home_defense=64.0,
+        home_xg=1.6,
+        away_form=59.0,
+        away_attack=61.0,
+        away_defense=63.0,
+        away_xg=1.1,
+    )
+
+    features = FeatureEngine.build_training_features(row)
+
+    assert list(features) == FeatureEngine.FEATURE_NAMES
+    assert features["home_form"] == 71.0
+    assert features["home_form_ema"] == 50.0
+    assert features["home_elo"] == 1500.0
+    assert features["h2h_avg_goals_away"] == 1.0

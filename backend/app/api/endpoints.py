@@ -272,6 +272,9 @@ class AnalysisRequest(BaseModel):
         None, gt=0, description="API Football away team ID"
     )
     league_id: Optional[int] = Field(None, gt=0, description="API Football league ID")
+    kickoff: Optional[datetime] = Field(
+        None, description="Fixture kickoff used for point-in-time rest features"
+    )
 
     @field_validator("home_team", "away_team")
     @classmethod
@@ -351,6 +354,7 @@ def _build_payload_from_prefill(prefill: Dict[str, Any]) -> AnalysisRequest:
         home_team_id=fixture.get("home_team_id"),
         away_team_id=fixture.get("away_team_id"),
         league_id=fixture.get("league_id"),
+        kickoff=fixture.get("kickoff"),
     )
 
 
@@ -409,8 +413,6 @@ def _build_analysis_response(
 
 async def _fetch_ml_match_data(payload: AnalysisRequest) -> Tuple[Any, Any, Any]:
     """External API calls — no DB session held."""
-    if not ml_pipeline.is_ready:
-        return None, None, None
     if not payload.home_team_id or not payload.away_team_id:
         return None, None, None
 
@@ -448,15 +450,15 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     insights = StatsEngine.build_insights(analysis, value_data)
 
     home_matches_df, away_matches_df, h2h_rates = await _fetch_ml_match_data(payload)
+    feature_vector = FeatureEngine.build_inference_features(
+        home_stats=payload.home_stats.model_dump(),
+        away_stats=payload.away_stats.model_dump(),
+        home_matches_df=home_matches_df,
+        away_matches_df=away_matches_df,
+        h2h_rates=h2h_rates,
+        fixture_date=payload.kickoff,
+    )
     if ml_pipeline.is_ready:
-        feature_vector = FeatureEngine.build_inference_features(
-            home_stats=payload.home_stats.model_dump(),
-            away_stats=payload.away_stats.model_dump(),
-            home_matches_df=home_matches_df,
-            away_matches_df=away_matches_df,
-            h2h_rates=h2h_rates,
-            fixture_date=None,
-        )
         ml_result = ml_pipeline.predict_match(feature_vector)
         if ml_result.get("ready"):
             explanations = ExplainabilityService.generate_explanation(
@@ -470,6 +472,7 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         "analysis": analysis,
         "value_data": value_data,
         "ml_result": ml_result,
+        "feature_vector": feature_vector,
         "insights": insights,
     }
 
@@ -478,6 +481,7 @@ def _persist_analysis(payload: AnalysisRequest, computed: dict):
     analysis = computed["analysis"]
     value_data = computed["value_data"]
     ml_result = computed["ml_result"]
+    feature_vector = computed["feature_vector"]
     probs = analysis["all_probabilities"]
     best_pick = value_data.get("best_pick") or {}
 
@@ -509,6 +513,9 @@ def _persist_analysis(payload: AnalysisRequest, computed: dict):
         "ml_confidence": (
             ml_result.get("probability", 0.0) if ml_result.get("ready") else 0.0
         ),
+        "feature_snapshot": feature_vector,
+        "feature_schema_version": FeatureEngine.SCHEMA_VERSION,
+        "feature_snapshot_at": datetime.now(timezone.utc),
     }
 
     with SessionLocal() as db:

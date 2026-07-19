@@ -10,6 +10,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Table,
 )
@@ -189,6 +190,15 @@ class MatchPrediction(Base):
 
     ml_cluster: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ml_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    feature_snapshot: Mapped[dict[str, float] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    feature_schema_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    feature_snapshot_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     actual_result: Mapped[str | None] = mapped_column(String, nullable=True)
     actual_score_home: Mapped[int | None] = mapped_column(Integer, nullable=True)

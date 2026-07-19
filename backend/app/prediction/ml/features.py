@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Any
 
 
 class FeatureEngine:
+    SCHEMA_VERSION = "ml_features_v1"
     FEATURE_NAMES = [
         "home_form",
         "home_attack",
@@ -34,6 +35,65 @@ class FeatureEngine:
         "h2h_avg_goals_home",  # H2H maçlarda ev sahibinin ort. golü
         "h2h_avg_goals_away",  # H2H maçlarda deplasmandaki ort. golü
     ]
+    FEATURE_DEFAULTS = {
+        "home_form": 50.0,
+        "home_attack": 50.0,
+        "home_defense": 50.0,
+        "home_xg": 1.2,
+        "away_form": 50.0,
+        "away_attack": 50.0,
+        "away_defense": 50.0,
+        "away_xg": 1.2,
+        "home_form_ema": 50.0,
+        "away_form_ema": 50.0,
+        "rest_days_diff": 0.0,
+        "home_clean_sheet_streak": 0.0,
+        "away_clean_sheet_streak": 0.0,
+        "home_scoring_streak": 0.0,
+        "away_scoring_streak": 0.0,
+        "h2h_home_win_rate": 0.33,
+        "h2h_draw_rate": 0.33,
+        "h2h_home_loss_rate": 0.34,
+        "home_elo": 1500.0,
+        "away_elo": 1500.0,
+        "home_advantage_coeff": 1.0,
+        "home_gf_last5": 0.0,
+        "home_ga_last5": 0.0,
+        "away_gf_last5": 0.0,
+        "away_ga_last5": 0.0,
+        "h2h_avg_goals_home": 1.2,
+        "h2h_avg_goals_away": 1.0,
+    }
+
+    @classmethod
+    def build_training_features(cls, row: Any) -> Dict[str, float]:
+        """Return a training vector with the exact inference feature schema."""
+        snapshot = getattr(row, "feature_snapshot", None)
+        snapshot_version = getattr(row, "feature_schema_version", None)
+
+        if isinstance(snapshot, dict) and snapshot_version == cls.SCHEMA_VERSION:
+            source = snapshot
+        else:
+            # Legacy rows predate feature snapshots; preserve them with explicit defaults.
+            source = {
+                **cls.FEATURE_DEFAULTS,
+                "home_form": getattr(row, "home_form", None),
+                "home_attack": getattr(row, "home_attack", None),
+                "home_defense": getattr(row, "home_defense", None),
+                "home_xg": getattr(row, "home_xg", None),
+                "away_form": getattr(row, "away_form", None),
+                "away_attack": getattr(row, "away_attack", None),
+                "away_defense": getattr(row, "away_defense", None),
+                "away_xg": getattr(row, "away_xg", None),
+            }
+
+        features: Dict[str, float] = {}
+        for name in cls.FEATURE_NAMES:
+            value = source.get(name)
+            if value is None:
+                value = cls.FEATURE_DEFAULTS[name]
+            features[name] = float(value)
+        return features
 
     @staticmethod
     def calculate_elo_ratings(
@@ -200,7 +260,22 @@ class FeatureEngine:
         Robust feature vector inşa et - training'de kullanılan aynı formüllerle.
         Yeni enriched features: home_advantage_coeff, last5 GF/GA, H2H goals
         """
-        fixture_date = fixture_date or pd.Timestamp.today().normalize()
+        home_matches_df = (
+            home_matches_df
+            if isinstance(home_matches_df, pd.DataFrame)
+            else pd.DataFrame()
+        )
+        away_matches_df = (
+            away_matches_df
+            if isinstance(away_matches_df, pd.DataFrame)
+            else pd.DataFrame()
+        )
+        h2h_rates = h2h_rates or {}
+        fixture_date = (
+            pd.Timestamp(fixture_date)
+            if fixture_date is not None
+            else pd.Timestamp.today().normalize()
+        )
         h2h_matches = h2h_matches or []
 
         # Dynamic EMA and streaks calculations

@@ -6,6 +6,7 @@ import pytest
 
 from app.core.config import settings
 from app.prediction.ml.calibrate import MultiClassCalibrator
+from app.prediction.ml.features import FeatureEngine
 from app.prediction.ml.model import MLModelPipeline
 
 
@@ -34,6 +35,7 @@ def training_row(result: str | None) -> SimpleNamespace:
 def test_not_ready_pipeline_returns_safe_fallback() -> None:
     pipeline = MLModelPipeline()
 
+    assert pipeline.feature_names == FeatureEngine.FEATURE_NAMES
     assert pipeline.predict_match({}) == {"ready": False, "probabilities": None}
 
 
