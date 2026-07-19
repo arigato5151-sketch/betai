@@ -199,6 +199,10 @@ class MatchPrediction(Base):
     feature_snapshot_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    probability_components: Mapped[dict[str, object] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    ensemble_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     actual_result: Mapped[str | None] = mapped_column(String, nullable=True)
     actual_score_home: Mapped[int | None] = mapped_column(Integer, nullable=True)

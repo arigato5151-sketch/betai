@@ -64,9 +64,7 @@ class Settings(BaseSettings):
     # TODO: kalibrasyon kaynağını doğrula — lig başına ortalama gol tabanı.
     LEAGUE_BASELINE_GOALS: float = Field(default=1.32, gt=0)
     # TODO: kalibrasyon kaynağını doğrula — son beş maçın azalan form ağırlıkları.
-    FORM_DECAY_WEIGHTS: tuple[float, ...] = Field(
-        default=(1.0, 0.88, 0.76, 0.64, 0.52)
-    )
+    FORM_DECAY_WEIGHTS: tuple[float, ...] = Field(default=(1.0, 0.88, 0.76, 0.64, 0.52))
     # TODO: kalibrasyon kaynağını doğrula — beş maçtan eski form girdisi ağırlığı.
     FORM_DECAY_FALLBACK_WEIGHT: float = Field(default=0.4, ge=0)
     # TODO: kalibrasyon kaynağını doğrula — ev sahibi xG hücum çarpanı.
@@ -142,6 +140,12 @@ class Settings(BaseSettings):
             62: -0.13,
         }
     )
+    # TODO: kalibrasyon kaynağını doğrula — ensemble içindeki istatistik modeli payı.
+    ENSEMBLE_STATS_WEIGHT: float = Field(default=0.4, gt=0, le=1)
+    # TODO: kalibrasyon kaynağını doğrula — ensemble içindeki kalibre ML payı.
+    ENSEMBLE_ML_WEIGHT: float = Field(default=0.2, ge=0, le=1)
+    # TODO: kalibrasyon kaynağını doğrula — ensemble içindeki de-vig market payı.
+    ENSEMBLE_MARKET_WEIGHT: float = Field(default=0.4, ge=0, le=1)
 
     MIN_TRAINING_SAMPLES: int = 200
     RETRAIN_EVERY_N_NEW: int = 25

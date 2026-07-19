@@ -10,6 +10,7 @@ from app.api.endpoints import (
 )
 from app.core.config import settings
 from app.prediction.ml.features import FeatureEngine
+from app.prediction.value_calc import ValueCalc
 
 
 def test_insufficient_ml_response_reports_sample_gap() -> None:
@@ -95,3 +96,66 @@ async def test_analysis_collects_feature_snapshot_before_first_model(
     assert computed["feature_vector"]["rest_days_diff"] == -1.0
     assert computed["feature_vector"]["h2h_home_win_rate"] == 0.6
     assert computed["ml_result"] == {"ready": False}
+
+
+@pytest.mark.asyncio
+async def test_value_evaluation_uses_ensemble_probabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    monkeypatch.setattr(settings, "ENSEMBLE_STATS_WEIGHT", 0.4)
+    monkeypatch.setattr(settings, "ENSEMBLE_ML_WEIGHT", 0.2)
+    monkeypatch.setattr(settings, "ENSEMBLE_MARKET_WEIGHT", 0.4)
+    monkeypatch.setattr(
+        endpoints.StatsEngine,
+        "analyze_match",
+        lambda *_args, **_kwargs: {
+            "model": "stats_test",
+            "prediction": "DRAW",
+            "probability": 40.0,
+            "all_probabilities": {
+                "HOME_WIN": 20.0,
+                "DRAW": 40.0,
+                "AWAY_WIN": 40.0,
+            },
+            "confidence_gap": 0.0,
+            "confidence_tier": "DUSUK",
+        },
+    )
+    monkeypatch.setattr(endpoints.ml_pipeline, "is_ready", True)
+    monkeypatch.setattr(
+        endpoints.ml_pipeline,
+        "predict_match",
+        lambda _features: {
+            "ready": True,
+            "prediction": "HOME_WIN",
+            "probability": 80.0,
+            "all_probabilities": {
+                "HOME_WIN": 80.0,
+                "DRAW": 10.0,
+                "AWAY_WIN": 10.0,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        endpoints.ExplainabilityService,
+        "generate_explanation",
+        lambda *_args, **_kwargs: [],
+    )
+    market = ValueCalc.devig_1x2(2.0, 2.0, 2.0)
+    payload = AnalysisRequest(
+        home_team="Home",
+        away_team="Away",
+        home_stats={"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
+        away_stats={"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        odd=2.0,
+        market_1x2=market,
+    )
+
+    computed = await _compute_analysis(payload)
+
+    assert computed["analysis"]["prediction"] == "HOME_WIN"
+    assert computed["analysis"]["all_probabilities"]["HOME_WIN"] == 37.34
+    assert computed["value_data"]["edge"] == -25.32
+    assert computed["analysis"]["ensemble"]["applied"] is True

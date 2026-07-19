@@ -108,6 +108,10 @@ def test_sqlite_upsert_creates_then_updates_same_fixture() -> None:
 def test_sqlite_upsert_persists_versioned_feature_snapshot() -> None:
     session, repository = build_repository()
     snapshot = {"home_form": 72.0, "away_form": 61.0}
+    probability_components = {
+        "version": "weighted_probability_ensemble_v1",
+        "weights": {"stats": 0.5, "market": 0.5},
+    }
     try:
         repository.upsert_prediction(
             {
@@ -117,6 +121,8 @@ def test_sqlite_upsert_persists_versioned_feature_snapshot() -> None:
                 "feature_snapshot": snapshot,
                 "feature_schema_version": "ml_features_v1",
                 "feature_snapshot_at": datetime(2026, 7, 19, tzinfo=UTC),
+                "probability_components": probability_components,
+                "ensemble_version": "weighted_probability_ensemble_v1",
             }
         )
 
@@ -127,6 +133,8 @@ def test_sqlite_upsert_persists_versioned_feature_snapshot() -> None:
         assert persisted.feature_snapshot == snapshot
         assert persisted.feature_schema_version == "ml_features_v1"
         assert persisted.feature_snapshot_at is not None
+        assert persisted.probability_components == probability_components
+        assert persisted.ensemble_version == "weighted_probability_ensemble_v1"
     finally:
         session.close()
 

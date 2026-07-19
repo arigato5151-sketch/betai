@@ -19,6 +19,7 @@ from app.db.session import SessionLocal, get_db
 from app.db.repository import MatchPredictionRepository
 from app.services.api_football import APIFootballClient
 from app.prediction.stats_engine import StatsEngine
+from app.prediction.ensemble import ProbabilityEnsembler
 from app.prediction.value_calc import ValueCalc
 from app.prediction.ml.model import ml_pipeline
 from app.prediction.ml.features import FeatureEngine
@@ -432,22 +433,12 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     """Stats, value bet, and ML inference without a database connection."""
     home_stats = payload.home_stats.model_dump()
     away_stats = payload.away_stats.model_dump()
-    analysis = StatsEngine.analyze_match(
+    stats_analysis = StatsEngine.analyze_match(
         home_stats, away_stats, league_id=payload.league_id
     )
 
-    value_data = ValueCalc.calculate_professional(
-        analysis, payload.market_1x2, fallback_odd=payload.odd
-    )
-    if payload.market_1x2:
-        value_data["data_methodology"] = {
-            "stats": "Ev/deplasman sezon ortalamaları + form decay",
-            "odds": f"1X2 devig (overround %{payload.market_1x2.get('overround_pct', 0)})",
-            "model": analysis.get("model", "poisson_dixon_coles"),
-        }
-
     ml_result: dict = {"ready": False}
-    insights = StatsEngine.build_insights(analysis, value_data)
+    ml_explanations: List[str] = []
 
     home_matches_df, away_matches_df, h2h_rates = await _fetch_ml_match_data(payload)
     feature_vector = FeatureEngine.build_inference_features(
@@ -461,12 +452,28 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     if ml_pipeline.is_ready:
         ml_result = ml_pipeline.predict_match(feature_vector)
         if ml_result.get("ready"):
-            explanations = ExplainabilityService.generate_explanation(
+            ml_explanations = ExplainabilityService.generate_explanation(
                 ml_pipeline.model,
                 feature_vector,
                 ml_pipeline.feature_names,
             )
-            insights.extend(explanations)
+
+    analysis = ProbabilityEnsembler.apply(
+        stats_analysis,
+        ml_result=ml_result,
+        market=payload.market_1x2,
+    )
+    value_data = ValueCalc.calculate_professional(
+        analysis, payload.market_1x2, fallback_odd=payload.odd
+    )
+    if payload.market_1x2:
+        value_data["data_methodology"] = {
+            "stats": "Ev/deplasman sezon ortalamaları + form decay",
+            "odds": f"1X2 devig (overround %{payload.market_1x2.get('overround_pct', 0)})",
+            "model": analysis.get("model", "poisson_dixon_coles"),
+        }
+    insights = StatsEngine.build_insights(analysis, value_data)
+    insights.extend(ml_explanations)
 
     return {
         "analysis": analysis,
@@ -516,6 +523,8 @@ def _persist_analysis(payload: AnalysisRequest, computed: dict):
         "feature_snapshot": feature_vector,
         "feature_schema_version": FeatureEngine.SCHEMA_VERSION,
         "feature_snapshot_at": datetime.now(timezone.utc),
+        "probability_components": analysis.get("ensemble"),
+        "ensemble_version": (analysis.get("ensemble") or {}).get("version"),
     }
 
     with SessionLocal() as db:
