@@ -235,3 +235,61 @@ async def test_prefill_marks_mixed_live_and_fallback_stats_as_fallback() -> None
     assert prefill is not None
     assert prefill["data_quality"] == "fallback"
     assert prefill["odd"] == 1.85
+
+
+@pytest.mark.asyncio
+async def test_completed_fixtures_are_normalized_and_invalid_rows_are_skipped() -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(
+        return_value={
+            "response": [
+                {
+                    "fixture": {
+                        "id": 500,
+                        "date": "2026-07-18T18:00:00Z",
+                        "status": {"short": "FT"},
+                    },
+                    "league": {"id": 203, "season": 2026},
+                    "teams": {
+                        "home": {"id": 1, "name": "Home"},
+                        "away": {"id": 2, "name": "Away"},
+                    },
+                    "goals": {"home": 2, "away": 0},
+                },
+                {
+                    "fixture": {
+                        "id": 501,
+                        "date": "2026-07-19T18:00:00Z",
+                        "status": {"short": "NS"},
+                    }
+                },
+            ]
+        }
+    )
+
+    fixtures = await client.get_completed_fixtures(203, 2026)
+
+    assert len(fixtures) == 1
+    assert fixtures[0]["fixture_id"] == 500
+    assert fixtures[0]["actual_result"] == "HOME_WIN"
+    assert fixtures[0]["kickoff"] == pd.Timestamp("2026-07-18T18:00:00Z")
+    client._request_with_retry.assert_awaited_once_with(
+        "fixtures",
+        {
+            "league": "203",
+            "season": "2026",
+            "status": "FT-AET-PEN",
+            "timezone": "UTC",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_completed_fixture_ingestion_is_empty_in_demo_mode() -> None:
+    client = APIFootballClient()
+    client.api_key = "DEMO_KEY"
+    client._request_with_retry = AsyncMock(side_effect=AssertionError("network called"))
+
+    assert await client.get_completed_fixtures(203, 2026) == []
+    client._request_with_retry.assert_not_awaited()

@@ -97,13 +97,13 @@ Katmanların sorumlulukları:
 
 | Katman | Ana dosyalar | Sorumluluk |
 | --- | --- | --- |
-| Web arayüzü | `frontend/src/App.jsx`, `frontend/src/AdminPanel.jsx` | Oturum, analiz formu, tahmin geçmişi, backtest ve kullanıcı yönetimi |
+| Web arayüzü | `frontend/src/App.jsx`, `frontend/src/components/`, `frontend/src/hooks/` | İnce orkestrasyon container'ı, sunumsal bileşenler ve oturum hook'u |
 | HTTP/API | `backend/app/main.py`, `backend/app/api/endpoints.py`, `backend/app/api/admin.py` | Route, doğrulama, permission kontrolü ve yanıt sözleşmeleri |
 | Analiz | `backend/app/prediction/stats_engine.py`, `value_calc.py` | Poisson/Dixon-Coles olasılıkları, de-vig, edge ve Kelly hesabı |
 | Makine öğrenmesi | `backend/app/prediction/ml/` | Feature üretimi, eğitim, inference, kalibrasyon ve açıklanabilirlik |
-| Veri erişimi | `backend/app/db/` | SQLAlchemy modelleri, transaction ve repository işlemleri |
+| Veri erişimi | `backend/app/db/` | Tahmin/tarihsel fixture modelleri, transaction ve idempotent repository işlemleri |
 | Entegrasyon | `backend/app/services/` | API-Football, Redis, Memcached ve yerel cache fallback'leri |
-| Arka plan görevleri | `backend/app/tasks/` | Sonuç senkronizasyonu, model eğitimi ve Celery sağlık kontrolü |
+| Arka plan görevleri | `backend/app/tasks/` | Sonuç/tarihsel fixture senkronizasyonu, model eğitimi ve Celery sağlık kontrolü |
 | Güvenlik | `backend/app/core/auth.py`, `security.py`, `rate_limit.py` | Cookie tabanlı JWT, CSRF, origin kontrolü ve brute-force koruması |
 
 Tam implementasyon kod deposundaki `backend/app/`, `frontend/src/`, `tests/` ve `backend/migrations/` dizinlerinde tutulur. README'deki örnek, üretim kodunun çalışma sırasını özetler; API sözleşmesinin kaynağı `docs/openapi.json` dosyasıdır.
@@ -147,7 +147,7 @@ Bu bölüm, depoyu başka bir yapay zekâ aracına verdiğinizde uygulama akış
 | `backend/app/api/endpoints.py` | HTTP sözleşmeleri ve analiz orchestration katmanı |
 | `frontend/index.html` | Vite HTML giriş noktası |
 | `frontend/src/main.jsx` | React root oluşturur |
-| `frontend/src/App.jsx` | Login, token yenileme, analiz formu, geçmiş ve grafik UI'ı |
+| `frontend/src/App.jsx` | Auth hook'u ile sunumsal bileşenleri birleştiren uygulama container'ı |
 
 ### Backend modül haritası
 
@@ -161,7 +161,8 @@ backend/app/
 │   └── logging_config.py    # Merkezi log yapılandırması
 ├── api/endpoints.py         # Request modelleri, endpoint'ler, analiz akışı
 ├── db/
-│   ├── models.py            # MatchPrediction SQLAlchemy modeli
+│   ├── models.py            # MatchPrediction ve HistoricalFixture modelleri
+│   ├── historical_repository.py # Tarihsel fixture upsert/zaman kesitli sorgular
 │   ├── session.py           # PostgreSQL bağlantısı ve SQLite fallback
 │   └── repository.py        # Tahmin CRUD/upsert işlemleri
 ├── prediction/
@@ -171,6 +172,7 @@ backend/app/
 │   ├── backtest.py          # Bankroll strateji simülasyonu
 │   └── ml/
 │       ├── features.py      # ML feature üretimi
+│       ├── historical.py    # Kronolojik Elo ve H2H feature bağlamı
 │       ├── model.py         # Eğitim, model seçimi, kayıt ve inference
 │       ├── calibrate.py     # Çok sınıflı olasılık kalibrasyonu
 │       └── explain.py       # SHAP veya feature importance açıklaması
@@ -179,9 +181,26 @@ backend/app/
 │   └── cache.py             # Redis + Memcached + bellek içi TTL cache
 └── tasks/
     ├── celery_app.py        # Celery broker/backend ve periyodik görev ayarları
-    ├── jobs.py              # Sonuç senkronizasyonu ve model eğitimi
+    ├── jobs.py              # Sonuç/tarihsel fixture senkronizasyonu ve model eğitimi
     └── health.py            # Broker/worker kontrolü ve güvenli enqueue
 ```
+
+### Tarihsel fixture veri hattı
+
+Celery Beat, izin verilen liglerin mevcut sezon tamamlanmış maçlarını günlük olarak
+`historical_fixtures` tablosuna idempotent biçimde yazar. Analiz sırasında yalnızca
+maçın `kickoff` zamanından önceki kayıtlar okunur; böylece Elo ve H2H feature'larında
+gelecek bilgisi sızıntısı önlenir. Geçmiş sezon backfill'i API kotası dikkate alınarak
+manuel ve tekrar çalıştırılabilir biçimde başlatılabilir:
+
+```powershell
+cd backend
+python -c "from app.tasks.jobs import sync_historical_fixtures_task; print(sync_historical_fixtures_task.run([2023, 2024, 2025]))"
+```
+
+Demo API anahtarı tarihsel veri üretmez; gerçek backfill için geçerli API-Football
+anahtarı gerekir. Aynı `fixture_id` yeniden çekildiğinde skor ve durum güncellenir,
+yeni bir satır oluşturulmaz.
 
 ### Temel analiz algoritması
 

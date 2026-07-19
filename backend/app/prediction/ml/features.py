@@ -250,7 +250,7 @@ class FeatureEngine:
         away_stats: Dict[str, Any],
         home_matches_df: pd.DataFrame,
         away_matches_df: pd.DataFrame,
-        h2h_rates: Dict[str, float],
+        h2h_rates: Dict[str, float | str],
         h2h_matches: Optional[List[Dict]] = None,
         home_elo: float = 1500.0,
         away_elo: float = 1500.0,

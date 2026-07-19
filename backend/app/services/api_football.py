@@ -211,6 +211,90 @@ class APIFootballClient:
         fixtures = await self.get_upcoming_fixtures(days=14, limit=200)
         return next((f for f in fixtures if f["fixture_id"] == fixture_id), None)
 
+    async def get_completed_fixtures(self, league_id: int, season: int) -> List[Dict]:
+        """Fetch all final fixtures for one league-season for idempotent ingestion."""
+        if league_id not in ALLOWED_LEAGUE_IDS:
+            raise ValueError(f"Unsupported league_id: {league_id}")
+        if season < 2000 or season > date.today().year + 1:
+            raise ValueError(f"Invalid season: {season}")
+        if self._is_demo_key():
+            return []
+
+        data = await self._request_with_retry(
+            "fixtures",
+            {
+                "league": str(league_id),
+                "season": str(season),
+                "status": "FT-AET-PEN",
+                "timezone": "UTC",
+            },
+        )
+        if not data:
+            return []
+
+        fixtures: List[Dict] = []
+        for item in data.get("response", []):
+            normalized = self._normalize_completed_fixture(item)
+            if normalized is not None:
+                fixtures.append(normalized)
+        return fixtures
+
+    @staticmethod
+    def _normalize_completed_fixture(item: Dict) -> Optional[Dict]:
+        fixture = item.get("fixture", {})
+        league = item.get("league", {})
+        teams = item.get("teams", {})
+        goals = item.get("goals", {})
+        status = fixture.get("status", {}).get("short")
+        home = teams.get("home", {})
+        away = teams.get("away", {})
+        home_goals = goals.get("home")
+        away_goals = goals.get("away")
+
+        required = (
+            fixture.get("id"),
+            league.get("id"),
+            league.get("season"),
+            fixture.get("date"),
+            home.get("id"),
+            away.get("id"),
+            home.get("name"),
+            away.get("name"),
+        )
+        if status not in {"FT", "AET", "PEN"} or not all(required):
+            return None
+        if home_goals is None or away_goals is None:
+            return None
+        try:
+            kickoff = datetime.fromisoformat(
+                str(fixture["date"]).replace("Z", "+00:00")
+            )
+            home_score = int(home_goals)
+            away_score = int(away_goals)
+        except (TypeError, ValueError):
+            return None
+
+        if home_score > away_score:
+            result = "HOME_WIN"
+        elif home_score < away_score:
+            result = "AWAY_WIN"
+        else:
+            result = "DRAW"
+        return {
+            "fixture_id": int(fixture["id"]),
+            "league_id": int(league["id"]),
+            "season": int(league["season"]),
+            "kickoff": kickoff,
+            "home_team_id": int(home["id"]),
+            "away_team_id": int(away["id"]),
+            "home_team": str(home["name"])[:100],
+            "away_team": str(away["name"])[:100],
+            "home_goals": home_score,
+            "away_goals": away_score,
+            "actual_result": result,
+            "status": status,
+        }
+
     async def get_h2h(
         self, home_team_id: int, away_team_id: int, last: int = 5
     ) -> Dict[str, float | str]:

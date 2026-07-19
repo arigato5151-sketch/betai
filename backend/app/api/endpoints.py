@@ -17,12 +17,17 @@ import logging
 
 from app.db.session import SessionLocal, get_db
 from app.db.repository import MatchPredictionRepository
+from app.db.historical_repository import HistoricalFixtureRepository
 from app.services.api_football import APIFootballClient
 from app.prediction.stats_engine import StatsEngine
 from app.prediction.ensemble import ProbabilityEnsembler
 from app.prediction.value_calc import ValueCalc
 from app.prediction.ml.model import ml_pipeline
 from app.prediction.ml.features import FeatureEngine
+from app.prediction.ml.historical import (
+    HistoricalFeatureContext,
+    HistoricalFeatureService,
+)
 from app.prediction.ml.explain import ExplainabilityService
 from app.prediction.ml.active_learning import ActiveLearningSelector
 from app.prediction.audit import PredictionAuditor
@@ -273,6 +278,9 @@ class AnalysisRequest(BaseModel):
         None, gt=0, description="API Football away team ID"
     )
     league_id: Optional[int] = Field(None, gt=0, description="API Football league ID")
+    season: Optional[int] = Field(
+        None, ge=2000, le=2100, description="API Football league season"
+    )
     kickoff: Optional[datetime] = Field(
         None, description="Fixture kickoff used for point-in-time rest features"
     )
@@ -355,6 +363,7 @@ def _build_payload_from_prefill(prefill: Dict[str, Any]) -> AnalysisRequest:
         home_team_id=fixture.get("home_team_id"),
         away_team_id=fixture.get("away_team_id"),
         league_id=fixture.get("league_id"),
+        season=fixture.get("season"),
         kickoff=fixture.get("kickoff"),
     )
 
@@ -429,8 +438,31 @@ async def _fetch_ml_match_data(payload: AnalysisRequest) -> Tuple[Any, Any, Any]
     return home_matches_df, away_matches_df, h2h_rates
 
 
+def _get_historical_feature_context(
+    payload: AnalysisRequest,
+) -> HistoricalFeatureContext:
+    if (
+        payload.home_team_id is None
+        or payload.away_team_id is None
+        or payload.league_id is None
+        or payload.season is None
+        or payload.kickoff is None
+    ):
+        return HistoricalFeatureContext()
+
+    with SessionLocal() as db:
+        service = HistoricalFeatureService(HistoricalFixtureRepository(db))
+        return service.build_context(
+            home_team_id=payload.home_team_id,
+            away_team_id=payload.away_team_id,
+            league_id=payload.league_id,
+            season=payload.season,
+            before=payload.kickoff,
+        )
+
+
 async def _compute_analysis(payload: AnalysisRequest) -> dict:
-    """Stats, value bet, and ML inference without a database connection."""
+    """Run analysis with external inputs and a short point-in-time history read."""
     home_stats = payload.home_stats.model_dump()
     away_stats = payload.away_stats.model_dump()
     stats_analysis = StatsEngine.analyze_match(
@@ -440,13 +472,20 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     ml_result: dict = {"ready": False}
     ml_explanations: List[str] = []
 
-    home_matches_df, away_matches_df, h2h_rates = await _fetch_ml_match_data(payload)
+    home_matches_df, away_matches_df, api_h2h_rates = await _fetch_ml_match_data(
+        payload
+    )
+    historical = _get_historical_feature_context(payload)
+    h2h_rates = historical.h2h_rates or api_h2h_rates
     feature_vector = FeatureEngine.build_inference_features(
         home_stats=payload.home_stats.model_dump(),
         away_stats=payload.away_stats.model_dump(),
         home_matches_df=home_matches_df,
         away_matches_df=away_matches_df,
         h2h_rates=h2h_rates,
+        h2h_matches=historical.h2h_matches,
+        home_elo=historical.home_elo,
+        away_elo=historical.away_elo,
         fixture_date=payload.kickoff,
     )
     if ml_pipeline.is_ready:

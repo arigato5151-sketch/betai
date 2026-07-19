@@ -1235,6 +1235,33 @@
             ],
             "title": "League Id",
             "description": "API Football league ID"
+          },
+          "season": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2100.0,
+                "minimum": 2000.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Season",
+            "description": "API Football league season"
+          },
+          "kickoff": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kickoff",
+            "description": "Fixture kickoff used for point-in-time rest features"
           }
         },
         "type": "object",

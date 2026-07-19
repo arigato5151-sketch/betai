@@ -47,7 +47,7 @@ class MLModelPipeline:
         self.feature_names = list(FeatureEngine.FEATURE_NAMES)
         self.is_ready = False
         self.active_model_name: Optional[str] = None
-        self.metrics: Dict[str, float] = {}
+        self.metrics: Dict[str, object] = {}
         self.artifact_version: Optional[str] = None
         self.runtime_stats = {"inference_success": 0, "inference_failure": 0}
         self._artifact_mtime_ns: int | None = None
@@ -108,7 +108,7 @@ class MLModelPipeline:
             return False
 
     def _save_active_model(
-        self, model: Any, calibrator: Any, model_name: str, metrics: Dict[str, float]
+        self, model: Any, calibrator: Any, model_name: str, metrics: Dict[str, object]
     ) -> None:
         artifacts_dir = Path(settings.MODEL_ARTIFACTS_DIR)
         versions_dir = artifacts_dir / "versions"

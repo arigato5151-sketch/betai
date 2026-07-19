@@ -215,3 +215,29 @@ class MatchPrediction(Base):
     created_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime, nullable=True, default=utc_now_naive, index=True
     )
+
+
+class HistoricalFixture(Base):
+    __tablename__ = "historical_fixtures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fixture_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+    league_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    kickoff: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    home_team_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    away_team_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    home_team: Mapped[str] = mapped_column(String(100), nullable=False)
+    away_team: Mapped[str] = mapped_column(String(100), nullable=False)
+    home_goals: Mapped[int] = mapped_column(Integer, nullable=False)
+    away_goals: Mapped[int] = mapped_column(Integer, nullable=False)
+    actual_result: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(8), nullable=False)
+    ingested_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
