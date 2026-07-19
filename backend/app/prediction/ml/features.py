@@ -4,7 +4,8 @@ from typing import Dict, List, Optional, Any
 
 
 class FeatureEngine:
-    SCHEMA_VERSION = "ml_features_v1"
+    SCHEMA_VERSION = "ml_features_v2"
+    COMPATIBLE_SNAPSHOT_VERSIONS = {"ml_features_v1", SCHEMA_VERSION}
     FEATURE_NAMES = [
         "home_form",
         "home_attack",
@@ -34,6 +35,11 @@ class FeatureEngine:
         "away_ga_last5",  # Deplasman: yenilen gol ortalaması
         "h2h_avg_goals_home",  # H2H maçlarda ev sahibinin ort. golü
         "h2h_avg_goals_away",  # H2H maçlarda deplasmandaki ort. golü
+        "home_missing_players",
+        "away_missing_players",
+        "home_questionable_players",
+        "away_questionable_players",
+        "availability_report_present",
     ]
     FEATURE_DEFAULTS = {
         "home_form": 50.0,
@@ -63,6 +69,11 @@ class FeatureEngine:
         "away_ga_last5": 0.0,
         "h2h_avg_goals_home": 1.2,
         "h2h_avg_goals_away": 1.0,
+        "home_missing_players": 0.0,
+        "away_missing_players": 0.0,
+        "home_questionable_players": 0.0,
+        "away_questionable_players": 0.0,
+        "availability_report_present": 0.0,
     }
 
     @classmethod
@@ -71,7 +82,10 @@ class FeatureEngine:
         snapshot = getattr(row, "feature_snapshot", None)
         snapshot_version = getattr(row, "feature_schema_version", None)
 
-        if isinstance(snapshot, dict) and snapshot_version == cls.SCHEMA_VERSION:
+        if (
+            isinstance(snapshot, dict)
+            and snapshot_version in cls.COMPATIBLE_SNAPSHOT_VERSIONS
+        ):
             source = snapshot
         else:
             # Legacy rows predate feature snapshots; preserve them with explicit defaults.
@@ -281,6 +295,7 @@ class FeatureEngine:
         h2h_matches: Optional[List[Dict]] = None,
         home_elo: float = 1500.0,
         away_elo: float = 1500.0,
+        availability: Optional[Dict[str, Any]] = None,
         fixture_date: Optional[pd.Timestamp] = None,
     ) -> Dict[str, float]:
         """
@@ -304,6 +319,7 @@ class FeatureEngine:
             else pd.Timestamp.today().normalize()
         )
         h2h_matches = h2h_matches or []
+        availability = availability or {}
 
         # Dynamic EMA and streaks calculations
         home_form_ema = FeatureEngine.compute_form_ema(home_matches_df, span=5)
@@ -373,4 +389,15 @@ class FeatureEngine:
             "away_ga_last5": away_ga_last5,
             "h2h_avg_goals_home": h2h_home_avg_goals,
             "h2h_avg_goals_away": h2h_away_avg_goals,
+            "home_missing_players": float(availability.get("home_missing_players", 0)),
+            "away_missing_players": float(availability.get("away_missing_players", 0)),
+            "home_questionable_players": float(
+                availability.get("home_questionable_players", 0)
+            ),
+            "away_questionable_players": float(
+                availability.get("away_questionable_players", 0)
+            ),
+            "availability_report_present": float(
+                availability.get("availability_report_present", 0)
+            ),
         }

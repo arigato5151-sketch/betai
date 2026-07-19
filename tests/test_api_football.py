@@ -293,3 +293,44 @@ async def test_completed_fixture_ingestion_is_empty_in_demo_mode() -> None:
 
     assert await client.get_completed_fixtures(203, 2026) == []
     client._request_with_retry.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fixture_availability_counts_missing_and_questionable_players() -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(
+        return_value={
+            "response": [
+                {"team": {"id": 1}, "player": {"type": "Missing Fixture"}},
+                {"team": {"id": 1}, "player": {"type": "Questionable"}},
+                {"team": {"id": 2}, "player": {"type": "Missing Fixture"}},
+                {"team": {"id": 99}, "player": {"type": "Missing Fixture"}},
+                {"team": {"id": 2}, "player": {"type": "Unknown"}},
+            ]
+        }
+    )
+
+    availability = await client.get_fixture_availability(777001, 1, 2)
+
+    assert availability == {
+        "home_missing_players": 1,
+        "away_missing_players": 1,
+        "home_questionable_players": 1,
+        "away_questionable_players": 0,
+        "availability_report_present": 1,
+        "source": "api_football_injuries",
+    }
+    client._request_with_retry.assert_awaited_once_with(
+        "injuries", {"fixture": "777001"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_fixture_availability_is_disabled_in_demo_mode() -> None:
+    client = APIFootballClient()
+    client.api_key = "DEMO_KEY"
+    client._request_with_retry = AsyncMock(side_effect=AssertionError("network called"))
+
+    assert await client.get_fixture_availability(777002, 1, 2) is None
+    client._request_with_retry.assert_not_awaited()

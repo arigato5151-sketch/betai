@@ -223,6 +223,14 @@ altında tutulur; her kaynağın çökmesini önlemek için minimum ağırlık v
 Eşikler `MIN_ENSEMBLE_CALIBRATION_SAMPLES`, `ENSEMBLE_HOLDOUT_FRACTION`,
 `ENSEMBLE_MIN_SOURCE_WEIGHT` ve `ENSEMBLE_MIN_LOG_LOSS_IMPROVEMENT` ile değiştirilebilir.
 
+Fixture kimliği bulunan analizlerde API-Football sakatlık raporu da paralel çekilir ve
+4 saat cache'lenir. `ml_features_v2`, ev/deplasman için `Missing Fixture` ile
+`Questionable` sayılarını ve rapor bulunup bulunmadığını snapshot'a yazar. Oyuncu
+önem katsayısı için doğrulanmış bir veri kaynağı olmadığı için tüm eksikleri aynı
+ağırlıkta cezalandıran yapay bir xG çarpanı uygulanmaz; etki, yeterli etiket oluştukça
+ML tarafından öğrenilir. Eski `ml_features_v1` snapshot'ları yeni alanlarda sıfır
+varsayılanıyla eğitimde kullanılmaya devam eder.
+
 ### Temel analiz algoritması
 
 Aktif analiz akışı kavramsal olarak aşağıdaki kodla özetlenebilir:

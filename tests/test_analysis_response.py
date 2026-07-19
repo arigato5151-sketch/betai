@@ -138,13 +138,26 @@ async def test_analysis_prefers_complete_point_in_time_history_over_api(
     monkeypatch.setattr(endpoints.ml_pipeline, "is_ready", False)
     home_api = AsyncMock(side_effect=AssertionError("form API should not be called"))
     h2h_api = AsyncMock(side_effect=AssertionError("H2H API should not be called"))
+    availability_api = AsyncMock(
+        return_value={
+            "home_missing_players": 2,
+            "away_missing_players": 1,
+            "home_questionable_players": 0,
+            "away_questionable_players": 1,
+            "availability_report_present": 1,
+        }
+    )
     monkeypatch.setattr(endpoints.football_api, "get_team_last_matches_df", home_api)
     monkeypatch.setattr(endpoints.football_api, "get_h2h", h2h_api)
+    monkeypatch.setattr(
+        endpoints.football_api, "get_fixture_availability", availability_api
+    )
     payload = AnalysisRequest(
         home_team="Home",
         away_team="Away",
         home_team_id=1,
         away_team_id=2,
+        fixture_id=999,
         league_id=203,
         season=2026,
         kickoff="2026-07-20T18:00:00Z",
@@ -159,8 +172,12 @@ async def test_analysis_prefers_complete_point_in_time_history_over_api(
     assert computed["feature_vector"]["away_elo"] == 1460.0
     assert computed["feature_vector"]["home_gf_last5"] == 1.8
     assert computed["feature_vector"]["h2h_avg_goals_home"] == 2.0
+    assert computed["feature_vector"]["home_missing_players"] == 2.0
+    assert computed["feature_vector"]["away_questionable_players"] == 1.0
+    assert computed["feature_vector"]["availability_report_present"] == 1.0
     home_api.assert_not_awaited()
     h2h_api.assert_not_awaited()
+    availability_api.assert_awaited_once_with(999, 1, 2)
 
 
 @pytest.mark.asyncio
@@ -205,11 +222,14 @@ async def test_stale_point_in_time_form_uses_api_fallback(
         odd=2.1,
     )
 
-    home_matches, away_matches, h2h_rates = await _fetch_ml_match_data(payload, context)
+    home_matches, away_matches, h2h_rates, availability = await _fetch_ml_match_data(
+        payload, context
+    )
 
     assert home_matches is api_frame
     assert away_matches is api_frame
     assert h2h_rates is context.h2h_rates
+    assert availability is None
     assert form_api.await_count == 2
     h2h_api.assert_not_awaited()
 

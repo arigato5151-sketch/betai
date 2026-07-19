@@ -211,6 +211,53 @@ class APIFootballClient:
         fixtures = await self.get_upcoming_fixtures(days=14, limit=200)
         return next((f for f in fixtures if f["fixture_id"] == fixture_id), None)
 
+    async def get_fixture_availability(
+        self, fixture_id: int, home_team_id: int, away_team_id: int
+    ) -> Optional[Dict[str, int | str]]:
+        """Return fixture-specific missing/questionable player counts by team."""
+        if self._is_demo_key():
+            return None
+
+        cache_key = f"availability:{fixture_id}:{home_team_id}:{away_team_id}"
+        cached = await cache.get("match_data", cache_key)
+        if cached is not None:
+            return cached
+
+        data = await self._request_with_retry("injuries", {"fixture": str(fixture_id)})
+        if data is None:
+            return None
+
+        counts: Dict[str, int] = {
+            "home_missing_players": 0,
+            "away_missing_players": 0,
+            "home_questionable_players": 0,
+            "away_questionable_players": 0,
+            "availability_report_present": 0,
+        }
+        response_items = data.get("response", [])
+        counts["availability_report_present"] = int(bool(response_items))
+        for item in response_items:
+            team_id = item.get("team", {}).get("id")
+            availability_type = str(item.get("player", {}).get("type", "")).lower()
+            if team_id == home_team_id:
+                prefix = "home"
+            elif team_id == away_team_id:
+                prefix = "away"
+            else:
+                continue
+
+            if availability_type == "questionable":
+                counts[f"{prefix}_questionable_players"] += 1
+            elif availability_type == "missing fixture":
+                counts[f"{prefix}_missing_players"] += 1
+
+        result: Dict[str, int | str] = {
+            **counts,
+            "source": "api_football_injuries",
+        }
+        await cache.set("match_data", cache_key, result, 14400)
+        return result
+
     async def get_completed_fixtures(self, league_id: int, season: int) -> List[Dict]:
         """Fetch all final fixtures for one league-season for idempotent ingestion."""
         if league_id not in ALLOWED_LEAGUE_IDS:

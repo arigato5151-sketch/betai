@@ -172,6 +172,13 @@ def test_inference_feature_vector_has_stable_schema_and_rest_difference() -> Non
         away_matches_df=away_frame,
         h2h_rates={"home_win_rate": 0.5, "draw_rate": 0.3, "home_loss_rate": 0.2},
         h2h_matches=[{"home_goals": 2, "away_goals": 1}],
+        availability={
+            "home_missing_players": 2,
+            "away_missing_players": 1,
+            "home_questionable_players": 1,
+            "away_questionable_players": 0,
+            "availability_report_present": 1,
+        },
         fixture_date=NOW,
     )
 
@@ -179,6 +186,9 @@ def test_inference_feature_vector_has_stable_schema_and_rest_difference() -> Non
     assert features["rest_days_diff"] == -3.0
     assert features["home_gf_last5"] == 1.67
     assert features["h2h_avg_goals_home"] == 2.0
+    assert features["home_missing_players"] == 2.0
+    assert features["away_missing_players"] == 1.0
+    assert features["availability_report_present"] == 1.0
 
 
 def test_empty_feature_sources_use_documented_defaults() -> None:
@@ -216,6 +226,26 @@ def test_training_uses_same_versioned_snapshot_schema_as_inference() -> None:
 
     assert list(features) == FeatureEngine.FEATURE_NAMES
     assert features == snapshot
+
+
+def test_v1_snapshot_is_forward_compatible_with_availability_defaults() -> None:
+    snapshot = {
+        name: value
+        for name, value in FeatureEngine.FEATURE_DEFAULTS.items()
+        if "players" not in name
+    }
+    snapshot["home_form_ema"] = 77.0
+    row = SimpleNamespace(
+        feature_snapshot=snapshot,
+        feature_schema_version="ml_features_v1",
+    )
+
+    features = FeatureEngine.build_training_features(row)
+
+    assert features["home_form_ema"] == 77.0
+    assert features["home_missing_players"] == 0.0
+    assert features["away_questionable_players"] == 0.0
+    assert list(features) == FeatureEngine.FEATURE_NAMES
 
 
 def test_legacy_training_rows_receive_explicit_full_schema_defaults() -> None:
