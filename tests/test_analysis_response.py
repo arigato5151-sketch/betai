@@ -133,6 +133,8 @@ async def test_analysis_prefers_complete_point_in_time_history_over_api(
         h2h_matches=[{"home_goals": 2, "away_goals": 0}],
         home_matches_df=home_matches,
         away_matches_df=away_matches,
+        home_previous_starting_xi=list(range(1, 12)),
+        away_previous_starting_xi=list(range(20, 31)),
     )
     monkeypatch.setattr(endpoints, "_get_historical_feature_context", lambda _: context)
     monkeypatch.setattr(endpoints.ml_pipeline, "is_ready", False)
@@ -147,11 +149,19 @@ async def test_analysis_prefers_complete_point_in_time_history_over_api(
             "availability_report_present": 1,
         }
     )
+    lineups_api = AsyncMock(
+        return_value={
+            "home_starting_xi": list(range(1, 10)) + [12, 13],
+            "away_starting_xi": list(range(20, 31)),
+            "source": "api_football_lineups",
+        }
+    )
     monkeypatch.setattr(endpoints.football_api, "get_team_last_matches_df", home_api)
     monkeypatch.setattr(endpoints.football_api, "get_h2h", h2h_api)
     monkeypatch.setattr(
         endpoints.football_api, "get_fixture_availability", availability_api
     )
+    monkeypatch.setattr(endpoints.football_api, "get_fixture_lineups", lineups_api)
     payload = AnalysisRequest(
         home_team="Home",
         away_team="Away",
@@ -175,9 +185,14 @@ async def test_analysis_prefers_complete_point_in_time_history_over_api(
     assert computed["feature_vector"]["home_missing_players"] == 2.0
     assert computed["feature_vector"]["away_questionable_players"] == 1.0
     assert computed["feature_vector"]["availability_report_present"] == 1.0
+    assert computed["feature_vector"]["home_lineup_continuity"] == pytest.approx(
+        9 / 11, abs=1e-4
+    )
+    assert computed["feature_vector"]["away_lineup_continuity"] == 1.0
     home_api.assert_not_awaited()
     h2h_api.assert_not_awaited()
     availability_api.assert_awaited_once_with(999, 1, 2)
+    lineups_api.assert_awaited_once_with(999, 1, 2)
 
 
 @pytest.mark.asyncio
@@ -222,14 +237,15 @@ async def test_stale_point_in_time_form_uses_api_fallback(
         odd=2.1,
     )
 
-    home_matches, away_matches, h2h_rates, availability = await _fetch_ml_match_data(
-        payload, context
+    home_matches, away_matches, h2h_rates, availability, lineups = (
+        await _fetch_ml_match_data(payload, context)
     )
 
     assert home_matches is api_frame
     assert away_matches is api_frame
     assert h2h_rates is context.h2h_rates
     assert availability is None
+    assert lineups is None
     assert form_api.await_count == 2
     h2h_api.assert_not_awaited()
 

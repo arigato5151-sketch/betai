@@ -256,6 +256,22 @@ async def test_completed_fixtures_are_normalized_and_invalid_rows_are_skipped() 
                         "away": {"id": 2, "name": "Away"},
                     },
                     "goals": {"home": 2, "away": 0},
+                    "lineups": [
+                        {
+                            "team": {"id": 1},
+                            "startXI": [
+                                {"player": {"id": player_id}}
+                                for player_id in range(1, 12)
+                            ],
+                        },
+                        {
+                            "team": {"id": 2},
+                            "startXI": [
+                                {"player": {"id": player_id}}
+                                for player_id in range(20, 31)
+                            ],
+                        },
+                    ],
                 },
                 {
                     "fixture": {
@@ -273,6 +289,8 @@ async def test_completed_fixtures_are_normalized_and_invalid_rows_are_skipped() 
     assert len(fixtures) == 1
     assert fixtures[0]["fixture_id"] == 500
     assert fixtures[0]["actual_result"] == "HOME_WIN"
+    assert fixtures[0]["home_starting_xi"] == list(range(1, 12))
+    assert fixtures[0]["away_starting_xi"] == list(range(20, 31))
     assert fixtures[0]["kickoff"] == pd.Timestamp("2026-07-18T18:00:00Z")
     client._request_with_retry.assert_awaited_once_with(
         "fixtures",
@@ -333,4 +351,40 @@ async def test_fixture_availability_is_disabled_in_demo_mode() -> None:
     client._request_with_retry = AsyncMock(side_effect=AssertionError("network called"))
 
     assert await client.get_fixture_availability(777002, 1, 2) is None
+    assert await client.get_fixture_lineups(777002, 1, 2) is None
     client._request_with_retry.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fixture_lineups_normalize_starting_player_ids() -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(
+        return_value={
+            "response": [
+                {
+                    "team": {"id": 1},
+                    "startXI": [
+                        {"player": {"id": player_id}} for player_id in [1, 2, 2, 3]
+                    ],
+                },
+                {
+                    "team": {"id": 2},
+                    "startXI": [
+                        {"player": {"id": player_id}} for player_id in range(20, 31)
+                    ],
+                },
+            ]
+        }
+    )
+
+    lineups = await client.get_fixture_lineups(778001, 1, 2)
+
+    assert lineups == {
+        "home_starting_xi": [1, 2, 3],
+        "away_starting_xi": list(range(20, 31)),
+        "source": "api_football_lineups",
+    }
+    client._request_with_retry.assert_awaited_once_with(
+        "fixtures/lineups", {"fixture": "778001"}
+    )

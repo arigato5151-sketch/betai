@@ -231,6 +231,15 @@ ağırlıkta cezalandıran yapay bir xG çarpanı uygulanmaz; etki, yeterli etik
 ML tarafından öğrenilir. Eski `ml_features_v1` snapshot'ları yeni alanlarda sıfır
 varsayılanıyla eğitimde kullanılmaya devam eder.
 
+`ml_features_v3`, maç saatine yakın yayınlanan doğrulanmış ilk 11'i takımın son
+tamamlanmış maçındaki ilk 11 ile karşılaştırır. Her takım için lineup doğrulama,
+tarihsel referans bulunma ve `ortak oyuncu / 11` süreklilik oranı saklanır. Eksik
+veya 11 oyuncuya tamamlanmamış lineuplar süreklilik hesabına sokulmaz. Tamamlanmış
+fixture lineupları `historical_fixtures` tablosundaki JSON kolonlarında tutulur;
+bu değişiklik `20260720_0007` Alembic revision'ını gerektirir. API lineupları çoğu
+desteklenen ligde maçtan 20–40 dakika önce geldiğinden erken analizlerde feature
+nötr kalabilir ve maç saatine yakın yeniden analiz daha zengin snapshot üretir.
+
 ### Temel analiz algoritması
 
 Aktif analiz akışı kavramsal olarak aşağıdaki kodla özetlenebilir:

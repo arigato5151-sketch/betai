@@ -179,6 +179,12 @@ def test_inference_feature_vector_has_stable_schema_and_rest_difference() -> Non
             "away_questionable_players": 0,
             "availability_report_present": 1,
         },
+        lineup_context={
+            "home_starting_xi": list(range(1, 10)) + [12, 13],
+            "away_starting_xi": list(range(20, 31)),
+            "home_previous_starting_xi": list(range(1, 12)),
+            "away_previous_starting_xi": list(range(20, 31)),
+        },
         fixture_date=NOW,
     )
 
@@ -189,6 +195,10 @@ def test_inference_feature_vector_has_stable_schema_and_rest_difference() -> Non
     assert features["home_missing_players"] == 2.0
     assert features["away_missing_players"] == 1.0
     assert features["availability_report_present"] == 1.0
+    assert features["home_lineup_confirmed"] == 1.0
+    assert features["home_lineup_reference_available"] == 1.0
+    assert features["home_lineup_continuity"] == pytest.approx(9 / 11, abs=1e-4)
+    assert features["away_lineup_continuity"] == 1.0
 
 
 def test_empty_feature_sources_use_documented_defaults() -> None:
@@ -228,16 +238,25 @@ def test_training_uses_same_versioned_snapshot_schema_as_inference() -> None:
     assert features == snapshot
 
 
-def test_v1_snapshot_is_forward_compatible_with_availability_defaults() -> None:
+@pytest.mark.parametrize("schema_version", ["ml_features_v1", "ml_features_v2"])
+def test_older_snapshots_are_forward_compatible_with_new_defaults(
+    schema_version: str,
+) -> None:
+    excluded_names = {name for name in FeatureEngine.FEATURE_NAMES if "lineup" in name}
+    if schema_version == "ml_features_v1":
+        excluded_names.update(
+            name for name in FeatureEngine.FEATURE_NAMES if "players" in name
+        )
+        excluded_names.add("availability_report_present")
     snapshot = {
         name: value
         for name, value in FeatureEngine.FEATURE_DEFAULTS.items()
-        if "players" not in name
+        if name not in excluded_names
     }
     snapshot["home_form_ema"] = 77.0
     row = SimpleNamespace(
         feature_snapshot=snapshot,
-        feature_schema_version="ml_features_v1",
+        feature_schema_version=schema_version,
     )
 
     features = FeatureEngine.build_training_features(row)
@@ -245,7 +264,32 @@ def test_v1_snapshot_is_forward_compatible_with_availability_defaults() -> None:
     assert features["home_form_ema"] == 77.0
     assert features["home_missing_players"] == 0.0
     assert features["away_questionable_players"] == 0.0
+    assert features["home_lineup_continuity"] == 0.0
     assert list(features) == FeatureEngine.FEATURE_NAMES
+
+
+@pytest.mark.parametrize(
+    ("current", "previous", "expected"),
+    [
+        pytest.param(
+            list(range(1, 12)),
+            list(range(1, 12)),
+            (1.0, 1.0, 1.0),
+            id="identical-confirmed-lineups",
+        ),
+        pytest.param(
+            list(range(1, 11)),
+            list(range(1, 12)),
+            (0.0, 1.0, 0.0),
+            id="partial-current-lineup",
+        ),
+        pytest.param(None, None, (0.0, 0.0, 0.0), id="lineups-unavailable"),
+    ],
+)
+def test_lineup_continuity_requires_complete_elevens(
+    current: object, previous: object, expected: tuple[float, float, float]
+) -> None:
+    assert FeatureEngine.compute_lineup_continuity(current, previous) == expected
 
 
 def test_legacy_training_rows_receive_explicit_full_schema_defaults() -> None:

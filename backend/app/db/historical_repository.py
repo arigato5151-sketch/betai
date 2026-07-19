@@ -139,3 +139,36 @@ class HistoricalFixtureRepository:
             .limit(limit)
             .all()
         )
+
+    def get_last_starting_xi(
+        self, *, team_id: int, league_id: int, before: datetime
+    ) -> list[int] | None:
+        fixtures = (
+            self.db.query(HistoricalFixture)
+            .filter(
+                HistoricalFixture.league_id == league_id,
+                or_(
+                    HistoricalFixture.home_team_id == team_id,
+                    HistoricalFixture.away_team_id == team_id,
+                ),
+                HistoricalFixture.kickoff < before,
+            )
+            .order_by(HistoricalFixture.kickoff.desc())
+            .limit(50)
+            .all()
+        )
+        for fixture in fixtures:
+            lineup = (
+                fixture.home_starting_xi
+                if fixture.home_team_id == team_id
+                else fixture.away_starting_xi
+            )
+            if isinstance(lineup, list):
+                player_ids = [
+                    player_id
+                    for player_id in lineup
+                    if isinstance(player_id, int) and player_id > 0
+                ]
+                if len(set(player_ids)) == 11:
+                    return list(dict.fromkeys(player_ids))
+        return None

@@ -4,8 +4,12 @@ from typing import Dict, List, Optional, Any
 
 
 class FeatureEngine:
-    SCHEMA_VERSION = "ml_features_v2"
-    COMPATIBLE_SNAPSHOT_VERSIONS = {"ml_features_v1", SCHEMA_VERSION}
+    SCHEMA_VERSION = "ml_features_v3"
+    COMPATIBLE_SNAPSHOT_VERSIONS = {
+        "ml_features_v1",
+        "ml_features_v2",
+        SCHEMA_VERSION,
+    }
     FEATURE_NAMES = [
         "home_form",
         "home_attack",
@@ -40,6 +44,12 @@ class FeatureEngine:
         "home_questionable_players",
         "away_questionable_players",
         "availability_report_present",
+        "home_lineup_confirmed",
+        "away_lineup_confirmed",
+        "home_lineup_reference_available",
+        "away_lineup_reference_available",
+        "home_lineup_continuity",
+        "away_lineup_continuity",
     ]
     FEATURE_DEFAULTS = {
         "home_form": 50.0,
@@ -74,6 +84,12 @@ class FeatureEngine:
         "home_questionable_players": 0.0,
         "away_questionable_players": 0.0,
         "availability_report_present": 0.0,
+        "home_lineup_confirmed": 0.0,
+        "away_lineup_confirmed": 0.0,
+        "home_lineup_reference_available": 0.0,
+        "away_lineup_reference_available": 0.0,
+        "home_lineup_continuity": 0.0,
+        "away_lineup_continuity": 0.0,
     }
 
     @classmethod
@@ -286,6 +302,28 @@ class FeatureEngine:
         return (home_avg, away_avg)
 
     @staticmethod
+    def compute_lineup_continuity(
+        current_lineup: object, previous_lineup: object
+    ) -> tuple[float, float, float]:
+        def valid_players(lineup: object) -> set[int]:
+            if not isinstance(lineup, list):
+                return set()
+            return {
+                player_id
+                for player_id in lineup
+                if isinstance(player_id, int) and player_id > 0
+            }
+
+        current = valid_players(current_lineup)
+        previous = valid_players(previous_lineup)
+        confirmed = float(len(current) == 11)
+        reference_available = float(len(previous) == 11)
+        continuity = (
+            len(current & previous) / 11.0 if confirmed and reference_available else 0.0
+        )
+        return confirmed, reference_available, round(continuity, 4)
+
+    @staticmethod
     def build_inference_features(
         home_stats: Dict[str, Any],
         away_stats: Dict[str, Any],
@@ -296,6 +334,7 @@ class FeatureEngine:
         home_elo: float = 1500.0,
         away_elo: float = 1500.0,
         availability: Optional[Dict[str, Any]] = None,
+        lineup_context: Optional[Dict[str, Any]] = None,
         fixture_date: Optional[pd.Timestamp] = None,
     ) -> Dict[str, float]:
         """
@@ -320,6 +359,7 @@ class FeatureEngine:
         )
         h2h_matches = h2h_matches or []
         availability = availability or {}
+        lineup_context = lineup_context or {}
 
         # Dynamic EMA and streaks calculations
         home_form_ema = FeatureEngine.compute_form_ema(home_matches_df, span=5)
@@ -358,6 +398,14 @@ class FeatureEngine:
         # Enhanced features: H2H goals averages
         h2h_home_avg_goals, h2h_away_avg_goals = FeatureEngine.compute_h2h_goals(
             h2h_matches
+        )
+        home_lineup = FeatureEngine.compute_lineup_continuity(
+            lineup_context.get("home_starting_xi"),
+            lineup_context.get("home_previous_starting_xi"),
+        )
+        away_lineup = FeatureEngine.compute_lineup_continuity(
+            lineup_context.get("away_starting_xi"),
+            lineup_context.get("away_previous_starting_xi"),
         )
 
         return {
@@ -400,4 +448,10 @@ class FeatureEngine:
             "availability_report_present": float(
                 availability.get("availability_report_present", 0)
             ),
+            "home_lineup_confirmed": home_lineup[0],
+            "away_lineup_confirmed": away_lineup[0],
+            "home_lineup_reference_available": home_lineup[1],
+            "away_lineup_reference_available": away_lineup[1],
+            "home_lineup_continuity": home_lineup[2],
+            "away_lineup_continuity": away_lineup[2],
         }

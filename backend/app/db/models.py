@@ -233,6 +233,8 @@ class HistoricalFixture(Base):
     away_team: Mapped[str] = mapped_column(String(100), nullable=False)
     home_goals: Mapped[int] = mapped_column(Integer, nullable=False)
     away_goals: Mapped[int] = mapped_column(Integer, nullable=False)
+    home_starting_xi: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    away_starting_xi: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     actual_result: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(8), nullable=False)
     ingested_at: Mapped[datetime.datetime] = mapped_column(

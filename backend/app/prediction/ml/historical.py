@@ -18,6 +18,8 @@ class HistoricalFeatureContext:
     h2h_matches: list[dict[str, int]] | None = None
     home_matches_df: pd.DataFrame | None = None
     away_matches_df: pd.DataFrame | None = None
+    home_previous_starting_xi: list[int] | None = None
+    away_previous_starting_xi: list[int] | None = None
 
 
 class HistoricalFeatureService:
@@ -71,6 +73,12 @@ class HistoricalFeatureService:
             before=before,
             limit=recent_match_count,
         )
+        home_previous_starting_xi = self.repository.get_last_starting_xi(
+            team_id=home_team_id, league_id=league_id, before=before
+        )
+        away_previous_starting_xi = self.repository.get_last_starting_xi(
+            team_id=away_team_id, league_id=league_id, before=before
+        )
 
         return HistoricalFeatureContext(
             home_elo=ratings.get(home_team_id, 1500.0),
@@ -79,6 +87,8 @@ class HistoricalFeatureService:
             h2h_matches=h2h_matches,
             home_matches_df=self._team_matches_frame(home_matches, home_team_id),
             away_matches_df=self._team_matches_frame(away_matches, away_team_id),
+            home_previous_starting_xi=home_previous_starting_xi,
+            away_previous_starting_xi=away_previous_starting_xi,
         )
 
     @staticmethod

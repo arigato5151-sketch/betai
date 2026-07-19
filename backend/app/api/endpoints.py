@@ -424,12 +424,12 @@ def _build_analysis_response(
 
 async def _fetch_ml_match_data(
     payload: AnalysisRequest, historical: HistoricalFeatureContext
-) -> Tuple[Any, Any, Any, Any]:
+) -> Tuple[Any, Any, Any, Any, Any]:
     """Fill missing point-in-time sources from API without holding a DB session."""
     home_team_id = payload.home_team_id
     away_team_id = payload.away_team_id
     if home_team_id is None or away_team_id is None:
-        return historical.home_matches_df, historical.away_matches_df, None, None
+        return historical.home_matches_df, historical.away_matches_df, None, None, None
 
     def local_history_is_usable(local_frame: Any) -> bool:
         if (
@@ -477,15 +477,29 @@ async def _fetch_ml_match_data(
             payload.fixture_id, home_team_id, away_team_id
         )
 
-    home_matches_df, away_matches_df, h2h_rates, availability_data = (
+    async def lineups() -> Any:
+        if payload.fixture_id is None:
+            return None
+        return await football_api.get_fixture_lineups(
+            payload.fixture_id, home_team_id, away_team_id
+        )
+
+    home_matches_df, away_matches_df, h2h_rates, availability_data, lineup_data = (
         await asyncio.gather(
             recent_matches(historical.home_matches_df, home_team_id),
             recent_matches(historical.away_matches_df, away_team_id),
             h2h(),
             availability(),
+            lineups(),
         )
     )
-    return home_matches_df, away_matches_df, h2h_rates, availability_data
+    return (
+        home_matches_df,
+        away_matches_df,
+        h2h_rates,
+        availability_data,
+        lineup_data,
+    )
 
 
 def _get_historical_feature_context(
@@ -525,9 +539,14 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     ml_explanations: List[str] = []
 
     historical = _get_historical_feature_context(payload)
-    home_matches_df, away_matches_df, h2h_rates, availability = (
+    home_matches_df, away_matches_df, h2h_rates, availability, lineups = (
         await _fetch_ml_match_data(payload, historical)
     )
+    lineup_context = {
+        **(lineups or {}),
+        "home_previous_starting_xi": historical.home_previous_starting_xi,
+        "away_previous_starting_xi": historical.away_previous_starting_xi,
+    }
     feature_vector = FeatureEngine.build_inference_features(
         home_stats=payload.home_stats.model_dump(),
         away_stats=payload.away_stats.model_dump(),
@@ -538,6 +557,7 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         home_elo=historical.home_elo,
         away_elo=historical.away_elo,
         availability=availability,
+        lineup_context=lineup_context,
         fixture_date=payload.kickoff,
     )
     if ml_pipeline.is_ready:

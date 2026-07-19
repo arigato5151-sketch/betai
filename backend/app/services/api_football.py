@@ -258,6 +258,51 @@ class APIFootballClient:
         await cache.set("match_data", cache_key, result, 14400)
         return result
 
+    async def get_fixture_lineups(
+        self, fixture_id: int, home_team_id: int, away_team_id: int
+    ) -> Optional[Dict[str, object]]:
+        if self._is_demo_key():
+            return None
+
+        cache_key = f"lineups:{fixture_id}:{home_team_id}:{away_team_id}"
+        cached = await cache.get("match_data", cache_key)
+        if cached is not None:
+            return cached
+
+        data = await self._request_with_retry(
+            "fixtures/lineups", {"fixture": str(fixture_id)}
+        )
+        if data is None:
+            return None
+        lineups = self._starting_xi_by_team(data.get("response", []))
+        result: Dict[str, object] = {
+            "home_starting_xi": lineups.get(home_team_id),
+            "away_starting_xi": lineups.get(away_team_id),
+            "source": "api_football_lineups",
+        }
+        await cache.set("match_data", cache_key, result, 900)
+        return result
+
+    @staticmethod
+    def _starting_xi_by_team(lineups: object) -> Dict[int, List[int]]:
+        if not isinstance(lineups, list):
+            return {}
+        result: Dict[int, List[int]] = {}
+        for lineup in lineups:
+            if not isinstance(lineup, dict):
+                continue
+            team_id = lineup.get("team", {}).get("id")
+            if not isinstance(team_id, int) or team_id <= 0:
+                continue
+            player_ids = []
+            for entry in lineup.get("startXI", []):
+                player_id = entry.get("player", {}).get("id")
+                if isinstance(player_id, int) and player_id > 0:
+                    player_ids.append(player_id)
+            if player_ids:
+                result[team_id] = list(dict.fromkeys(player_ids))
+        return result
+
     async def get_completed_fixtures(self, league_id: int, season: int) -> List[Dict]:
         """Fetch all final fixtures for one league-season for idempotent ingestion."""
         if league_id not in ALLOWED_LEAGUE_IDS:
@@ -327,6 +372,7 @@ class APIFootballClient:
             result = "AWAY_WIN"
         else:
             result = "DRAW"
+        lineups = APIFootballClient._starting_xi_by_team(item.get("lineups", []))
         return {
             "fixture_id": int(fixture["id"]),
             "league_id": int(league["id"]),
@@ -338,6 +384,8 @@ class APIFootballClient:
             "away_team": str(away["name"])[:100],
             "home_goals": home_score,
             "away_goals": away_score,
+            "home_starting_xi": lineups.get(int(home["id"])),
+            "away_starting_xi": lineups.get(int(away["id"])),
             "actual_result": result,
             "status": status,
         }

@@ -19,6 +19,8 @@ def fixture_row(
     home_goals: int = 2,
     away_goals: int = 1,
     season: int = 2026,
+    home_starting_xi: list[int] | None = None,
+    away_starting_xi: list[int] | None = None,
 ) -> dict:
     if home_goals > away_goals:
         result = "HOME_WIN"
@@ -37,6 +39,8 @@ def fixture_row(
         "away_team": f"Team {away_team_id}",
         "home_goals": home_goals,
         "away_goals": away_goals,
+        "home_starting_xi": home_starting_xi,
+        "away_starting_xi": away_starting_xi,
         "actual_result": result,
         "status": "FT",
     }
@@ -58,7 +62,16 @@ def test_historical_upsert_is_idempotent_and_updates_scores(
     assert historical_repository.upsert_many([fixture_row(100, kickoff)]) == 1
     assert (
         historical_repository.upsert_many(
-            [fixture_row(100, kickoff, home_goals=0, away_goals=0)]
+            [
+                fixture_row(
+                    100,
+                    kickoff,
+                    home_goals=0,
+                    away_goals=0,
+                    home_starting_xi=list(range(1, 12)),
+                    away_starting_xi=list(range(20, 31)),
+                )
+            ]
         )
         == 1
     )
@@ -67,6 +80,8 @@ def test_historical_upsert_is_idempotent_and_updates_scores(
     assert stored is not None
     assert stored.home_goals == 0
     assert stored.actual_result == "DRAW"
+    assert stored.home_starting_xi == list(range(1, 12))
+    assert stored.away_starting_xi == list(range(20, 31))
     assert historical_repository.db.query(stored.__class__).count() == 1
 
 
@@ -110,6 +125,8 @@ def test_historical_context_builds_elo_and_normalizes_reversed_h2h(
                 away_team_id=1,
                 home_goals=3,
                 away_goals=0,
+                home_starting_xi=list(range(20, 31)),
+                away_starting_xi=list(range(1, 12)),
             ),
         ]
     )
@@ -138,6 +155,8 @@ def test_historical_context_builds_elo_and_normalizes_reversed_h2h(
     assert context.home_matches_df["points"].tolist() == [3.0, 0.0]
     assert context.away_matches_df["result"].tolist() == ["L", "W"]
     assert str(context.home_matches_df["match_date"].dt.tz) == "UTC"
+    assert context.home_previous_starting_xi == list(range(1, 12))
+    assert context.away_previous_starting_xi == list(range(20, 31))
 
 
 def test_historical_context_carries_elo_across_seasons_with_regression(
