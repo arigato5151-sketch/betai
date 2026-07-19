@@ -151,6 +151,12 @@ class Settings(BaseSettings):
     RECENT_FORM_MATCH_COUNT: int = Field(default=5, ge=1, le=20)
     # Eski yerel snapshot yerine canlı API fallback'ine geçiş eşiği.
     HISTORICAL_FORM_MAX_AGE_DAYS: int = Field(default=45, ge=1, le=365)
+    # TODO: kalibrasyon kaynağını doğrula — maç başına Elo güncelleme hızı.
+    ELO_K_FACTOR: float = Field(default=32.0, gt=0, le=100)
+    # TODO: kalibrasyon kaynağını doğrula — Elo beklenen skorundaki ev avantajı.
+    ELO_HOME_ADVANTAGE_POINTS: float = Field(default=65.0, ge=0, le=200)
+    # TODO: kalibrasyon kaynağını doğrula — sezon geçişinde ortalamaya dönüş oranı.
+    ELO_SEASON_REGRESSION: float = Field(default=0.25, ge=0, le=1)
 
     MIN_TRAINING_SAMPLES: int = 200
     RETRAIN_EVERY_N_NEW: int = 25

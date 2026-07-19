@@ -32,15 +32,22 @@ class HistoricalFeatureService:
         home_team_id: int,
         away_team_id: int,
         league_id: int,
-        season: int,
         before: datetime,
         recent_match_count: int = 5,
+        elo_k_factor: float = 32.0,
+        elo_home_advantage_points: float = 0.0,
+        elo_season_regression: float = 0.0,
     ) -> HistoricalFeatureContext:
         league_matches = self.repository.get_league_history(
-            league_id=league_id, season=season, before=before
+            league_id=league_id, before=before
         )
         elo_rows = [self._elo_row(fixture) for fixture in league_matches]
-        ratings = FeatureEngine.calculate_elo_ratings(elo_rows)
+        ratings = FeatureEngine.calculate_elo_ratings(
+            elo_rows,
+            k_factor=elo_k_factor,
+            home_advantage_points=elo_home_advantage_points,
+            season_regression=elo_season_regression,
+        )
 
         h2h_fixtures = self.repository.get_h2h(
             home_team_id=home_team_id,
@@ -81,6 +88,7 @@ class HistoricalFeatureService:
             "home_team_id": fixture.home_team_id,
             "away_team_id": fixture.away_team_id,
             "actual_result": fixture.actual_result,
+            "season": fixture.season,
         }
 
     @staticmethod

@@ -18,6 +18,7 @@ def fixture_row(
     away_team_id: int = 2,
     home_goals: int = 2,
     away_goals: int = 1,
+    season: int = 2026,
 ) -> dict:
     if home_goals > away_goals:
         result = "HOME_WIN"
@@ -28,7 +29,7 @@ def fixture_row(
     return {
         "fixture_id": fixture_id,
         "league_id": 203,
-        "season": 2026,
+        "season": season,
         "kickoff": kickoff,
         "home_team_id": home_team_id,
         "away_team_id": away_team_id,
@@ -117,7 +118,6 @@ def test_historical_context_builds_elo_and_normalizes_reversed_h2h(
         home_team_id=1,
         away_team_id=2,
         league_id=203,
-        season=2026,
         before=cutoff,
     )
 
@@ -138,6 +138,47 @@ def test_historical_context_builds_elo_and_normalizes_reversed_h2h(
     assert context.home_matches_df["points"].tolist() == [3.0, 0.0]
     assert context.away_matches_df["result"].tolist() == ["L", "W"]
     assert str(context.home_matches_df["match_date"].dt.tz) == "UTC"
+
+
+def test_historical_context_carries_elo_across_seasons_with_regression(
+    historical_repository: HistoricalFixtureRepository,
+) -> None:
+    cutoff = datetime(2026, 8, 10, tzinfo=UTC)
+    historical_repository.upsert_many(
+        [
+            fixture_row(
+                200,
+                datetime(2025, 5, 1, tzinfo=UTC),
+                season=2024,
+            ),
+            fixture_row(
+                201,
+                datetime(2026, 8, 1, tzinfo=UTC),
+                home_team_id=3,
+                away_team_id=4,
+                home_goals=1,
+                away_goals=1,
+                season=2026,
+            ),
+        ]
+    )
+
+    context = HistoricalFeatureService(historical_repository).build_context(
+        home_team_id=1,
+        away_team_id=2,
+        league_id=203,
+        before=cutoff,
+        elo_season_regression=0.25,
+    )
+
+    assert context.home_elo == pytest.approx(1512.0)
+    assert context.away_elo == pytest.approx(1488.0)
+    assert [
+        row.season
+        for row in historical_repository.get_league_history(
+            league_id=203, before=cutoff
+        )
+    ] == [2024, 2026]
 
 
 @pytest.mark.parametrize(

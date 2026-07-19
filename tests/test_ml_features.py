@@ -67,6 +67,73 @@ def test_elo_is_chronological_and_ignores_invalid_results() -> None:
     assert ratings[2] == pytest.approx(1484.0)
 
 
+def test_elo_home_advantage_reduces_expected_home_win_gain() -> None:
+    ratings = FeatureEngine.calculate_elo_ratings(
+        [
+            {
+                "created_at": "2026-01-01",
+                "season": 2026,
+                "home_team_id": 1,
+                "away_team_id": 2,
+                "actual_result": "HOME_WIN",
+            }
+        ],
+        home_advantage_points=65.0,
+    )
+
+    assert 1500.0 < ratings[1] < 1516.0
+    assert ratings[1] + ratings[2] == pytest.approx(3000.0)
+
+
+def test_elo_regresses_existing_ratings_at_season_boundary() -> None:
+    matches = [
+        {
+            "created_at": "2025-05-01",
+            "season": 2024,
+            "home_team_id": 1,
+            "away_team_id": 2,
+            "actual_result": "HOME_WIN",
+        },
+        {
+            "created_at": "2025-08-01",
+            "season": 2025,
+            "home_team_id": 3,
+            "away_team_id": 4,
+            "actual_result": "DRAW",
+        },
+    ]
+
+    without_regression = FeatureEngine.calculate_elo_ratings(matches)
+    with_regression = FeatureEngine.calculate_elo_ratings(
+        matches, season_regression=0.25
+    )
+
+    assert without_regression[1] == pytest.approx(1516.0)
+    assert with_regression[1] == pytest.approx(1512.0)
+    assert with_regression[2] == pytest.approx(1488.0)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        pytest.param({"k_factor": 0}, "k_factor", id="non-positive-k-factor"),
+        pytest.param(
+            {"home_advantage_points": -1},
+            "home_advantage_points",
+            id="negative-home-advantage",
+        ),
+        pytest.param(
+            {"season_regression": 1.1},
+            "season_regression",
+            id="invalid-season-regression",
+        ),
+    ],
+)
+def test_elo_rejects_invalid_configuration(kwargs: dict, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        FeatureEngine.calculate_elo_ratings([], **kwargs)
+
+
 def test_form_streak_and_goal_features_handle_nan_values() -> None:
     frame = matches_frame()
 

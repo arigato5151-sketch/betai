@@ -208,6 +208,12 @@ yoksa veya son kayıt 45 günden eskiyse API-Football verisine fallback yapılı
 eşikler `RECENT_FORM_MATCH_COUNT` ve `HISTORICAL_FORM_MAX_AGE_DAYS` ortam
 değişkenleriyle ayarlanabilir.
 
+Elo hesabı lig geçmişini sezonlar arasında kronolojik taşır. Yeni sezon başında
+rating farkının varsayılan `%25` bölümü lig ortalaması olan `1500` değerine geri
+çekilir ve beklenen ev sahibi skoruna varsayılan `65` Elo puanı eklenir. Güncelleme
+hızı, ev avantajı ve sezon regresyonu sırasıyla `ELO_K_FACTOR`,
+`ELO_HOME_ADVANTAGE_POINTS` ve `ELO_SEASON_REGRESSION` ile kalibre edilebilir.
+
 ### Temel analiz algoritması
 
 Aktif analiz akışı kavramsal olarak aşağıdaki kodla özetlenebilir:

@@ -97,13 +97,24 @@ class FeatureEngine:
 
     @staticmethod
     def calculate_elo_ratings(
-        matches: List[Dict[str, Any]], k_factor: float = 32.0
+        matches: List[Dict[str, Any]],
+        k_factor: float = 32.0,
+        home_advantage_points: float = 0.0,
+        season_regression: float = 0.0,
     ) -> Dict[int, float]:
         """
         Chronologically calculates Elo ratings for all teams.
         Default rating is 1500.0.
         """
+        if k_factor <= 0:
+            raise ValueError("k_factor must be greater than zero")
+        if home_advantage_points < 0:
+            raise ValueError("home_advantage_points cannot be negative")
+        if not 0.0 <= season_regression <= 1.0:
+            raise ValueError("season_regression must be between 0 and 1")
+
         elo_ratings: Dict[int, float] = {}
+        active_season: object | None = None
 
         # Sort matches by date
         sorted_matches = sorted(
@@ -115,16 +126,32 @@ class FeatureEngine:
             h_id = match.get("home_team_id")
             a_id = match.get("away_team_id")
             result = match.get("actual_result")
+            match_season = match.get("season")
 
             if not h_id or not a_id or result not in {"HOME_WIN", "DRAW", "AWAY_WIN"}:
                 continue
+
+            if (
+                active_season is not None
+                and match_season is not None
+                and match_season != active_season
+                and season_regression > 0
+            ):
+                retention = 1.0 - season_regression
+                elo_ratings = {
+                    team_id: 1500.0 + (rating - 1500.0) * retention
+                    for team_id, rating in elo_ratings.items()
+                }
+            if match_season is not None:
+                active_season = match_season
 
             r_home = elo_ratings.setdefault(h_id, 1500.0)
             r_away = elo_ratings.setdefault(a_id, 1500.0)
 
             # Expected scores
-            e_home = 1.0 / (1.0 + 10.0 ** ((r_away - r_home) / 400.0))
-            e_away = 1.0 / (1.0 + 10.0 ** ((r_home - r_away) / 400.0))
+            adjusted_home_rating = r_home + home_advantage_points
+            e_home = 1.0 / (1.0 + 10.0 ** ((r_away - adjusted_home_rating) / 400.0))
+            e_away = 1.0 - e_home
 
             # Actual scores
             if result == "HOME_WIN":

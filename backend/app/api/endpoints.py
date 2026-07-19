@@ -485,7 +485,6 @@ def _get_historical_feature_context(
         payload.home_team_id is None
         or payload.away_team_id is None
         or payload.league_id is None
-        or payload.season is None
         or payload.kickoff is None
     ):
         return HistoricalFeatureContext()
@@ -496,9 +495,11 @@ def _get_historical_feature_context(
             home_team_id=payload.home_team_id,
             away_team_id=payload.away_team_id,
             league_id=payload.league_id,
-            season=payload.season,
             before=payload.kickoff,
             recent_match_count=settings.RECENT_FORM_MATCH_COUNT,
+            elo_k_factor=settings.ELO_K_FACTOR,
+            elo_home_advantage_points=settings.ELO_HOME_ADVANTAGE_POINTS,
+            elo_season_regression=settings.ELO_SEASON_REGRESSION,
         )
 
 

@@ -84,20 +84,17 @@ class HistoricalFixtureRepository:
         )
 
     def get_league_history(
-        self, *, league_id: int, season: int, before: datetime
+        self, *, league_id: int, before: datetime, season: int | None = None
     ) -> list[HistoricalFixture]:
-        return (
-            self.db.query(HistoricalFixture)
-            .filter(
-                HistoricalFixture.league_id == league_id,
-                HistoricalFixture.season == season,
-                HistoricalFixture.kickoff < before,
-            )
-            .order_by(
-                HistoricalFixture.kickoff.asc(), HistoricalFixture.fixture_id.asc()
-            )
-            .all()
+        query = self.db.query(HistoricalFixture).filter(
+            HistoricalFixture.league_id == league_id,
+            HistoricalFixture.kickoff < before,
         )
+        if season is not None:
+            query = query.filter(HistoricalFixture.season == season)
+        return query.order_by(
+            HistoricalFixture.kickoff.asc(), HistoricalFixture.fixture_id.asc()
+        ).all()
 
     def get_h2h(
         self, *, home_team_id: int, away_team_id: int, before: datetime, limit: int = 10
