@@ -6,9 +6,10 @@ from pathlib import Path
 import joblib
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
-from sklearn.model_selection import train_test_split
+from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.metrics import log_loss
+from sklearn.model_selection import TimeSeriesSplit
 from app.core.config import settings
 from app.core.logging_config import logger
 from app.prediction.ml.features import FeatureEngine
@@ -234,6 +235,44 @@ class MLModelPipeline:
 
         return candidates
 
+    @staticmethod
+    def _training_sort_key(row: Any) -> float:
+        timestamp = getattr(row, "feature_snapshot_at", None) or getattr(
+            row, "created_at", None
+        )
+        if not isinstance(timestamp, datetime):
+            return 0.0
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
+        return timestamp.timestamp()
+
+    @classmethod
+    def _has_all_outcomes(cls, labels: np.ndarray) -> bool:
+        return set(np.unique(labels)) == set(cls.INV_LABEL_MAP)
+
+    @classmethod
+    def _probability_metrics(
+        cls, labels: np.ndarray, probabilities: np.ndarray
+    ) -> tuple[float, float]:
+        expected_shape = (len(labels), len(cls.LABEL_MAP))
+        if probabilities.shape != expected_shape:
+            raise ValueError(
+                f"Probability matrix must have shape {expected_shape}, got {probabilities.shape}"
+            )
+        if not np.all(np.isfinite(probabilities)) or np.any(probabilities < 0):
+            raise ValueError("Probability matrix contains invalid values")
+        row_sums = probabilities.sum(axis=1, keepdims=True)
+        if np.any(row_sums <= 0):
+            raise ValueError("Probability rows must have a positive sum")
+        normalized = probabilities / row_sums
+        one_hot = np.zeros_like(normalized)
+        one_hot[np.arange(len(labels)), labels] = 1.0
+        brier = float(np.mean(np.sum((normalized - one_hot) ** 2, axis=1)))
+        loss = float(
+            log_loss(labels, normalized, labels=list(range(len(cls.LABEL_MAP))))
+        )
+        return brier, loss
+
     def train_pipeline(self, rows: List[Any]) -> bool:
         """
         Gathers database features, splits into train/validation,
@@ -249,11 +288,14 @@ class MLModelPipeline:
         # Retraining upgrades legacy artifacts to the current inference schema.
         self.feature_names = list(FeatureEngine.FEATURE_NAMES)
 
-        # Extract features and targets from DB rows
+        # Sort first so no future match can enter an earlier training window.
+        chronological_rows = sorted(rows, key=self._training_sort_key)
+
+        # Extract features and targets from DB rows.
         X_list = []
         y_list = []
 
-        for row in rows:
+        for row in chronological_rows:
             if not row.actual_result:
                 continue
 
@@ -271,54 +313,87 @@ class MLModelPipeline:
         if len(X) < settings.MIN_TRAINING_SAMPLES:
             return False
 
-        class_counts = np.bincount(y, minlength=len(self.LABEL_MAP))
-        validation_size = math.ceil(len(y) * 0.2)
-        if np.any(class_counts < 2) or validation_size < len(self.LABEL_MAP):
+        outcome_count = len(self.LABEL_MAP)
+        test_size = max(outcome_count, math.ceil(len(y) * 0.2))
+        calibration_size = max(outcome_count, math.ceil(len(y) * 0.15))
+        train_end = len(y) - calibration_size - test_size
+        calibration_end = len(y) - test_size
+        if train_end < outcome_count * 2:
             logger.warning(
-                "Training skipped: each outcome needs at least two samples and the validation split must contain all classes."
+                "Training skipped: temporal train/calibration/test windows are too small."
             )
             return False
 
-        # Train/Validation split (80/20)
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
+        X_train, y_train = X[:train_end], y[:train_end]
+        X_calibration, y_calibration = (
+            X[train_end:calibration_end],
+            y[train_end:calibration_end],
         )
+        X_test, y_test = X[calibration_end:], y[calibration_end:]
+        if not all(
+            self._has_all_outcomes(labels)
+            for labels in (y_train, y_calibration, y_test)
+        ):
+            logger.warning(
+                "Training skipped: every temporal window must contain all outcomes."
+            )
+            return False
 
         candidates = self._get_candidate_models()
         best_model_name = None
-        best_model = None
+        best_template = None
         best_brier = float("inf")
-        best_metrics = {}
+        best_cv_loss = float("inf")
+        splitter = TimeSeriesSplit(n_splits=3)
 
-        for name, clf in candidates:
+        for name, template in candidates:
             try:
-                clf.fit(X_train, y_train)
-                val_probs = clf.predict_proba(X_val)
+                fold_metrics: list[tuple[float, float]] = []
+                for fold_train_indices, fold_validation_indices in splitter.split(
+                    X_train
+                ):
+                    fold_y_train = y_train[fold_train_indices]
+                    fold_y_validation = y_train[fold_validation_indices]
+                    if not self._has_all_outcomes(
+                        fold_y_train
+                    ) or not self._has_all_outcomes(fold_y_validation):
+                        continue
 
-                # Multi-class Brier score = (1/N) * sum((f_i - o_i)^2)
-                # Compute brier manually for multiclass
-                o_onehot = np.zeros_like(val_probs)
-                o_onehot[np.arange(len(y_val)), y_val] = 1.0
-                brier = float(np.mean(np.sum((val_probs - o_onehot) ** 2, axis=1)))
-                loss = log_loss(y_val, val_probs)
+                    fold_model = clone(template)
+                    fold_model.fit(X_train[fold_train_indices], fold_y_train)
+                    fold_probabilities = np.asarray(
+                        fold_model.predict_proba(X_train[fold_validation_indices]),
+                        dtype=float,
+                    )
+                    fold_metrics.append(
+                        self._probability_metrics(fold_y_validation, fold_probabilities)
+                    )
+
+                if not fold_metrics:
+                    logger.warning(
+                        "Model candidate %s has no valid temporal folds.", name
+                    )
+                    continue
+
+                brier = float(np.mean([metric[0] for metric in fold_metrics]))
+                loss = float(np.mean([metric[1] for metric in fold_metrics]))
 
                 logger.info(
-                    f"Model Candidate: {name} | Brier: {round(brier, 4)} | Log Loss: {round(loss, 4)}"
+                    "Model Candidate: %s | Walk-forward Brier: %.4f | Log Loss: %.4f",
+                    name,
+                    brier,
+                    loss,
                 )
 
                 if brier < best_brier:
                     best_brier = brier
-                    best_model = clf
+                    best_cv_loss = loss
+                    best_template = template
                     best_model_name = name
-                    best_metrics = {
-                        "brier_score": brier,
-                        "log_loss": loss,
-                        "samples": float(len(X)),
-                    }
             except Exception as e:
                 logger.error(f"Failed training candidate model {name}: {e}")
 
-        if not best_model or not best_model_name:
+        if best_template is None or not best_model_name:
             logger.error("No model candidates trained successfully.")
             return False
 
@@ -326,11 +401,29 @@ class MLModelPipeline:
         from app.prediction.ml.calibrate import MultiClassCalibrator
 
         logger.info(
-            f"Selected best model: {best_model_name} (Brier: {round(best_brier, 4)}). Starting Isotonic calibration..."
+            "Selected best model: %s (walk-forward Brier: %.4f). "
+            "Starting holdout calibration.",
+            best_model_name,
+            best_brier,
         )
 
+        best_model = clone(best_template)
+        best_model.fit(X_train, y_train)
         calibrator = MultiClassCalibrator(best_model)
-        calibrator.fit(X_train, y_train)
+        calibrator.fit(X_calibration, y_calibration)
+        test_probabilities = np.asarray(calibrator.predict_proba(X_test), dtype=float)
+        test_brier, test_loss = self._probability_metrics(y_test, test_probabilities)
+        best_metrics = {
+            "brier_score": test_brier,
+            "log_loss": test_loss,
+            "walk_forward_brier_score": best_brier,
+            "walk_forward_log_loss": best_cv_loss,
+            "samples": float(len(X)),
+            "training_samples": float(len(X_train)),
+            "calibration_samples": float(len(X_calibration)),
+            "test_samples": float(len(X_test)),
+            "evaluation_strategy": "walk_forward_temporal_holdout",
+        }
 
         # Save active model
         self.model = best_model

@@ -1,8 +1,10 @@
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from sklearn.base import BaseEstimator
 
 from app.core.config import settings
 from app.prediction.ml.calibrate import MultiClassCalibrator
@@ -18,6 +20,42 @@ class ProbabilityModel:
         return np.array([self.probabilities for _ in range(len(features))], dtype=float)
 
 
+class RecordingClassifier(BaseEstimator):
+    fit_ranges: list[tuple[float, float]] = []
+
+    def fit(self, features: np.ndarray, labels: np.ndarray):
+        self.__class__.fit_ranges.append(
+            (float(features[:, 0].min()), float(features[:, 0].max()))
+        )
+        self.classes_ = np.array([0, 1, 2])
+        return self
+
+    def predict_proba(self, features: np.ndarray) -> np.ndarray:
+        return np.tile(np.array([0.4, 0.3, 0.3]), (len(features), 1))
+
+
+class RecordingCalibrator:
+    fit_range: tuple[float, float] | None = None
+    predict_range: tuple[float, float] | None = None
+
+    def __init__(self, base_clf: RecordingClassifier) -> None:
+        self.base_clf = base_clf
+
+    def fit(self, features: np.ndarray, labels: np.ndarray):
+        self.__class__.fit_range = (
+            float(features[:, 0].min()),
+            float(features[:, 0].max()),
+        )
+        return self
+
+    def predict_proba(self, features: np.ndarray) -> np.ndarray:
+        self.__class__.predict_range = (
+            float(features[:, 0].min()),
+            float(features[:, 0].max()),
+        )
+        return self.base_clf.predict_proba(features)
+
+
 def training_row(result: str | None) -> SimpleNamespace:
     return SimpleNamespace(
         actual_result=result,
@@ -29,6 +67,20 @@ def training_row(result: str | None) -> SimpleNamespace:
         away_attack=58,
         away_defense=57,
         away_xg=1.2,
+    )
+
+
+def temporal_training_row(index: int) -> SimpleNamespace:
+    outcomes = ("HOME_WIN", "DRAW", "AWAY_WIN")
+    return SimpleNamespace(
+        actual_result=outcomes[index % len(outcomes)],
+        created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index),
+        feature_snapshot={
+            **FeatureEngine.FEATURE_DEFAULTS,
+            "home_form": float(index),
+        },
+        feature_schema_version=FeatureEngine.SCHEMA_VERSION,
+        feature_snapshot_at=None,
     )
 
 
@@ -103,6 +155,38 @@ def test_training_rejects_insufficient_or_unbalanced_classes(
         )
         is False
     )
+
+
+def test_training_uses_disjoint_temporal_calibration_and_test_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.prediction.ml import calibrate
+
+    RecordingClassifier.fit_ranges = []
+    RecordingCalibrator.fit_range = None
+    RecordingCalibrator.predict_range = None
+    pipeline = MLModelPipeline()
+    monkeypatch.setattr(settings, "MIN_TRAINING_SAMPLES", 30)
+    monkeypatch.setattr(
+        pipeline,
+        "_get_candidate_models",
+        lambda: [("Recording", RecordingClassifier())],
+    )
+    monkeypatch.setattr(calibrate, "MultiClassCalibrator", RecordingCalibrator)
+    monkeypatch.setattr(pipeline, "_save_active_model", Mock())
+    rows = [temporal_training_row(index) for index in reversed(range(60))]
+
+    assert pipeline.train_pipeline(rows) is True
+
+    # Final model sees only the oldest training window.
+    assert RecordingClassifier.fit_ranges[-1] == (0.0, 38.0)
+    # Calibration and test windows are later and mutually disjoint.
+    assert RecordingCalibrator.fit_range == (39.0, 47.0)
+    assert RecordingCalibrator.predict_range == (48.0, 59.0)
+    assert pipeline.metrics["evaluation_strategy"] == ("walk_forward_temporal_holdout")
+    assert pipeline.metrics["training_samples"] == 39.0
+    assert pipeline.metrics["calibration_samples"] == 9.0
+    assert pipeline.metrics["test_samples"] == 12.0
 
 
 def test_load_model_clears_stale_state_when_artifact_is_missing(
