@@ -1,31 +1,10 @@
 import math
 from typing import Dict, List, Optional
 
-LEAGUE_BASELINE_GOALS = 1.32
-FORM_DECAY_WEIGHTS = (1.0, 0.88, 0.76, 0.64, 0.52)
-HOME_ATTACK_BOOST = 1.11
-AWAY_ATTACK_PENALTY = 0.93
+from app.core.config import settings
 
 MAX_GOALS = 7
 MODEL_VERSION = "poisson_dixon_coles_v3"
-DEFAULT_RHO = -0.12
-
-LEAGUE_RHO = {
-    39: -0.13,  # Premier League
-    140: -0.11,  # La Liga
-    135: -0.15,  # Serie A
-    78: -0.09,  # Bundesliga
-    61: -0.12,  # Ligue 1
-    40: -0.14,  # Championship
-    94: -0.12,  # Liga Portugal
-    203: -0.10,  # Super Lig
-    88: -0.08,  # Eredivisie
-    144: -0.12,  # Pro League
-    235: -0.11,  # Russia
-    79: -0.10,  # 2. Bundesliga
-    136: -0.14,  # Serie B
-    62: -0.13,  # Ligue 2
-}
 
 
 def build_team_profile(api_data: Optional[Dict], venue: str) -> Dict:
@@ -40,8 +19,12 @@ def build_team_profile(api_data: Optional[Dict], venue: str) -> Dict:
     goals_against = _avg_goals(goals.get("against", {}), venue)
     form_string = api_data.get("form", "")
 
-    attack_strength = max(0.55, min(1.75, goals_for / LEAGUE_BASELINE_GOALS))
-    defense_strength = max(0.55, min(1.75, goals_against / LEAGUE_BASELINE_GOALS))
+    attack_strength = max(
+        0.55, min(1.75, goals_for / settings.LEAGUE_BASELINE_GOALS)
+    )
+    defense_strength = max(
+        0.55, min(1.75, goals_against / settings.LEAGUE_BASELINE_GOALS)
+    )
 
     form_score = _decay_form_score(form_string)
     clean_sheets = _extract_count(api_data.get("clean_sheet", {}), venue)
@@ -53,7 +36,14 @@ def build_team_profile(api_data: Optional[Dict], venue: str) -> Dict:
     )
     attack_index = _to_index(attack_strength)
     defense_index = _to_index(2.0 - defense_strength)
-    strength = round((attack_index * 0.4 + defense_index * 0.35 + form_score * 0.25), 1)
+    strength = round(
+        (
+            attack_index * settings.STRENGTH_ATTACK_WEIGHT
+            + defense_index * settings.STRENGTH_DEFENSE_WEIGHT
+            + form_score * settings.STRENGTH_FORM_WEIGHT
+        ),
+        1,
+    )
 
     return {
         "form": form_score,
@@ -92,7 +82,11 @@ def _decay_form_score(form_string: str) -> int:
     weighted_points = 0.0
     max_points = 0.0
     for idx, char in enumerate(reversed(recent)):
-        weight = FORM_DECAY_WEIGHTS[idx] if idx < len(FORM_DECAY_WEIGHTS) else 0.4
+        weight = (
+            settings.FORM_DECAY_WEIGHTS[idx]
+            if idx < len(settings.FORM_DECAY_WEIGHTS)
+            else settings.FORM_DECAY_FALLBACK_WEIGHT
+        )
         pts = points_map.get(char, 1)
         weighted_points += pts * weight
         max_points += 3 * weight
@@ -108,12 +102,20 @@ def _estimate_xg(
     defense_strength: float,
     venue: str,
 ) -> float:
-    base = goals_for * 0.55 + LEAGUE_BASELINE_GOALS * attack_strength * 0.45
+    base = (
+        goals_for * settings.XG_OBSERVED_GOALS_WEIGHT
+        + settings.LEAGUE_BASELINE_GOALS
+        * attack_strength
+        * settings.XG_ATTACK_BASELINE_WEIGHT
+    )
     if venue == "home":
-        base *= HOME_ATTACK_BOOST
+        base *= settings.HOME_ATTACK_BOOST
     else:
-        base *= AWAY_ATTACK_PENALTY
-    consistency = 1.0 - min(0.12, abs(goals_for - goals_against) * 0.04)
+        base *= settings.AWAY_ATTACK_PENALTY
+    consistency = 1.0 - min(
+        settings.XG_CONSISTENCY_MAX_PENALTY,
+        abs(goals_for - goals_against) * settings.XG_CONSISTENCY_PENALTY_WEIGHT,
+    )
     return round(max(0.35, min(3.5, base * consistency)), 2)
 
 
@@ -182,7 +184,13 @@ class StatsEngine:
         away_stats: dict,
         league_id: Optional[int] = None,
     ) -> dict:
-        rho = LEAGUE_RHO.get(league_id, DEFAULT_RHO) if league_id else DEFAULT_RHO
+        rho = (
+            settings.LEAGUE_DIXON_COLES_RHO.get(
+                league_id, settings.DEFAULT_DIXON_COLES_RHO
+            )
+            if league_id
+            else settings.DEFAULT_DIXON_COLES_RHO
+        )
         home_lambda = StatsEngine._expected_goals(home_stats, away_stats, is_home=True)
         away_lambda = StatsEngine._expected_goals(away_stats, home_stats, is_home=False)
 
@@ -241,21 +249,36 @@ class StatsEngine:
         if team.get("attack_strength") and opponent.get("defense_strength"):
             attack_s = float(team["attack_strength"])
             defense_weakness = float(opponent["defense_strength"])
-            form_factor = 0.88 + (float(team.get("form", 50)) / 100.0) * 0.24
+            form_factor = settings.PROFILE_FORM_FACTOR_BASE + (
+                float(team.get("form", 50)) / 100.0
+            ) * settings.PROFILE_FORM_FACTOR_WEIGHT
             lambda_goals = (
-                LEAGUE_BASELINE_GOALS * attack_s * defense_weakness * form_factor
+                settings.LEAGUE_BASELINE_GOALS
+                * attack_s
+                * defense_weakness
+                * form_factor
             )
         else:
-            attack_factor = 0.62 + (team["attack"] / 100.0) * 0.78
-            defense_factor = 0.72 + ((100 - opponent["defense"]) / 100.0) * 0.55
-            form_factor = 0.82 + (team["form"] / 100.0) * 0.36
-            xg_base = team["xg"] * 0.58 + LEAGUE_BASELINE_GOALS * 0.42
+            attack_factor = settings.LEGACY_ATTACK_FACTOR_BASE + (
+                team["attack"] / 100.0
+            ) * settings.LEGACY_ATTACK_FACTOR_WEIGHT
+            defense_factor = settings.LEGACY_DEFENSE_FACTOR_BASE + (
+                (100 - opponent["defense"]) / 100.0
+            ) * settings.LEGACY_DEFENSE_FACTOR_WEIGHT
+            form_factor = settings.LEGACY_FORM_FACTOR_BASE + (
+                team["form"] / 100.0
+            ) * settings.LEGACY_FORM_FACTOR_WEIGHT
+            xg_base = (
+                team["xg"] * settings.LEGACY_XG_OBSERVED_WEIGHT
+                + settings.LEAGUE_BASELINE_GOALS
+                * settings.LEGACY_XG_BASELINE_WEIGHT
+            )
             lambda_goals = xg_base * attack_factor * defense_factor * form_factor
 
         if is_home:
             lambda_goals *= StatsEngine._home_advantage_multiplier(team, opponent)
         else:
-            lambda_goals *= 0.93
+            lambda_goals *= settings.AWAY_ATTACK_PENALTY
 
         return max(0.35, min(3.4, lambda_goals))
 
@@ -264,10 +287,19 @@ class StatsEngine:
         home_gf = float(team.get("goals_for_avg") or 0)
         away_ga = float(opponent.get("goals_against_avg") or 0)
         if home_gf > 0 and away_ga > 0:
-            ratio = home_gf / max(0.55, away_ga)
-            return max(0.88, min(1.22, ratio))
-        form_boost = max(0.0, (float(team.get("form", 50)) - 50.0) / 450.0)
-        return 1.08 + form_boost
+            ratio = home_gf / max(
+                settings.HOME_ADVANTAGE_OPPONENT_GOALS_FLOOR, away_ga
+            )
+            return max(
+                settings.HOME_ADVANTAGE_MIN_MULTIPLIER,
+                min(settings.HOME_ADVANTAGE_MAX_MULTIPLIER, ratio),
+            )
+        form_boost = max(
+            0.0,
+            (float(team.get("form", 50)) - 50.0)
+            / settings.HOME_FORM_BOOST_DIVISOR,
+        )
+        return settings.HOME_FORM_BASE_MULTIPLIER + form_boost
 
     @staticmethod
     def _dixon_coles_adjustment(
@@ -275,7 +307,7 @@ class StatsEngine:
         away_goals: int,
         home_lambda: float,
         away_lambda: float,
-        rho: float = DEFAULT_RHO,
+        rho: float = settings.DEFAULT_DIXON_COLES_RHO,
     ) -> float:
         if home_goals == 0 and away_goals == 0:
             return 1.0 - (home_lambda * away_lambda * rho)
@@ -297,7 +329,9 @@ class StatsEngine:
 
     @staticmethod
     def _score_probability_matrix(
-        home_lambda: float, away_lambda: float, rho: float = DEFAULT_RHO
+        home_lambda: float,
+        away_lambda: float,
+        rho: float = settings.DEFAULT_DIXON_COLES_RHO,
     ) -> List[List[float]]:
         if not math.isfinite(rho):
             raise ValueError("Dixon-Coles rho must be finite")
@@ -435,7 +469,13 @@ class StatsEngine:
                     "label": "Çifte Şans 1-X",
                     "pick": "1-X",
                     "probability": round(
-                        min(95.0, 55 + (home_lambda - away_lambda) * 12), 2
+                        min(
+                            95.0,
+                            55
+                            + (home_lambda - away_lambda)
+                            * settings.DOUBLE_CHANCE_HOME_DIFFERENCE_WEIGHT,
+                        ),
+                        2,
                     ),
                 }
             )
@@ -446,7 +486,13 @@ class StatsEngine:
                     "label": "Çifte Şans X-2",
                     "pick": "X-2",
                     "probability": round(
-                        min(95.0, 52 + (away_lambda - home_lambda) * 14), 2
+                        min(
+                            95.0,
+                            52
+                            + (away_lambda - home_lambda)
+                            * settings.DOUBLE_CHANCE_AWAY_DIFFERENCE_WEIGHT,
+                        ),
+                        2,
                     ),
                 }
             )

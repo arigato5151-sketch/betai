@@ -61,6 +61,88 @@ class Settings(BaseSettings):
     )
     LOG_LEVEL: str = "INFO"
 
+    # TODO: kalibrasyon kaynağını doğrula — lig başına ortalama gol tabanı.
+    LEAGUE_BASELINE_GOALS: float = Field(default=1.32, gt=0)
+    # TODO: kalibrasyon kaynağını doğrula — son beş maçın azalan form ağırlıkları.
+    FORM_DECAY_WEIGHTS: tuple[float, ...] = Field(
+        default=(1.0, 0.88, 0.76, 0.64, 0.52)
+    )
+    # TODO: kalibrasyon kaynağını doğrula — beş maçtan eski form girdisi ağırlığı.
+    FORM_DECAY_FALLBACK_WEIGHT: float = Field(default=0.4, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — ev sahibi xG hücum çarpanı.
+    HOME_ATTACK_BOOST: float = Field(default=1.11, gt=0)
+    # TODO: kalibrasyon kaynağını doğrula — deplasman xG hücum çarpanı.
+    AWAY_ATTACK_PENALTY: float = Field(default=0.93, gt=0)
+    # TODO: kalibrasyon kaynağını doğrula — güç puanındaki hücum payı.
+    STRENGTH_ATTACK_WEIGHT: float = Field(default=0.4, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — güç puanındaki savunma payı.
+    STRENGTH_DEFENSE_WEIGHT: float = Field(default=0.35, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — güç puanındaki form payı.
+    STRENGTH_FORM_WEIGHT: float = Field(default=0.25, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — gözlenen gol ortalamasının xG payı.
+    XG_OBSERVED_GOALS_WEIGHT: float = Field(default=0.55, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — hücum gücü tabanlı xG payı.
+    XG_ATTACK_BASELINE_WEIGHT: float = Field(default=0.45, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — maksimum xG tutarlılık cezası.
+    XG_CONSISTENCY_MAX_PENALTY: float = Field(default=0.12, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — gol farkı başına tutarlılık cezası.
+    XG_CONSISTENCY_PENALTY_WEIGHT: float = Field(default=0.04, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — güçlü profil form çarpanı tabanı.
+    PROFILE_FORM_FACTOR_BASE: float = Field(default=0.88, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — güçlü profil form etkisi.
+    PROFILE_FORM_FACTOR_WEIGHT: float = Field(default=0.24, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — eski profil hücum çarpanı tabanı.
+    LEGACY_ATTACK_FACTOR_BASE: float = Field(default=0.62, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — eski profil hücum etkisi.
+    LEGACY_ATTACK_FACTOR_WEIGHT: float = Field(default=0.78, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — eski profil savunma çarpanı tabanı.
+    LEGACY_DEFENSE_FACTOR_BASE: float = Field(default=0.72, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — eski profil savunma etkisi.
+    LEGACY_DEFENSE_FACTOR_WEIGHT: float = Field(default=0.55, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — eski profil form çarpanı tabanı.
+    LEGACY_FORM_FACTOR_BASE: float = Field(default=0.82, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — eski profil form etkisi.
+    LEGACY_FORM_FACTOR_WEIGHT: float = Field(default=0.36, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — eski profil xG gözlem payı.
+    LEGACY_XG_OBSERVED_WEIGHT: float = Field(default=0.58, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — eski profil lig tabanı payı.
+    LEGACY_XG_BASELINE_WEIGHT: float = Field(default=0.42, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — ev avantajı alt çarpan sınırı.
+    HOME_ADVANTAGE_MIN_MULTIPLIER: float = Field(default=0.88, gt=0)
+    # TODO: kalibrasyon kaynağını doğrula — ev avantajı üst çarpan sınırı.
+    HOME_ADVANTAGE_MAX_MULTIPLIER: float = Field(default=1.22, gt=0)
+    # TODO: kalibrasyon kaynağını doğrula — rakip gol ortalaması için oran tabanı.
+    HOME_ADVANTAGE_OPPONENT_GOALS_FLOOR: float = Field(default=0.55, gt=0)
+    # TODO: kalibrasyon kaynağını doğrula — veri yokken ev avantajı tabanı.
+    HOME_FORM_BASE_MULTIPLIER: float = Field(default=1.08, gt=0)
+    # TODO: kalibrasyon kaynağını doğrula — form farkını ev avantajına ölçekler.
+    HOME_FORM_BOOST_DIVISOR: float = Field(default=450.0, gt=0)
+    # TODO: kalibrasyon kaynağını doğrula — ev çifte şans olasılık katsayısı.
+    DOUBLE_CHANCE_HOME_DIFFERENCE_WEIGHT: float = Field(default=12.0, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — deplasman çifte şans olasılık katsayısı.
+    DOUBLE_CHANCE_AWAY_DIFFERENCE_WEIGHT: float = Field(default=14.0, ge=0)
+    # TODO: kalibrasyon kaynağını doğrula — varsayılan Dixon-Coles düzeltmesi.
+    DEFAULT_DIXON_COLES_RHO: float = Field(default=-0.12)
+    # TODO: kalibrasyon kaynağını doğrula — lig bazlı Dixon-Coles düzeltmeleri.
+    LEAGUE_DIXON_COLES_RHO: dict[int, float] = Field(
+        default={
+            39: -0.13,
+            140: -0.11,
+            135: -0.15,
+            78: -0.09,
+            61: -0.12,
+            40: -0.14,
+            94: -0.12,
+            203: -0.10,
+            88: -0.08,
+            144: -0.12,
+            235: -0.11,
+            79: -0.10,
+            136: -0.14,
+            62: -0.13,
+        }
+    )
+
     MIN_TRAINING_SAMPLES: int = 200
     RETRAIN_EVERY_N_NEW: int = 25
     MODEL_ARTIFACTS_DIR: str = os.path.join(
