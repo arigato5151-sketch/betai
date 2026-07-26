@@ -74,6 +74,21 @@ def test_cors_origins_accept_comma_separated_and_json_values() -> None:
     assert comma.BACKEND_CORS_ORIGINS == json_value.BACKEND_CORS_ORIGINS
 
 
+def test_goal_time_decay_factor_is_configurable() -> None:
+    settings = Settings(_env_file=None, GOAL_TIME_DECAY_FACTOR=0.025)
+
+    assert settings.GOAL_TIME_DECAY_FACTOR == 0.025
+
+
+@pytest.mark.parametrize(
+    "value",
+    [-0.001, 1.001, float("nan"), float("inf")],
+)
+def test_goal_time_decay_factor_rejects_invalid_values(value: float) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, GOAL_TIME_DECAY_FACTOR=value)
+
+
 def make_origin_client(require_origin_header: bool = True) -> TestClient:
     app = FastAPI()
     app.add_middleware(

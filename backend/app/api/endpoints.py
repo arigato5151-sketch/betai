@@ -551,9 +551,6 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     """Run analysis with external inputs and a short point-in-time history read."""
     home_stats = payload.home_stats.model_dump()
     away_stats = payload.away_stats.model_dump()
-    stats_analysis = StatsEngine.analyze_match(
-        home_stats, away_stats, league_id=payload.league_id
-    )
 
     ml_result: dict = {"ready": False}
     ml_explanations: List[str] = []
@@ -561,6 +558,14 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     historical = _get_historical_feature_context(payload)
     home_matches_df, away_matches_df, h2h_rates, availability, lineups = (
         await _fetch_ml_match_data(payload, historical)
+    )
+    stats_analysis = StatsEngine.analyze_match(
+        home_stats,
+        away_stats,
+        league_id=payload.league_id,
+        home_match_history=home_matches_df,
+        away_match_history=away_matches_df,
+        as_of=payload.kickoff,
     )
     lineup_context = {
         **(lineups or {}),
@@ -600,7 +605,7 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     )
     if payload.market_1x2:
         value_data["data_methodology"] = {
-            "stats": "Ev/deplasman sezon ortalamaları + form decay",
+            "stats": "Zaman ağırlıklı geçmiş + sezon profili fallback + form decay",
             "odds": f"1X2 devig (overround %{payload.market_1x2.get('overround_pct', 0)})",
             "model": analysis.get("model", "poisson_dixon_coles"),
         }

@@ -115,3 +115,10 @@ Bu alanların TODO yorumları, nedenleriyle birlikte kodda korunmuştur.
    sözleşmesine bağlanmalı ya da konfigürasyondan kaldırılmalı.
 5. Pozitif out-of-time ROI görülmeden grid optimumlarını production değerlerine
    taşımama kuralını koru.
+
+## Rapor sonrası eklenen parametre
+
+`GOAL_TIME_DECAY_FACTOR=0.01`, bu 37 alanlık çalışma tamamlandıktan sonra
+zaman ağırlıklı Poisson için eklenmiştir. Değer yaklaşık 69 günlük teorik yarı ömür
+sağlar; henüz bu rapordaki grid sonuçlarıyla kalibre edilmiş sayılmaz. Bir sonraki
+out-of-time çalışmada `0.0–0.03` aralığında ayrıca taranmalıdır.

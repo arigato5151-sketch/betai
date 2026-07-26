@@ -1,22 +1,136 @@
 import math
+from datetime import datetime
 from typing import Dict, List, Optional
+
+import pandas as pd
 
 from app.core.config import settings
 
 MAX_GOALS = 7
-MODEL_VERSION = "poisson_dixon_coles_v3"
+MODEL_VERSION = "poisson_dixon_coles_v4"
 
 
-def build_team_profile(api_data: Optional[Dict], venue: str) -> Dict:
+def time_weighted_goal_averages(
+    match_history: pd.DataFrame | None,
+    *,
+    as_of: datetime | pd.Timestamp | None = None,
+    decay_factor: float | None = None,
+) -> tuple[float | None, float | None]:
+    """Return exponentially weighted goals-for/against averages without leakage."""
+    if (
+        not isinstance(match_history, pd.DataFrame)
+        or match_history.empty
+        or "match_date" not in match_history.columns
+    ):
+        return (None, None)
+
+    factor = (
+        settings.GOAL_TIME_DECAY_FACTOR if decay_factor is None else float(decay_factor)
+    )
+    if not math.isfinite(factor) or not 0.0 <= factor <= 1.0:
+        raise ValueError("decay_factor must be finite and between 0 and 1")
+
+    dates = pd.to_datetime(match_history["match_date"], errors="coerce", utc=True)
+    valid_dates = dates.dropna()
+    if valid_dates.empty:
+        return (None, None)
+
+    if as_of is None:
+        reference = valid_dates.max()
+    else:
+        try:
+            reference = pd.Timestamp(as_of)
+        except (TypeError, ValueError):
+            return (None, None)
+        if pd.isna(reference):
+            return (None, None)
+        reference = (
+            reference.tz_localize("UTC")
+            if reference.tzinfo is None
+            else reference.tz_convert("UTC")
+        )
+
+    days_ago = (reference - dates).dt.total_seconds() / 86400.0
+    historical_mask = dates.notna() & days_ago.ge(0.0)
+
+    def weighted_average(column: str) -> float | None:
+        if column not in match_history.columns:
+            return None
+        values = pd.to_numeric(match_history[column], errors="coerce")
+        observations: list[tuple[float, float]] = []
+        for value, age, is_historical in zip(
+            values,
+            days_ago,
+            historical_mask,
+        ):
+            if not bool(is_historical) or pd.isna(value) or pd.isna(age):
+                continue
+            numeric_value = float(value)
+            numeric_age = float(age)
+            if (
+                not math.isfinite(numeric_value)
+                or not math.isfinite(numeric_age)
+                or numeric_value < 0
+            ):
+                continue
+            observations.append((numeric_value, numeric_age))
+
+        if not observations:
+            return None
+
+        # Shifting by the youngest age preserves the normalized average and
+        # prevents every weight from underflowing for very old histories.
+        youngest_age = min(age for _, age in observations)
+        weighted_values: list[float] = []
+        weights: list[float] = []
+        for value, age in observations:
+            weight = math.exp(-factor * (age - youngest_age))
+            weighted_values.append(value * weight)
+            weights.append(weight)
+        denominator = math.fsum(weights)
+        if denominator <= 0 or not math.isfinite(denominator):
+            return None
+        return math.fsum(weighted_values) / denominator
+
+    return (
+        weighted_average("goals_for"),
+        weighted_average("goals_against"),
+    )
+
+
+def build_team_profile(
+    api_data: Optional[Dict],
+    venue: str,
+    *,
+    match_history: pd.DataFrame | None = None,
+    as_of: datetime | pd.Timestamp | None = None,
+    decay_factor: float | None = None,
+) -> Dict:
     """
     venue: 'home' | 'away' - perspective of the team profile.
     """
-    if not api_data:
+    if not api_data and (
+        not isinstance(match_history, pd.DataFrame) or match_history.empty
+    ):
         return _default_profile(venue, source="fallback_default")
 
+    api_data = api_data or {}
     goals = api_data.get("goals", {})
-    goals_for = _avg_goals(goals.get("for", {}), venue)
-    goals_against = _avg_goals(goals.get("against", {}), venue)
+    weighted_for, weighted_against = time_weighted_goal_averages(
+        match_history,
+        as_of=as_of,
+        decay_factor=decay_factor,
+    )
+    goals_for = (
+        weighted_for
+        if weighted_for is not None
+        else _avg_goals(goals.get("for", {}), venue)
+    )
+    goals_against = (
+        weighted_against
+        if weighted_against is not None
+        else _avg_goals(goals.get("against", {}), venue)
+    )
     form_string = api_data.get("form", "")
 
     attack_strength = max(0.55, min(1.75, goals_for / settings.LEAGUE_BASELINE_GOALS))
@@ -58,8 +172,16 @@ def build_team_profile(api_data: Optional[Dict], venue: str) -> Dict:
             (failed_score / played * 100) if played else 0, 1
         ),
         "venue": venue,
-        "source": "api_football_season_stats",
-        "method": "home_away_split_decay_form",
+        "source": (
+            "time_weighted_match_history"
+            if weighted_for is not None or weighted_against is not None
+            else "api_football_season_stats"
+        ),
+        "method": (
+            "time_weighted_goal_decay"
+            if weighted_for is not None or weighted_against is not None
+            else "home_away_split_decay_form"
+        ),
     }
 
 
@@ -159,6 +281,35 @@ def _default_profile(venue: str, source: str) -> Dict:
     }
 
 
+def _apply_time_weighted_goal_profile(
+    team_stats: dict,
+    match_history: pd.DataFrame | None,
+    *,
+    as_of: datetime | pd.Timestamp | None,
+) -> dict:
+    goals_for, goals_against = time_weighted_goal_averages(
+        match_history,
+        as_of=as_of,
+    )
+    if goals_for is None and goals_against is None:
+        return dict(team_stats)
+
+    profile = dict(team_stats)
+    if goals_for is not None:
+        profile["goals_for_avg"] = round(goals_for, 2)
+        profile["attack_strength"] = round(
+            max(0.55, min(1.75, goals_for / settings.LEAGUE_BASELINE_GOALS)),
+            3,
+        )
+    if goals_against is not None:
+        profile["goals_against_avg"] = round(goals_against, 2)
+        profile["defense_strength"] = round(
+            max(0.55, min(1.75, goals_against / settings.LEAGUE_BASELINE_GOALS)),
+            3,
+        )
+    return profile
+
+
 class StatsEngine:
     OUTCOME_LABELS = {
         "HOME_WIN": "Ev Sahibi Galibiyeti",
@@ -181,7 +332,21 @@ class StatsEngine:
         home_stats: dict,
         away_stats: dict,
         league_id: Optional[int] = None,
+        *,
+        home_match_history: pd.DataFrame | None = None,
+        away_match_history: pd.DataFrame | None = None,
+        as_of: datetime | pd.Timestamp | None = None,
     ) -> dict:
+        home_stats = _apply_time_weighted_goal_profile(
+            home_stats,
+            home_match_history,
+            as_of=as_of,
+        )
+        away_stats = _apply_time_weighted_goal_profile(
+            away_stats,
+            away_match_history,
+            as_of=as_of,
+        )
         rho = (
             settings.LEAGUE_DIXON_COLES_RHO.get(
                 league_id, settings.DEFAULT_DIXON_COLES_RHO

@@ -1,6 +1,137 @@
+import math
+from datetime import UTC, datetime, timedelta
+
+import pandas as pd
 import pytest
 
-from app.prediction.stats_engine import StatsEngine
+from app.prediction.stats_engine import (
+    StatsEngine,
+    build_team_profile,
+    time_weighted_goal_averages,
+)
+
+
+def test_time_weighted_goals_favor_recent_matches() -> None:
+    as_of = datetime(2026, 7, 20, tzinfo=UTC)
+    history = pd.DataFrame(
+        [
+            {
+                "match_date": as_of - timedelta(days=30),
+                "goals_for": 0,
+                "goals_against": 4,
+            },
+            {
+                "match_date": as_of - timedelta(days=1),
+                "goals_for": 4,
+                "goals_against": 0,
+            },
+        ]
+    )
+    old_weight = math.exp(-0.05 * 30)
+    recent_weight = math.exp(-0.05)
+
+    goals_for, goals_against = time_weighted_goal_averages(
+        history,
+        as_of=as_of,
+        decay_factor=0.05,
+    )
+
+    assert goals_for == pytest.approx(
+        (4 * recent_weight) / (old_weight + recent_weight)
+    )
+    assert goals_against == pytest.approx(
+        (4 * old_weight) / (old_weight + recent_weight)
+    )
+    assert goals_for > 2.0
+    assert goals_against < 2.0
+
+
+def test_zero_decay_preserves_arithmetic_goal_average() -> None:
+    as_of = datetime(2026, 7, 20, tzinfo=UTC)
+    history = pd.DataFrame(
+        {
+            "match_date": [
+                as_of - timedelta(days=30),
+                as_of - timedelta(days=1),
+            ],
+            "goals_for": [0, 4],
+            "goals_against": [4, 0],
+        }
+    )
+
+    assert time_weighted_goal_averages(
+        history,
+        as_of=as_of,
+        decay_factor=0.0,
+    ) == pytest.approx((2.0, 2.0))
+
+
+def test_goal_decay_ignores_future_and_invalid_observations() -> None:
+    as_of = datetime(2026, 7, 20, tzinfo=UTC)
+    history = pd.DataFrame(
+        [
+            {
+                "match_date": as_of - timedelta(days=1),
+                "goals_for": 2,
+                "goals_against": 1,
+            },
+            {
+                "match_date": as_of + timedelta(days=1),
+                "goals_for": 10,
+                "goals_against": 10,
+            },
+            {
+                "match_date": "invalid",
+                "goals_for": 9,
+                "goals_against": 9,
+            },
+            {
+                "match_date": as_of - timedelta(days=2),
+                "goals_for": -1,
+                "goals_against": float("inf"),
+            },
+        ]
+    )
+
+    assert time_weighted_goal_averages(history, as_of=as_of) == (2.0, 1.0)
+    for invalid_factor in (-0.1, 1.1, float("nan")):
+        with pytest.raises(ValueError, match="decay_factor"):
+            time_weighted_goal_averages(history, decay_factor=invalid_factor)
+
+
+def test_team_profile_uses_weighted_goals_for_poisson_strengths() -> None:
+    as_of = datetime(2026, 7, 20, tzinfo=UTC)
+    history = pd.DataFrame(
+        {
+            "match_date": [
+                as_of - timedelta(days=60),
+                as_of - timedelta(days=1),
+            ],
+            "goals_for": [0, 4],
+            "goals_against": [4, 0],
+        }
+    )
+    aggregate = {
+        "form": "LW",
+        "goals": {
+            "for": {"average": {"home": 2.0}},
+            "against": {"average": {"home": 2.0}},
+        },
+        "fixtures": {"played": {"home": 2}},
+    }
+
+    profile = build_team_profile(
+        aggregate,
+        "home",
+        match_history=history,
+        as_of=as_of,
+        decay_factor=0.05,
+    )
+
+    assert profile["method"] == "time_weighted_goal_decay"
+    assert profile["goals_for_avg"] > 3.0
+    assert profile["goals_against_avg"] < 1.0
+    assert profile["attack_strength"] > profile["defense_strength"]
 
 
 def test_poisson_pmf_matches_known_probability() -> None:

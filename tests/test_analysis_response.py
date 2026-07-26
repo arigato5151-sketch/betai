@@ -80,6 +80,18 @@ async def test_analysis_collects_feature_snapshot_before_first_model(
             }
         ),
     )
+    captured_stats_kwargs: dict[str, object] = {}
+    original_analyze_match = endpoints.StatsEngine.analyze_match
+
+    def capture_stats_history(*args, **kwargs):
+        captured_stats_kwargs.update(kwargs)
+        return original_analyze_match(*args, **kwargs)
+
+    monkeypatch.setattr(
+        endpoints.StatsEngine,
+        "analyze_match",
+        capture_stats_history,
+    )
     payload = AnalysisRequest(
         home_team="Home",
         away_team="Away",
@@ -97,6 +109,9 @@ async def test_analysis_collects_feature_snapshot_before_first_model(
     assert computed["feature_vector"]["home_form_ema"] == 100.0
     assert computed["feature_vector"]["rest_days_diff"] == -1.0
     assert computed["feature_vector"]["h2h_home_win_rate"] == 0.6
+    assert captured_stats_kwargs["home_match_history"] is home_matches
+    assert captured_stats_kwargs["away_match_history"] is away_matches
+    assert captured_stats_kwargs["as_of"] == payload.kickoff
     assert computed["ml_result"] == {"ready": False}
 
 

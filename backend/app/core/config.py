@@ -68,6 +68,13 @@ class Settings(BaseSettings):
 
     # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEAGUE_BASELINE_GOALS: float = Field(default=1.32, gt=0)
+    # TODO: kalibrasyon — 0.01 ≈ 69 günlük yarı ömür; out-of-time grid bekleniyor.
+    GOAL_TIME_DECAY_FACTOR: float = Field(
+        default=0.01,
+        ge=0,
+        le=1,
+        allow_inf_nan=False,
+    )
     # Kalibre edildi: bkz. docs/CALIBRATION.md
     FORM_DECAY_WEIGHTS: tuple[float, ...] = Field(default=(1.0, 0.88, 0.76, 0.64, 0.52))
     # TODO: kalibrasyon — mevcut form kodu beş maçta kestiği için dal erişilemiyor.

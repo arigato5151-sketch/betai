@@ -10,7 +10,7 @@ Projenin kaynak koduna GitHub üzerinden ulaşabilirsiniz: [arigato5151-sketch/b
 
 ## Özellikler
 
-- Poisson skor matrisi ve Dixon-Coles düzeltmesiyle 1X2 olasılıkları
+- Zaman ağırlıklı gol ortalamaları, Poisson skor matrisi ve Dixon-Coles düzeltmesiyle 1X2 olasılıkları
 - Beklenen gol (xG), form, hücum ve savunma verilerinden manuel analiz
 - API-Football üzerinden fikstür, takım istatistiği, H2H ve oran verisi
 - Piyasa olasılığını marjdan arındıran (de-vig) value bet ve Kelly stake hesabı
@@ -230,6 +230,12 @@ da aynı zaman kesitli tablodan üretilir. Yerel geçmişte varsayılan olarak e
 yoksa veya son kayıt 45 günden eskiyse API-Football verisine fallback yapılır. Bu
 eşikler `RECENT_FORM_MATCH_COUNT` ve `HISTORICAL_FORM_MAX_AGE_DAYS` ortam
 değişkenleriyle ayarlanabilir.
+
+Poisson gol profili, geçmiş maçları eşit ortalamak yerine
+`exp(-GOAL_TIME_DECAY_FACTOR * days_ago)` ağırlığını kullanır. Varsayılan
+`GOAL_TIME_DECAY_FACTOR=0.01` yaklaşık 69 günlük yarı ömürdür; `0` değeri eşit
+ağırlık davranışını geri getirir. Gelecekteki veya geçersiz tarihli kayıtlar
+hesaba katılmaz ve geçmiş bulunamazsa mevcut sezon profiline güvenli fallback yapılır.
 
 Elo hesabı lig geçmişini sezonlar arasında kronolojik taşır. Yeni sezon başında
 rating farkının varsayılan `%25` bölümü lig ortalaması olan `1500` değerine geri
@@ -482,6 +488,7 @@ DEBUG=true
 API_FOOTBALL_KEY=DEMO_KEY
 DATABASE_URL=sqlite:///./matches.db
 ALLOW_DATABASE_FALLBACK=true
+GOAL_TIME_DECAY_FACTOR=0.01
 REDIS_URL=redis://localhost:6379/0
 MEMCACHED_HOST=localhost
 MEMCACHED_PORT=11211
@@ -530,6 +537,7 @@ DEBUG=false
 API_FOOTBALL_KEY=live_api_key
 DATABASE_URL=postgresql://betai:strong_password@postgres:5432/bet_ai
 ALLOW_DATABASE_FALLBACK=false
+GOAL_TIME_DECAY_FACTOR=0.01
 JWT_SECRET_KEY=minimum_32_character_unique_access_secret
 JWT_REFRESH_SECRET_KEY=minimum_32_character_unique_refresh_secret
 MODEL_SIGNING_KEY=minimum_32_character_unique_model_signing_secret

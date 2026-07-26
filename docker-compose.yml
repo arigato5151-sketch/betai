@@ -79,6 +79,7 @@ services:
       MEMCACHED_HOST: memcached
       MEMCACHED_PORT: 11211
       API_FOOTBALL_KEY: ${API_FOOTBALL_KEY:-DEMO_KEY}
+      GOAL_TIME_DECAY_FACTOR: ${GOAL_TIME_DECAY_FACTOR:-0.01}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-development-access-secret-change-me}
       JWT_REFRESH_SECRET_KEY: ${JWT_REFRESH_SECRET_KEY:-development-refresh-secret-change-me}
       MODEL_SIGNING_KEY: ${MODEL_SIGNING_KEY:-development-model-signing-key-change-me}
@@ -125,6 +126,7 @@ services:
       MEMCACHED_HOST: memcached
       MEMCACHED_PORT: 11211
       API_FOOTBALL_KEY: ${API_FOOTBALL_KEY:-DEMO_KEY}
+      GOAL_TIME_DECAY_FACTOR: ${GOAL_TIME_DECAY_FACTOR:-0.01}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-development-access-secret-change-me}
       JWT_REFRESH_SECRET_KEY: ${JWT_REFRESH_SECRET_KEY:-development-refresh-secret-change-me}
       MODEL_SIGNING_KEY: ${MODEL_SIGNING_KEY:-development-model-signing-key-change-me}
