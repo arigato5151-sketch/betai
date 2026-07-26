@@ -34,7 +34,7 @@ dependencies = [
   "shap==0.45.0",
   "pydantic-settings==2.14.1",
   "PyJWT[crypto]==2.13.0",
-  "passlib[bcrypt]==1.7.4",
+  "bcrypt==5.0.0",
   "scipy==1.11.3"
 ]
 scripts = { start = "python run.py", check = "python run.py --check" }

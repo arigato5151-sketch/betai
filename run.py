@@ -32,8 +32,8 @@ DEPENDENCY_CHECKS = {
     "numpy": "numpy",
     "scikit_learn": "sklearn",
     "shap": "shap",
-    "passlib": "passlib",
-    "python_jose": "jose",
+    "bcrypt": "bcrypt",
+    "pyjwt": "jwt",
     "psycopg2": "psycopg2",
     "scipy": "scipy",
 }
@@ -79,7 +79,12 @@ def check_python_version() -> bool:
     supported = [(3, 11), (3, 12)]
     current = sys.version_info[:2]
     if current not in supported:
-        print(color(f"WARNING: Python {current[0]}.{current[1]} is not officially supported.", "yellow"))
+        print(
+            color(
+                f"WARNING: Python {current[0]}.{current[1]} is not officially supported.",
+                "yellow",
+            )
+        )
         print(color("Recommended versions are Python 3.11 or 3.12.", "yellow"))
         return False
     print(color(f"Python {current[0]}.{current[1]} is supported.", "green"))
@@ -106,7 +111,10 @@ def check_dependencies() -> list[str]:
 
 def install_requirements(requirements_path: Path) -> None:
     print(color("Installing missing dependencies...", "blue"))
-    subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(requirements_path)], check=True)
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-r", str(requirements_path)],
+        check=True,
+    )
 
 
 def load_app() -> object:
@@ -133,11 +141,23 @@ def run_server(host: str, port: int, reload: bool, log_level: str) -> None:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bet AI Platform runtime launcher")
-    parser.add_argument("--check", action="store_true", help="Validate environment and dependencies")
-    parser.add_argument("--install-missing", action="store_true", help="Install missing dependencies from requirements.txt")
-    parser.add_argument("--host", default="127.0.0.1", help="Host for the FastAPI server")
-    parser.add_argument("--port", type=int, default=8000, help="Port for the FastAPI server")
-    parser.add_argument("--reload", action="store_true", help="Run server with reload enabled")
+    parser.add_argument(
+        "--check", action="store_true", help="Validate environment and dependencies"
+    )
+    parser.add_argument(
+        "--install-missing",
+        action="store_true",
+        help="Install missing dependencies from requirements.txt",
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="Host for the FastAPI server"
+    )
+    parser.add_argument(
+        "--port", type=int, default=8000, help="Port for the FastAPI server"
+    )
+    parser.add_argument(
+        "--reload", action="store_true", help="Run server with reload enabled"
+    )
     parser.add_argument("--log-level", default="info", help="Uvicorn log level")
     return parser.parse_args(argv)
 
@@ -155,7 +175,10 @@ def main() -> int:
 
     missing_deps = check_dependencies()
     if missing_deps:
-        print(color("Missing Python dependencies:", "red"), ", ".join(sorted(missing_deps)))
+        print(
+            color("Missing Python dependencies:", "red"),
+            ", ".join(sorted(missing_deps)),
+        )
         if args.install_missing:
             install_requirements(ROOT_DIR / "requirements.txt")
             missing_deps = check_dependencies()
@@ -168,8 +191,17 @@ def main() -> int:
         return 0
 
     if missing_env or missing_deps:
-        print(color("Startup aborted due to missing configuration or dependencies.", "red"))
-        print(color("Use --check to validate or --install-missing to auto-install.", "yellow"))
+        print(
+            color(
+                "Startup aborted due to missing configuration or dependencies.", "red"
+            )
+        )
+        print(
+            color(
+                "Use --check to validate or --install-missing to auto-install.",
+                "yellow",
+            )
+        )
         return 2
 
     run_server(args.host, args.port, args.reload, args.log_level)
