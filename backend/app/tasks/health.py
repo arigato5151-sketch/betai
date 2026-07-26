@@ -10,7 +10,6 @@ from kombu.exceptions import OperationalError
 from app.core.config import settings
 from app.tasks.celery_app import celery_app
 
-
 logger = logging.getLogger("bet-ai-pro.tasks.health")
 
 

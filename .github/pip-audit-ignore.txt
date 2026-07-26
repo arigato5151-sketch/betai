@@ -1,0 +1,2 @@
+# Add one reviewed low-severity vulnerability ID per line.
+# Every entry must include its removal rationale and target date in the pull request.

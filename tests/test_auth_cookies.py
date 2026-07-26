@@ -17,7 +17,6 @@ from app.db.models import Base, Permission, Role
 from app.db.session import get_db
 from app.db.user_repository import UserRepository
 
-
 engine = create_engine(
     "sqlite://",
     connect_args={"check_same_thread": False},

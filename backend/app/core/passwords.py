@@ -6,7 +6,6 @@ import hmac
 
 import bcrypt
 
-
 BCRYPT_ROUNDS = 12
 BCRYPT_MAX_PASSWORD_BYTES = 72
 _LEGACY_PBKDF2_PREFIX = "$pbkdf2-sha256$"

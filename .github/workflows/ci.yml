@@ -52,6 +52,18 @@ jobs:
         run: npm --prefix frontend run test --if-present
       - name: Frontend production build
         run: npm --prefix frontend run build
+      - name: Dependency audit
+        run: |
+          python -m pip install pip-audit
+          ignore_args=()
+          while IFS= read -r vulnerability; do
+            [[ -z "$vulnerability" || "$vulnerability" == \#* ]] && continue
+            ignore_args+=(--ignore-vuln "$vulnerability")
+          done < .github/pip-audit-ignore.txt
+          pip-audit \
+            -r requirements.txt \
+            -r requirements-dev.txt \
+            "${ignore_args[@]}"
       - name: Ruff
         run: python -m ruff check backend/app backend/migrations tests scripts
       - name: Black

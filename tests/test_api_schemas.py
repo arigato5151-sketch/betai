@@ -37,7 +37,7 @@ def test_analysis_schema_normalizes_names_and_precision() -> None:
     ],
 )
 def test_team_stats_schema_rejects_out_of_range_values(
-    payload: dict[str, float]
+    payload: dict[str, float],
 ) -> None:
     with pytest.raises(ValidationError):
         TeamStatsInput.model_validate(payload)

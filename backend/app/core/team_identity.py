@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import unicodedata
 
-
 _TEAM_ALIASES = {
     "ath bilbao": "athletic bilbao",
     "ath madrid": "atletico madrid",

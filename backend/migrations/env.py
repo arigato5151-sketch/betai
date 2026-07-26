@@ -14,7 +14,6 @@ sys.path.insert(0, str(BACKEND_DIR))
 from app.core.config import settings  # noqa: E402
 from app.db.models import Base  # noqa: E402
 
-
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 

@@ -3,7 +3,6 @@ import pytest
 
 from app.core.passwords import hash_password, verify_password
 
-
 LEGACY_PASSLIB_PBKDF2_HASH = (
     "$pbkdf2-sha256$29000$bGVnYWN5LXNhbHQtMTIzNA$"
     ".aJE6PUYheStNHYEMAiWFiaaInOgxwKFVU65YqyVkL0"

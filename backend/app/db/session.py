@@ -9,7 +9,6 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 from app.core.logging_config import logger
 
-
 SQLITE_FALLBACK_URL = "sqlite:///./matches.db"
 
 

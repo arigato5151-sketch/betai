@@ -1,6 +1,5 @@
 from typing import Literal
 
-
 ApiMode = Literal["demo", "live"]
 
 _DEMO_API_KEYS = frozenset(

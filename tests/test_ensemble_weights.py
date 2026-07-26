@@ -7,7 +7,6 @@ import pytest
 from app.core.config import settings
 from app.prediction.ensemble_weights import EnsembleWeightManager
 
-
 OUTCOMES = ("HOME_WIN", "DRAW", "AWAY_WIN")
 
 

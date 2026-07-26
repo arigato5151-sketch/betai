@@ -7,7 +7,6 @@ import pytest
 
 from app.prediction.ml.features import FeatureEngine
 
-
 NOW = pd.Timestamp(datetime.now(UTC)).normalize()
 
 

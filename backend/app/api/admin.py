@@ -11,7 +11,6 @@ from app.db.models import Role, User
 from app.db.session import get_db
 from app.db.user_repository import UserRepository
 
-
 router = APIRouter(prefix="/admin", tags=["RBAC administration"])
 
 

@@ -20,7 +20,6 @@ from app.db.models import User
 from app.db.session import get_db
 from app.db.user_repository import UserRepository
 
-
 access_cookie = APIKeyCookie(
     name=settings.ACCESS_TOKEN_COOKIE_NAME,
     scheme_name="CookieAuth",

@@ -5,7 +5,6 @@ import pytest
 from app.db.models import MatchPrediction
 from app.prediction.backtest import BacktestEngine
 
-
 NOW = datetime.now(UTC).replace(tzinfo=None)
 
 
