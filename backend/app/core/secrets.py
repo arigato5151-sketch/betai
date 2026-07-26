@@ -17,6 +17,7 @@ VAULT_SECRET_KEYS = frozenset(
         "REDIS_URL",
         "JWT_SECRET_KEY",
         "JWT_REFRESH_SECRET_KEY",
+        "MODEL_SIGNING_KEY",
         "ADMIN_PASSWORD",
     }
 )
@@ -26,6 +27,7 @@ REQUIRED_VAULT_SECRET_KEYS = frozenset(
         "DATABASE_URL",
         "JWT_SECRET_KEY",
         "JWT_REFRESH_SECRET_KEY",
+        "MODEL_SIGNING_KEY",
         "ADMIN_PASSWORD",
     }
 )

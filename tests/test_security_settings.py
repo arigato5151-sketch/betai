@@ -16,6 +16,7 @@ def production_settings(**overrides) -> Settings:
         "ALLOW_DATABASE_FALLBACK": False,
         "JWT_SECRET_KEY": "a" * 32,
         "JWT_REFRESH_SECRET_KEY": "b" * 32,
+        "MODEL_SIGNING_KEY": "c" * 32,
         "COOKIE_SECURE": True,
         "REQUIRE_ORIGIN_HEADER": True,
         "ADMIN_PASSWORD": "strong-admin-password",
@@ -39,6 +40,7 @@ def test_valid_production_security_configuration() -> None:
         ({"DEBUG": True}, "DEBUG must be false"),
         ({"COOKIE_SECURE": False}, "COOKIE_SECURE must be true"),
         ({"JWT_SECRET_KEY": "weak"}, "JWT secrets must be distinct"),
+        ({"MODEL_SIGNING_KEY": "weak"}, "MODEL_SIGNING_KEY must be non-default"),
         (
             {"BACKEND_CORS_ORIGINS": "http://bets.example.com"},
             "production CORS origins must use HTTPS",

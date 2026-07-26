@@ -22,6 +22,7 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       JWT_SECRET_KEY: ci-access-secret-that-is-not-used-in-production
       JWT_REFRESH_SECRET_KEY: ci-refresh-secret-that-is-not-used-in-production
+      MODEL_SIGNING_KEY: ci-model-signing-secret-that-is-not-production
       ADMIN_USERNAME: ci-admin
       ADMIN_PASSWORD: ci-password-only
     steps:

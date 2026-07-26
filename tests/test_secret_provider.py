@@ -48,7 +48,7 @@ def test_vault_provider_loads_only_allowlisted_secrets(
         Path("missing.env"), client_factory=Mock(return_value=client)
     )
 
-    assert status == {"provider": "vault", "loaded_keys": 5}
+    assert status == {"provider": "vault", "loaded_keys": 6}
     assert "UNSAFE_UNDECLARED_KEY" not in os.environ
     client.secrets.kv.v2.read_secret_version.assert_called_once_with(
         path="bet-ai/production",
@@ -110,13 +110,14 @@ def test_azure_key_vault_uses_managed_identity_and_allowlisted_names(
         azure_client_factory=client_factory,
     )
 
-    assert status == {"provider": "azure_key_vault", "loaded_keys": 6}
+    assert status == {"provider": "azure_key_vault", "loaded_keys": 7}
     credential_factory.assert_called_once_with()
     client_factory.assert_called_once_with(
         vault_url="https://bets.vault.azure.net", credential=credential
     )
     requested_names = {call.args[0] for call in client.get_secret.call_args_list}
     assert "bet-ai-jwt-secret-key" in requested_names
+    assert "bet-ai-model-signing-key" in requested_names
     assert "bet-ai-database-url" in requested_names
     for key in VAULT_SECRET_KEYS:
         monkeypatch.delenv(key)

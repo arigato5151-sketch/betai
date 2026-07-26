@@ -1,5 +1,7 @@
-import os
+import hashlib
+import hmac
 import math
+import os
 import shutil
 import threading
 from datetime import UTC, datetime
@@ -61,15 +63,62 @@ class MLModelPipeline:
     def _previous_model_path() -> Path:
         return Path(settings.ACTIVE_MODEL_PATH).with_name("previous_model.pkl")
 
+    @staticmethod
+    def _signature_path(artifact_path: Path) -> Path:
+        return artifact_path.with_name(f"{artifact_path.name}.sig")
+
+    @classmethod
+    def _artifact_signature(cls, artifact_path: Path) -> str:
+        digest = hmac.new(
+            settings.MODEL_SIGNING_KEY.encode("utf-8"),
+            digestmod=hashlib.sha256,
+        )
+        with artifact_path.open("rb") as artifact:
+            for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @classmethod
+    def _write_signature(cls, artifact_path: Path, signature_path: Path) -> None:
+        signature_path.write_text(
+            cls._artifact_signature(artifact_path),
+            encoding="ascii",
+        )
+
+    @classmethod
+    def _verify_artifact(cls, artifact_path: Path) -> bool:
+        signature_path = cls._signature_path(artifact_path)
+        try:
+            expected_signature = signature_path.read_text(encoding="ascii").strip()
+            actual_signature = cls._artifact_signature(artifact_path)
+        except OSError as exc:
+            logger.error(
+                "Model artifact signature could not be read for %s: %s",
+                artifact_path,
+                exc,
+            )
+            return False
+
+        if not hmac.compare_digest(expected_signature, actual_signature):
+            logger.error(
+                "Model artifact signature verification failed for %s", artifact_path
+            )
+            return False
+        return True
+
     def status(self) -> Dict[str, Any]:
         self._refresh_artifact_if_changed()
+        previous_path = self._previous_model_path()
         return {
             "ready": self.is_ready,
             "model_name": self.active_model_name,
             "artifact_version": self.artifact_version,
             "metrics": dict(self.metrics),
             "runtime": dict(self.runtime_stats),
-            "rollback_available": self._previous_model_path().is_file(),
+            "rollback_available": (
+                previous_path.is_file()
+                and self._signature_path(previous_path).is_file()
+            ),
         }
 
     def _refresh_artifact_if_changed(self) -> None:
@@ -101,6 +150,9 @@ class MLModelPipeline:
             return False
 
         try:
+            active_path = Path(settings.ACTIVE_MODEL_PATH)
+            if not self._verify_artifact(active_path):
+                raise ValueError("Model artifact integrity verification failed")
             payload = joblib.load(settings.ACTIVE_MODEL_PATH)
             self.model = payload["model"]
             self.calibrator = payload.get("calibrator")
@@ -138,6 +190,8 @@ class MLModelPipeline:
         versions_dir.mkdir(parents=True, exist_ok=True)
         active_path = Path(settings.ACTIVE_MODEL_PATH)
         previous_path = self._previous_model_path()
+        active_signature_path = self._signature_path(active_path)
+        previous_signature_path = self._signature_path(previous_path)
         version = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         payload = {
             "schema_version": 1,
@@ -151,11 +205,22 @@ class MLModelPipeline:
             "metrics": metrics,
         }
         temporary_path = active_path.with_suffix(".tmp")
+        temporary_signature_path = self._signature_path(temporary_path)
         joblib.dump(payload, temporary_path)
-        if active_path.is_file():
+        self._write_signature(temporary_path, temporary_signature_path)
+        if active_path.is_file() and self._verify_artifact(active_path):
             shutil.copy2(active_path, previous_path)
+            shutil.copy2(active_signature_path, previous_signature_path)
+        elif active_path.is_file():
+            logger.error(
+                "Existing active model failed integrity verification; "
+                "it will not be preserved as rollback candidate."
+            )
         os.replace(temporary_path, active_path)
-        shutil.copy2(active_path, versions_dir / f"model_{version}.pkl")
+        os.replace(temporary_signature_path, active_signature_path)
+        version_path = versions_dir / f"model_{version}.pkl"
+        shutil.copy2(active_path, version_path)
+        shutil.copy2(active_signature_path, self._signature_path(version_path))
         self.artifact_version = version
         self._artifact_mtime_ns = active_path.stat().st_mtime_ns
         logger.info(
@@ -169,17 +234,33 @@ class MLModelPipeline:
         """Atomically swap the active and previous validated model artifacts."""
         active_path = Path(settings.ACTIVE_MODEL_PATH)
         previous_path = self._previous_model_path()
-        if not active_path.is_file() or not previous_path.is_file():
+        active_signature_path = self._signature_path(active_path)
+        previous_signature_path = self._signature_path(previous_path)
+        required_paths = (
+            active_path,
+            active_signature_path,
+            previous_path,
+            previous_signature_path,
+        )
+        if not all(path.is_file() for path in required_paths):
             return False
 
         try:
+            if not self._verify_artifact(active_path) or not self._verify_artifact(
+                previous_path
+            ):
+                return False
             previous_payload = joblib.load(previous_path)
             if "model" not in previous_payload:
                 raise ValueError("Previous artifact has no model")
             swap_path = active_path.with_suffix(".rollback.tmp")
+            swap_signature_path = self._signature_path(swap_path)
             os.replace(active_path, swap_path)
+            os.replace(active_signature_path, swap_signature_path)
             os.replace(previous_path, active_path)
+            os.replace(previous_signature_path, active_signature_path)
             os.replace(swap_path, previous_path)
+            os.replace(swap_signature_path, previous_signature_path)
             if self.load_active_model():
                 logger.warning(
                     "Rolled back active ML model to %s", self.artifact_version

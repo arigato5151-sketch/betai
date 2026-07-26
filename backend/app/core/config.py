@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     MEMCACHED_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0, le=30)
     JWT_SECRET_KEY: str = "development-access-secret-change-me"
     JWT_REFRESH_SECRET_KEY: str = "development-refresh-secret-change-me"
+    MODEL_SIGNING_KEY: str = "development-model-signing-key-change-me"
     JWT_ALGORITHM: Literal["HS256", "HS384", "HS512"] = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, ge=1, le=1440)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, ge=1, le=90)
@@ -261,6 +262,7 @@ class Settings(BaseSettings):
             "change-this-refresh-secret",
             "development-access-secret-change-me",
             "development-refresh-secret-change-me",
+            "development-model-signing-key-change-me",
         }
         secrets = (self.JWT_SECRET_KEY, self.JWT_REFRESH_SECRET_KEY)
         if any(len(secret) < 32 or secret in placeholder_values for secret in secrets):
@@ -269,6 +271,13 @@ class Settings(BaseSettings):
             )
         elif self.JWT_SECRET_KEY == self.JWT_REFRESH_SECRET_KEY:
             errors.append("JWT access and refresh secrets must be distinct")
+        if (
+            len(self.MODEL_SIGNING_KEY) < 32
+            or self.MODEL_SIGNING_KEY in placeholder_values
+        ):
+            errors.append(
+                "MODEL_SIGNING_KEY must be non-default and at least 32 characters"
+            )
 
         if (
             len(self.ADMIN_PASSWORD) < 12

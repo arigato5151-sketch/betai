@@ -229,25 +229,52 @@ def test_load_model_clears_stale_state_when_artifact_is_missing(
     assert pipeline.is_ready is False
 
 
-def test_load_valid_model_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
-    pipeline = MLModelPipeline()
+def test_load_valid_signed_model_artifact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    artifacts_dir = tmp_path / "models"
+    active_path = artifacts_dir / "active_model.pkl"
+    monkeypatch.setattr(settings, "MODEL_ARTIFACTS_DIR", str(artifacts_dir))
+    monkeypatch.setattr(settings, "ACTIVE_MODEL_PATH", str(active_path))
     model = ProbabilityModel([0.2, 0.6, 0.2])
-    monkeypatch.setattr("app.prediction.ml.model.os.path.exists", lambda _: True)
-    monkeypatch.setattr(
-        "app.prediction.ml.model.joblib.load",
-        lambda _: {
-            "model": model,
-            "calibrator": None,
-            "feature_names": ["home_form"],
-            "model_name": "Artifact Model",
-            "metrics": {"brier_score": 0.12},
-        },
+    writer = MLModelPipeline()
+    writer._save_active_model(
+        model,
+        None,
+        "Artifact Model",
+        {"brier_score": 0.12},
     )
+    pipeline = MLModelPipeline()
 
     assert pipeline.load_active_model() is True
-    assert pipeline.model is model
     assert pipeline.active_model_name == "Artifact Model"
     assert pipeline.metrics["brier_score"] == 0.12
+    assert active_path.with_name("active_model.pkl.sig").is_file()
+
+
+def test_load_rejects_tampered_model_artifact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, caplog
+) -> None:
+    artifacts_dir = tmp_path / "models"
+    active_path = artifacts_dir / "active_model.pkl"
+    monkeypatch.setattr(settings, "MODEL_ARTIFACTS_DIR", str(artifacts_dir))
+    monkeypatch.setattr(settings, "ACTIVE_MODEL_PATH", str(active_path))
+    writer = MLModelPipeline()
+    writer._save_active_model(
+        ProbabilityModel([0.2, 0.6, 0.2]),
+        None,
+        "Artifact Model",
+        {"brier_score": 0.12},
+    )
+    with active_path.open("ab") as artifact:
+        artifact.write(b"tampered")
+
+    pipeline = MLModelPipeline()
+
+    assert pipeline.load_active_model() is False
+    assert pipeline.is_ready is False
+    assert pipeline.model is None
+    assert "signature verification failed" in caplog.text
 
 
 def test_calibrator_falls_back_to_base_probabilities_for_zero_rows() -> None:
@@ -309,3 +336,27 @@ def test_rollback_requires_active_and_previous_artifacts(
     monkeypatch.setattr(settings, "ACTIVE_MODEL_PATH", str(tmp_path / "active.pkl"))
 
     assert MLModelPipeline().rollback() is False
+
+
+def test_rollback_rejects_tampered_previous_artifact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, caplog
+) -> None:
+    artifacts_dir = tmp_path / "models"
+    active_path = artifacts_dir / "active_model.pkl"
+    previous_path = artifacts_dir / "previous_model.pkl"
+    monkeypatch.setattr(settings, "MODEL_ARTIFACTS_DIR", str(artifacts_dir))
+    monkeypatch.setattr(settings, "ACTIVE_MODEL_PATH", str(active_path))
+    pipeline = MLModelPipeline()
+    pipeline._save_active_model(
+        ProbabilityModel([0.7, 0.2, 0.1]), None, "First", {"brier_score": 0.2}
+    )
+    pipeline._save_active_model(
+        ProbabilityModel([0.1, 0.2, 0.7]), None, "Second", {"brier_score": 0.1}
+    )
+    with previous_path.open("ab") as artifact:
+        artifact.write(b"tampered")
+
+    assert pipeline.rollback() is False
+    assert pipeline.load_active_model() is True
+    assert pipeline.active_model_name == "Second"
+    assert "signature verification failed" in caplog.text

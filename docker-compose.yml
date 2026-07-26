@@ -81,6 +81,7 @@ services:
       API_FOOTBALL_KEY: ${API_FOOTBALL_KEY:-DEMO_KEY}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-development-access-secret-change-me}
       JWT_REFRESH_SECRET_KEY: ${JWT_REFRESH_SECRET_KEY:-development-refresh-secret-change-me}
+      MODEL_SIGNING_KEY: ${MODEL_SIGNING_KEY:-development-model-signing-key-change-me}
       COOKIE_SECURE: "false"
       ALLOW_SELF_REGISTRATION: ${ALLOW_SELF_REGISTRATION:-false}
       FRONTEND_URL: http://localhost:3000
@@ -126,6 +127,7 @@ services:
       API_FOOTBALL_KEY: ${API_FOOTBALL_KEY:-DEMO_KEY}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-development-access-secret-change-me}
       JWT_REFRESH_SECRET_KEY: ${JWT_REFRESH_SECRET_KEY:-development-refresh-secret-change-me}
+      MODEL_SIGNING_KEY: ${MODEL_SIGNING_KEY:-development-model-signing-key-change-me}
       COOKIE_SECURE: "false"
       ALLOW_SELF_REGISTRATION: ${ALLOW_SELF_REGISTRATION:-false}
       FRONTEND_URL: http://localhost:3000
