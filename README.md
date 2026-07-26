@@ -15,8 +15,10 @@ Projenin kaynak koduna GitHub üzerinden ulaşabilirsiniz: [arigato5151-sketch/b
 - API-Football üzerinden fikstür, takım istatistiği, H2H ve oran verisi
 - Piyasa olasılığını marjdan arındıran (de-vig) value bet ve Kelly stake hesabı
 - Yeterli etiketli veri oluştuğunda devreye giren çok sınıflı ML pipeline'ı
+- HMAC-SHA256 ile imzalanan ve yükleme/rollback öncesinde bütünlüğü doğrulanan ML artifact'ları
 - Tahmin geçmişi, gerçek sonuç kaydı, ROI/Brier Score denetimi ve backtest
 - Redis erişilemediğinde Memcached, o da yoksa bellek içi TTL cache; PostgreSQL erişilemediğinde SQLite fallback
+- Redis kesintisinde process-local çalışan ve bağlantı geri geldiğinde otomatik olarak Redis'e dönen login rate limiter
 - React tabanlı analiz paneli, geçmiş filtreleme/sıralama, olasılık ve interaktif bankroll grafikleri
 - API-Football demo verisi kullanıldığında giriş ve uygulama başlığında görünür `Demo Modu` etiketi
 - Admin rolü için kullanıcı oluşturma, rol atama ve hesap aktifliği yönetim paneli
@@ -25,7 +27,7 @@ Projenin kaynak koduna GitHub üzerinden ulaşabilirsiniz: [arigato5151-sketch/b
 
 | Katman | Teknolojiler |
 | --- | --- |
-| Backend | Python 3.11/3.12, FastAPI, Uvicorn, Pydantic |
+| Backend | Python 3.11/3.12, FastAPI, Uvicorn, Pydantic, PyJWT, bcrypt |
 | Veri | SQLAlchemy, PostgreSQL, SQLite fallback |
 | Cache / görev | Redis, Memcached, Celery, `cachetools` |
 | Analiz / ML | NumPy, Pandas, SciPy, scikit-learn, SHAP, Joblib |
@@ -57,15 +59,16 @@ ML modeli varsayılan olarak en az `200` etiketli örnek bekler. Bu eşik sağla
 Uygulamanın uçtan uca çalışma zinciri aşağıdaki gibidir:
 
 ```text
-frontend/src/App.jsx
-    └── POST /api/analyze (cookie auth + CSRF)
-            └── backend/app/api/endpoints.py
-                    ├── StatsEngine.analyze_match()
-                    ├── ValueCalc.calculate_professional()
-                    ├── FeatureEngine + MLModelPipeline (model hazırsa)
-                    ├── ExplainabilityService.generate_explanation()
-                    └── MatchPredictionRepository.upsert_prediction()
-                            └── PostgreSQL veya SQLite fallback
+frontend/src/App.jsx (auth, layout ve aktif görünüm)
+    └── frontend/src/containers/AnalysisContainer.jsx
+            └── POST /api/analyze (cookie auth + CSRF)
+                    └── backend/app/api/endpoints.py
+                            ├── StatsEngine.analyze_match()
+                            ├── ValueCalc.calculate_professional()
+                            ├── FeatureEngine + MLModelPipeline (model hazırsa)
+                            ├── ExplainabilityService.generate_explanation()
+                            └── MatchPredictionRepository.upsert_prediction()
+                                    └── PostgreSQL veya SQLite fallback
 ```
 
 Backend'deki ana orchestration fonksiyonu analiz, kalıcılık ve API yanıtı üretimini birbirinden ayırır:
@@ -97,7 +100,7 @@ Katmanların sorumlulukları:
 
 | Katman | Ana dosyalar | Sorumluluk |
 | --- | --- | --- |
-| Web arayüzü | `frontend/src/App.jsx`, `frontend/src/components/`, `frontend/src/hooks/` | İnce orkestrasyon container'ı, sunumsal bileşenler ve oturum hook'u |
+| Web arayüzü | `frontend/src/App.jsx`, `frontend/src/containers/`, `frontend/src/components/`, `frontend/src/hooks/` | Üst seviye auth/layout orkestrasyonu, özellik container'ları, sunumsal bileşenler ve oturum hook'u |
 | HTTP/API | `backend/app/main.py`, `backend/app/api/endpoints.py`, `backend/app/api/admin.py` | Route, doğrulama, permission kontrolü ve yanıt sözleşmeleri |
 | Analiz | `backend/app/prediction/stats_engine.py`, `value_calc.py` | Poisson/Dixon-Coles olasılıkları, de-vig, edge ve Kelly hesabı |
 | Makine öğrenmesi | `backend/app/prediction/ml/` | Feature üretimi, eğitim, inference, kalibrasyon ve açıklanabilirlik |
@@ -125,9 +128,14 @@ bet-ai-platform/
 │   ├── alembic.ini       # Migration yapılandırması
 │   └── Dockerfile
 ├── frontend/
-│   ├── src/              # React arayüzü
+│   ├── src/
+│   │   ├── containers/   # Analiz, geçmiş, admin ve operasyon akışları
+│   │   └── components/   # Sunumsal React bileşenleri
 │   └── package.json
-├── scripts/              # Sanal ortam kurulum scriptleri
+├── docs/
+│   └── CALIBRATION.md    # Backtest tabanlı kalibrasyon sonuçları
+├── scripts/              # Kurulum, bakım ve kalibrasyon scriptleri
+├── .github/              # CI, bağımlılık denetimi ve Dependabot ayarları
 ├── app.py                # Backend uygulama giriş noktası
 ├── run.py                # Ortam kontrolü ve Uvicorn launcher
 └── docker-compose.yml
@@ -147,7 +155,8 @@ Bu bölüm, depoyu başka bir yapay zekâ aracına verdiğinizde uygulama akış
 | `backend/app/api/endpoints.py` | HTTP sözleşmeleri ve analiz orchestration katmanı |
 | `frontend/index.html` | Vite HTML giriş noktası |
 | `frontend/src/main.jsx` | React root oluşturur |
-| `frontend/src/App.jsx` | Auth hook'u ile sunumsal bileşenleri birleştiren uygulama container'ı |
+| `frontend/src/App.jsx` | Auth durumu, layout ve aktif görünümü yöneten ince orkestrasyon bileşeni |
+| `frontend/src/containers/` | Analiz, geçmiş, admin ve operasyon özelliklerinin state/API akışları |
 
 ### Backend modül haritası
 
@@ -155,7 +164,9 @@ Bu bölüm, depoyu başka bir yapay zekâ aracına verdiğinizde uygulama akış
 backend/app/
 ├── core/
 │   ├── config.py            # Pydantic Settings ve tüm env değişkenleri
-│   ├── auth.py              # JWT access/refresh üretimi ve auth dependency
+│   ├── auth.py              # PyJWT access/refresh üretimi ve auth dependency
+│   ├── passwords.py         # bcrypt hash ve legacy hash doğrulaması
+│   ├── rate_limit.py        # Redis login guard ve process-local recovery
 │   ├── allowed_leagues.py   # Desteklenen ligler ve Dixon-Coles rho değerleri
 │   ├── demo_data.py         # API anahtarı yokken kullanılan deterministik veri
 │   └── logging_config.py    # Merkezi log yapılandırması
@@ -173,7 +184,7 @@ backend/app/
 │   └── ml/
 │       ├── features.py      # ML feature üretimi
 │       ├── historical.py    # Kronolojik Elo ve H2H feature bağlamı
-│       ├── model.py         # Eğitim, model seçimi, kayıt ve inference
+│       ├── model.py         # Eğitim, imzalı artifact, rollback ve inference
 │       ├── calibrate.py     # Çok sınıflı olasılık kalibrasyonu
 │       └── explain.py       # SHAP veya feature importance açıklaması
 ├── services/
@@ -237,7 +248,11 @@ Regularized Logistic Regression, Gradient Boosting ve Random Forest arasından s
 aday; naive sınıf dağılımı baseline'ını ve varsa aktif champion modeli geçmeden
 yayına alınmaz. Isotonic kalibrasyon ayrı fit/doğrulama pencerelerinde değerlendirilir
 ve en az `MIN_ISOTONIC_CALIBRATION_SAMPLES` örnek yoksa devre dışı kalır. Artifact
-diske atomik yazılmadan süreç içi model değiştirilmez.
+diske atomik yazılmadan süreç içi model değiştirilmez. Her model dosyası
+`MODEL_SIGNING_KEY` ile HMAC-SHA256 olarak imzalanır ve detached `.sig` dosyasıyla
+birlikte saklanır. Aktif model yükleme ve rollback işlemleri imzayı `joblib.load`
+çağrısından önce doğrular; eksik veya uyuşmayan imza ERROR loglanır ve istatistik
+motoru güvenli fallback olarak kullanılmaya devam eder.
 
 Ensemble ağırlıkları başlangıçta config'teki stats/ML/market değerlerini kullanır.
 Üç kaynağın bileşenleri ve gerçek sonucu bulunan en az 100 kronolojik örnek
@@ -268,6 +283,26 @@ nötr kalabilir ve maç saatine yakın yeniden analiz daha zengin snapshot üret
 `ml_features_v4`, desteklenen ligleri one-hot feature olarak ekler. Böylece model
 ligler arasındaki ev sahibi/beraberlik/deplasman dağılımı farklarını öğrenebilir;
 eski snapshot'lar bu alanlarda sıfır varsayılanıyla geriye uyumlu kalır.
+
+### Kalibrasyon doğrulaması
+
+`backend/app/core/config.py` içindeki 37 tahmin sabiti, mevcut
+`BacktestEngine` kullanılarak varsayılan değerin `%80`, `%90`, `%100`, `%110` ve
+`%120` noktalarında duyarlılık analizinden geçirilmiştir. Çalışma 14 ligde 8.333
+tarihsel fixture ve 7.622 nokta-zamanlı örneği kapsar; 2025 closing odds bulunan
+4.145 örnek ayrıca ROI değerlendirmesinde kullanılır. 27 sabit doğrulanmış, gerekli
+tarihsel girdi bulunmayan 10 sabit gerekçesiyle açık TODO olarak bırakılmıştır.
+
+Sonuçlar, veri kapsamı, Brier Score/ROI etkileri ve önerilen aralıklar
+[`docs/CALIBRATION.md`](docs/CALIBRATION.md) dosyasında tutulur. Analizi mevcut
+veritabanıyla tekrar üretmek için:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/calibrate_constants.py `
+  --with-football-data-odds `
+  --odds-season 2025 `
+  --summary-only
+```
 
 ### Temel analiz algoritması
 
@@ -346,6 +381,12 @@ POST /api/auth/login
 
 Access ve refresh token farklı secret anahtarlarla imzalanır. Token payload'ında kullanıcı UUID'si olan `sub` ile `type`, `ver`, `iat`, `exp`; refresh token'da ayrıca `jti` alanı bulunur. Cookie'ler `HttpOnly`, `Secure` ve varsayılan olarak `SameSite=lax` özelliklerini taşır. Refresh token yalnızca SHA-256 hash'iyle `refresh_sessions` tablosunda tutulur ve her yenilemede rotate edilerek eski session revoke edilir.
 
+JWT üretimi/doğrulaması PyJWT ile yapılır ve izin verilen algoritma yalnızca
+`JWT_ALGORITHM` ayarından sabit olarak okunur; `none` algoritması kabul edilmez.
+Yeni parola hash'leri doğrudan bcrypt ile 12 cost kullanılarak `$2b$` formatında
+üretilir. Önceki passlib sürümünün ürettiği bcrypt ve PBKDF2-SHA256 hash'leri
+doğrulama sırasında geriye uyumlu olarak desteklenir.
+
 ### Cache, veritabanı ve worker fallback'leri
 
 - Cache okuma/yazma zinciri `Redis → Memcached → process-local TTLCache` sırasındadır. `MEMCACHED_HOST` boşsa Memcached katmanı devre dışı kalır.
@@ -353,6 +394,9 @@ Access ve refresh token farklı secret anahtarlarla imzalanır. Token payload'ı
 - Development/test ortamında `ALLOW_DATABASE_FALLBACK=true` ise PostgreSQL bağlantısı kurulamadığında WARNING loglanır, `sqlite:///./matches.db` kullanılır ve health yanıtında `database.status=degraded` görünür.
 - Production ortamı `ALLOW_DATABASE_FALLBACK=false` zorunlu kılar. PostgreSQL erişilemezse servis SQLite'a geçmez ve fail-fast kapanır.
 - Redis bağlantısı kurulamazsa kategori bazlı bellek içi `TTLCache` kullanılır.
+- Login rate limiter Redis kesintisinde process-local sayaçlarla korumayı sürdürür,
+  varsayılan olarak her 30 saniyede bir Redis'i tekrar dener ve bağlantı
+  sağlandığında eski local sayaçları temizleyerek Redis'i yeniden etkinleştirir.
 - Celery broker yoksa sonuç kaydı yine tamamlanır; yeniden eğitim kuyruğa alınmaz ve PATCH yanıtında `broker_unavailable` döner.
 - Broker açık fakat worker yoksa görev kuyruğa alınabilir; yanıtta `worker_unavailable` bildirilir.
 - Worker hazırsa PATCH yanıtında `status=ready`, `task_queued=true` ve `task_id` bulunur.
@@ -444,6 +488,7 @@ MEMCACHED_PORT=11211
 MEMCACHED_TIMEOUT_SECONDS=2
 JWT_SECRET_KEY=development-only-secret
 JWT_REFRESH_SECRET_KEY=development-only-refresh-secret
+MODEL_SIGNING_KEY=development-only-model-signing-secret
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 REFRESH_TOKEN_EXPIRE_DAYS=7
@@ -487,6 +532,7 @@ DATABASE_URL=postgresql://betai:strong_password@postgres:5432/bet_ai
 ALLOW_DATABASE_FALLBACK=false
 JWT_SECRET_KEY=minimum_32_character_unique_access_secret
 JWT_REFRESH_SECRET_KEY=minimum_32_character_unique_refresh_secret
+MODEL_SIGNING_KEY=minimum_32_character_unique_model_signing_secret
 COOKIE_SECURE=true
 COOKIE_SAMESITE=lax
 REQUIRE_ORIGIN_HEADER=true
@@ -495,7 +541,7 @@ FRONTEND_URL=https://bets.example.com
 BACKEND_CORS_ORIGINS=https://bets.example.com
 ```
 
-`BACKEND_CORS_ORIGINS` virgülle ayrılmış liste veya JSON dizisi kabul eder. Production'da wildcard, HTTP origin, SQLite, varsayılan API anahtarı, zayıf/aynı JWT secret'lar ve eksik `Origin` başlığı reddedilir. CLI ve servis-to-servis state-changing isteklerinde de production ortamında güvenilen `Origin` başlığı gönderilmelidir.
+`BACKEND_CORS_ORIGINS` virgülle ayrılmış liste veya JSON dizisi kabul eder. Production'da wildcard, HTTP origin, SQLite, varsayılan API anahtarı, zayıf/aynı JWT secret'lar, varsayılan veya 32 karakterden kısa model imza anahtarı ve eksik `Origin` başlığı reddedilir. CLI ve servis-to-servis state-changing isteklerinde de production ortamında güvenilen `Origin` başlığı gönderilmelidir.
 
 ### 3. Backend'i çalıştırma
 
@@ -790,9 +836,16 @@ Geliştirme bağımlılıklarını kurmak için:
 .\.venv\Scripts\python.exe -m mypy backend/app
 npm --prefix frontend run lint
 npm --prefix frontend run test
+npm --prefix frontend run build
 ```
 
-Test paketi StatsEngine skor matrisi/xG uçları/Dixon-Coles ağırlıkları, ValueCalc, API-Football retry/demo/prefill fallback, ML feature/Elo/readiness/olasılık güvenliği, SHAP/feature-importance açıklanabilirlik fallback'leri, backtest stratejileri/Kelly limitleri, cookie auth, RBAC yönetimi, DB/cache fallback, Celery sağlık/enqueue, frontend geçmiş filtreleri, admin rol seçimi ve bankroll seri dönüşümünü kapsar. CI aynı kontrolleri çalıştırır ve `coverage.xml` üretir.
+Test paketi StatsEngine skor matrisi/xG uçları/Dixon-Coles ağırlıkları, ValueCalc, API-Football retry/demo/prefill fallback, ML feature/Elo/readiness/olasılık ve artifact imza güvenliğini, SHAP/feature-importance açıklanabilirlik fallback'lerini, backtest stratejileri/Kelly limitlerini, cookie auth, Redis rate-limiter recovery, RBAC yönetimi, DB/cache fallback, Celery sağlık/enqueue, frontend container davranışı, geçmiş filtreleri, admin rol seçimi ve bankroll seri dönüşümünü kapsar. CI aynı kontrolleri çalıştırır ve `coverage.xml` üretir.
+
+CI, Ruff adımından önce `pip-audit` ile hem `requirements.txt` hem de
+`requirements-dev.txt` bağımlılıklarını denetler. İncelenmiş düşük önem seviyeli
+istisnalar, kaldırma gerekçesi ve hedef tarihi belirtilerek
+`.github/pip-audit-ignore.txt` dosyasına eklenebilir. Dependabot, backend pip ve
+frontend npm bağımlılıklarını her pazartesi kontrol eder.
 
 Mypy `backend/app` altındaki tüm backend paketini zorunlu kontrol eder. ORM modelleri SQLAlchemy 2 `DeclarativeBase`, `Mapped` ve `mapped_column` yapısındadır; nullable legacy tahmin alanları audit, backtest, task ve endpoint katmanlarında güvenli varsayılanlarla ele alınır.
 
@@ -837,7 +890,7 @@ VAULT_ROLE_ID=application-role-id
 VAULT_SECRET_ID=runtime-injected-secret-id
 ```
 
-KV v2 kaydında `API_FOOTBALL_KEY`, `DATABASE_URL`, `JWT_SECRET_KEY`, `JWT_REFRESH_SECRET_KEY` ve `ADMIN_PASSWORD` zorunludur; `REDIS_URL` opsiyoneldir. Yalnızca bu allowlist'teki anahtarlar process environment'a aktarılır. `VAULT_TOKEN` doğrudan token akışı için desteklenir, ancak production'da kısa ömürlü AppRole/SecretID tercih edilmelidir. Vault kimlik doğrulaması veya secret okuması başarısızsa uygulama fail-fast kapanır; env fallback yaparak güvenliği sessizce zayıflatmaz.
+KV v2 kaydında `API_FOOTBALL_KEY`, `DATABASE_URL`, `JWT_SECRET_KEY`, `JWT_REFRESH_SECRET_KEY`, `MODEL_SIGNING_KEY` ve `ADMIN_PASSWORD` zorunludur; `REDIS_URL` opsiyoneldir. Yalnızca bu allowlist'teki anahtarlar process environment'a aktarılır. `VAULT_TOKEN` doğrudan token akışı için desteklenir, ancak production'da kısa ömürlü AppRole/SecretID tercih edilmelidir. Vault kimlik doğrulaması veya secret okuması başarısızsa uygulama fail-fast kapanır; env fallback yaparak güvenliği sessizce zayıflatmaz.
 
 Health yanıtı yalnızca `secrets.provider` ve `secrets.loaded_keys` sayısını gösterir; secret değerleri döndürülmez.
 
@@ -857,7 +910,7 @@ Secret adları `<prefix>-<küçük-harf-env-anahtarı>` biçimindedir; örneğin
 
 - Access/refresh token'lar `HttpOnly + Secure + SameSite` cookie'lerinde tutulur; JavaScript token değerlerini okuyamaz.
 - Ayrı `bet_ai_csrf` cookie'si okunabilir durumdadır ve tüm oturumlu state-changing isteklerde `X-CSRF-Token` başlığıyla double-submit doğrulaması yapılır. Origin whitelist kontrolü ayrıca devam eder.
-- Başarısız login denemeleri kullanıcı+IP karmasıyla Redis'te sayılır. Redis yoksa process-local fail-safe devreye girer. Varsayılan politika 5 deneme/300 saniye ve 900 saniye kilittir.
+- Başarısız login denemeleri kullanıcı+IP karmasıyla Redis'te sayılır. Redis yoksa process-local fail-safe devreye girer ve bağlantı periyodik olarak tekrar denenir. Varsayılan politika 5 deneme/300 saniye ve 900 saniye kilittir.
 - Refresh token her kullanımda rotate edilir; tekrar kullanım bütün token ailesini iptal eder. Kullanıcılar `/api/auth/sessions` ile cihaz oturumlarını görüp tek tek kapatabilir.
 
 - `.env`, veritabanı dosyaları ve model artifact'larını kaynak kontrolüne eklemeyin.
@@ -866,7 +919,7 @@ Secret adları `<prefix>-<küçük-harf-env-anahtarı>` biçimindedir; örneğin
 - State-changing istekler (`POST`, `PUT`, `PATCH`, `DELETE`) için origin doğrulaması yapılır; production'da `REQUIRE_ORIGIN_HEADER=true` zorunludur.
 - API'yi TLS kullanan bir reverse proxy arkasında yayınlayın.
 - Demo/varsayılan secret değerleri production ortamında kullanmayın.
-- `ADMIN_PASSWORD`, `JWT_SECRET_KEY` ve `JWT_REFRESH_SECRET_KEY` değerlerini secret manager üzerinden sağlayın.
+- `ADMIN_PASSWORD`, `JWT_SECRET_KEY`, `JWT_REFRESH_SECRET_KEY` ve `MODEL_SIGNING_KEY` değerlerini secret manager üzerinden sağlayın.
 - Cookie auth nedeniyle production frontend ve API'yi HTTPS üzerinden, uyumlu same-site domain yapısıyla yayınlayın.
 - `COOKIE_SAMESITE=none` yalnızca cross-site deployment zorunluysa ve `COOKIE_SECURE=true` ile kullanılmalıdır.
 - Harici API anahtarlarını frontend koduna veya loglara yazmayın.
