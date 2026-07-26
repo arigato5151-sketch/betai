@@ -6,7 +6,7 @@ httpx==0.28.1
 sqlalchemy==2.0.28
 alembic==1.13.1
 psycopg2-binary==2.9.9
-redis==5.0.3
+redis==8.0.1
 cachetools==5.3.3
 aiomcache==0.8.2
 hvac==2.4.0
