@@ -113,6 +113,32 @@ def test_calibration_error_matches_known_example() -> None:
     assert error == pytest.approx(0.4)
 
 
+def test_multiclass_brier_score_normalizes_forecasts() -> None:
+    score = BacktestEngine.multiclass_brier_score(
+        [
+            ({"HOME_WIN": 70, "DRAW": 20, "AWAY_WIN": 10}, "HOME_WIN"),
+            ({"HOME_WIN": 0.2, "DRAW": 0.3, "AWAY_WIN": 0.5}, "AWAY_WIN"),
+        ]
+    )
+
+    assert score == pytest.approx((0.14 + 0.38) / 2)
+
+
+@pytest.mark.parametrize(
+    "forecast,actual",
+    [
+        ({}, "HOME_WIN"),
+        ({"HOME_WIN": -1, "DRAW": 1, "AWAY_WIN": 1}, "DRAW"),
+        ({"HOME_WIN": 1, "DRAW": 1, "AWAY_WIN": 1}, "UNKNOWN"),
+    ],
+)
+def test_multiclass_brier_score_rejects_invalid_input(
+    forecast: dict[str, float], actual: str
+) -> None:
+    with pytest.raises(ValueError):
+        BacktestEngine.multiclass_brier_score([(forecast, actual)])
+
+
 def test_commission_and_portfolio_limits_are_applied() -> None:
     result = BacktestEngine.run_simulation(
         [prediction(), prediction(minute=1)],

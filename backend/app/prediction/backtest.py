@@ -2,6 +2,7 @@ import math
 import logging
 import numpy as np
 from collections import Counter
+from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime
 from typing import List, Dict, Any, Tuple
 from app.db.models import MatchPrediction
@@ -11,6 +12,43 @@ logger = logging.getLogger("bet-ai-pro.backtest")
 
 
 class BacktestEngine:
+    OUTCOMES = ("HOME_WIN", "DRAW", "AWAY_WIN")
+
+    @classmethod
+    def multiclass_brier_score(
+        cls,
+        forecasts: Iterable[tuple[Mapping[str, float], str]],
+    ) -> float:
+        """Return the mean multiclass Brier score for normalized probabilities."""
+        scores: list[float] = []
+        for probabilities, actual_result in forecasts:
+            if actual_result not in cls.OUTCOMES:
+                raise ValueError(f"Unsupported actual result: {actual_result!r}")
+            try:
+                values = np.asarray(
+                    [float(probabilities[outcome]) for outcome in cls.OUTCOMES],
+                    dtype=float,
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    "Forecast must contain three numeric outcomes"
+                ) from exc
+            if (
+                not np.all(np.isfinite(values))
+                or np.any(values < 0)
+                or values.sum() <= 0
+            ):
+                raise ValueError(
+                    "Forecast probabilities must be finite and non-negative"
+                )
+            values /= values.sum()
+            target = np.zeros(len(cls.OUTCOMES), dtype=float)
+            target[cls.OUTCOMES.index(actual_result)] = 1.0
+            scores.append(float(np.sum((values - target) ** 2)))
+        if not scores:
+            raise ValueError("At least one forecast is required")
+        return float(np.mean(scores))
+
     @staticmethod
     def run_simulation(
         predictions: List[MatchPrediction],

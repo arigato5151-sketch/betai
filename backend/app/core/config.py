@@ -66,67 +66,67 @@ class Settings(BaseSettings):
     FOOTBALL_DATA_BASE_URL: str = "https://www.football-data.co.uk"
     FOOTBALL_DATA_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
 
-    # TODO: kalibrasyon kaynağını doğrula — lig başına ortalama gol tabanı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEAGUE_BASELINE_GOALS: float = Field(default=1.32, gt=0)
-    # TODO: kalibrasyon kaynağını doğrula — son beş maçın azalan form ağırlıkları.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     FORM_DECAY_WEIGHTS: tuple[float, ...] = Field(default=(1.0, 0.88, 0.76, 0.64, 0.52))
-    # TODO: kalibrasyon kaynağını doğrula — beş maçtan eski form girdisi ağırlığı.
+    # TODO: kalibrasyon — mevcut form kodu beş maçta kestiği için dal erişilemiyor.
     FORM_DECAY_FALLBACK_WEIGHT: float = Field(default=0.4, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — ev sahibi xG hücum çarpanı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     HOME_ATTACK_BOOST: float = Field(default=1.11, gt=0)
-    # TODO: kalibrasyon kaynağını doğrula — deplasman xG hücum çarpanı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     AWAY_ATTACK_PENALTY: float = Field(default=0.93, gt=0)
-    # TODO: kalibrasyon kaynağını doğrula — güç puanındaki hücum payı.
+    # TODO: kalibrasyon — strength_rating tahmin yollarında tüketilmiyor.
     STRENGTH_ATTACK_WEIGHT: float = Field(default=0.4, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — güç puanındaki savunma payı.
+    # TODO: kalibrasyon — strength_rating tahmin yollarında tüketilmiyor.
     STRENGTH_DEFENSE_WEIGHT: float = Field(default=0.35, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — güç puanındaki form payı.
+    # TODO: kalibrasyon — strength_rating tahmin yollarında tüketilmiyor.
     STRENGTH_FORM_WEIGHT: float = Field(default=0.25, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — gözlenen gol ortalamasının xG payı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     XG_OBSERVED_GOALS_WEIGHT: float = Field(default=0.55, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — hücum gücü tabanlı xG payı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     XG_ATTACK_BASELINE_WEIGHT: float = Field(default=0.45, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — maksimum xG tutarlılık cezası.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     XG_CONSISTENCY_MAX_PENALTY: float = Field(default=0.12, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — gol farkı başına tutarlılık cezası.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     XG_CONSISTENCY_PENALTY_WEIGHT: float = Field(default=0.04, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — güçlü profil form çarpanı tabanı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     PROFILE_FORM_FACTOR_BASE: float = Field(default=0.88, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — güçlü profil form etkisi.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     PROFILE_FORM_FACTOR_WEIGHT: float = Field(default=0.24, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — eski profil hücum çarpanı tabanı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEGACY_ATTACK_FACTOR_BASE: float = Field(default=0.62, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — eski profil hücum etkisi.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEGACY_ATTACK_FACTOR_WEIGHT: float = Field(default=0.78, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — eski profil savunma çarpanı tabanı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEGACY_DEFENSE_FACTOR_BASE: float = Field(default=0.72, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — eski profil savunma etkisi.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEGACY_DEFENSE_FACTOR_WEIGHT: float = Field(default=0.55, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — eski profil form çarpanı tabanı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEGACY_FORM_FACTOR_BASE: float = Field(default=0.82, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — eski profil form etkisi.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEGACY_FORM_FACTOR_WEIGHT: float = Field(default=0.36, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — eski profil xG gözlem payı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEGACY_XG_OBSERVED_WEIGHT: float = Field(default=0.58, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — eski profil lig tabanı payı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEGACY_XG_BASELINE_WEIGHT: float = Field(default=0.42, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — ev avantajı alt çarpan sınırı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     HOME_ADVANTAGE_MIN_MULTIPLIER: float = Field(default=0.88, gt=0)
-    # TODO: kalibrasyon kaynağını doğrula — ev avantajı üst çarpan sınırı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     HOME_ADVANTAGE_MAX_MULTIPLIER: float = Field(default=1.22, gt=0)
-    # TODO: kalibrasyon kaynağını doğrula — rakip gol ortalaması için oran tabanı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     HOME_ADVANTAGE_OPPONENT_GOALS_FLOOR: float = Field(default=0.55, gt=0)
-    # TODO: kalibrasyon kaynağını doğrula — veri yokken ev avantajı tabanı.
+    # TODO: kalibrasyon — tarihsel profillerde eksik gol ortalaması örneği yok.
     HOME_FORM_BASE_MULTIPLIER: float = Field(default=1.08, gt=0)
-    # TODO: kalibrasyon kaynağını doğrula — form farkını ev avantajına ölçekler.
+    # TODO: kalibrasyon — tarihsel profillerde eksik gol ortalaması örneği yok.
     HOME_FORM_BOOST_DIVISOR: float = Field(default=450.0, gt=0)
-    # TODO: kalibrasyon kaynağını doğrula — ev çifte şans olasılık katsayısı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     DOUBLE_CHANCE_HOME_DIFFERENCE_WEIGHT: float = Field(default=12.0, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — deplasman çifte şans olasılık katsayısı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     DOUBLE_CHANCE_AWAY_DIFFERENCE_WEIGHT: float = Field(default=14.0, ge=0)
-    # TODO: kalibrasyon kaynağını doğrula — varsayılan Dixon-Coles düzeltmesi.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     DEFAULT_DIXON_COLES_RHO: float = Field(default=-0.12)
-    # TODO: kalibrasyon kaynağını doğrula — lig bazlı Dixon-Coles düzeltmeleri.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEAGUE_DIXON_COLES_RHO: dict[int, float] = Field(
         default={
             39: -0.13,
@@ -145,11 +145,11 @@ class Settings(BaseSettings):
             62: -0.13,
         }
     )
-    # TODO: kalibrasyon kaynağını doğrula — ensemble içindeki istatistik modeli payı.
+    # TODO: kalibrasyon — üç bileşenli çözülmüş tahmin örneği henüz yok.
     ENSEMBLE_STATS_WEIGHT: float = Field(default=0.4, gt=0, le=1)
-    # TODO: kalibrasyon kaynağını doğrula — ensemble içindeki kalibre ML payı.
+    # TODO: kalibrasyon — üç bileşenli çözülmüş tahmin örneği henüz yok.
     ENSEMBLE_ML_WEIGHT: float = Field(default=0.2, ge=0, le=1)
-    # TODO: kalibrasyon kaynağını doğrula — ensemble içindeki de-vig market payı.
+    # TODO: kalibrasyon — üç bileşenli çözülmüş tahmin örneği henüz yok.
     ENSEMBLE_MARKET_WEIGHT: float = Field(default=0.4, ge=0, le=1)
     MIN_ENSEMBLE_CALIBRATION_SAMPLES: int = Field(default=100, ge=30)
     ENSEMBLE_HOLDOUT_FRACTION: float = Field(default=0.2, ge=0.1, le=0.4)
@@ -160,11 +160,11 @@ class Settings(BaseSettings):
     RECENT_FORM_MATCH_COUNT: int = Field(default=5, ge=1, le=20)
     # Eski yerel snapshot yerine canlı API fallback'ine geçiş eşiği.
     HISTORICAL_FORM_MAX_AGE_DAYS: int = Field(default=45, ge=1, le=365)
-    # TODO: kalibrasyon kaynağını doğrula — maç başına Elo güncelleme hızı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     ELO_K_FACTOR: float = Field(default=32.0, gt=0, le=100)
-    # TODO: kalibrasyon kaynağını doğrula — Elo beklenen skorundaki ev avantajı.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md
     ELO_HOME_ADVANTAGE_POINTS: float = Field(default=65.0, ge=0, le=200)
-    # TODO: kalibrasyon kaynağını doğrula — sezon geçişinde ortalamaya dönüş oranı.
+    # TODO: kalibrasyon — sezonlar arasında ortak takım kimliği bulunmuyor.
     ELO_SEASON_REGRESSION: float = Field(default=0.25, ge=0, le=1)
 
     MIN_TRAINING_SAMPLES: int = 200
