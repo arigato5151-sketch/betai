@@ -4,7 +4,12 @@ from datetime import date
 from typing import Any, cast
 from celery import shared_task
 from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS
+from app.core.config import settings
 from app.db.historical_repository import HistoricalFixtureRepository
+from app.db.player_context_repository import (
+    PlayerContextRepository,
+    is_fixture_player_context_complete,
+)
 from app.db.session import SessionLocal
 from app.db.repository import MatchPredictionRepository
 from app.db.models import MatchPrediction
@@ -33,6 +38,98 @@ def _current_football_season(today: date | None = None) -> int:
     return current.year if current.month >= 7 else current.year - 1
 
 
+async def _enrich_historical_player_context(
+    api_client: APIFootballClient,
+    fixture_rows: list[dict],
+    existing_fixture_ids: set[int],
+) -> int:
+    """Backfill a bounded number of immutable fixture-player responses per run."""
+    limit = settings.PLAYER_CONTEXT_SYNC_MAX_FIXTURES
+    if limit <= 0:
+        return 0
+
+    candidates_by_id: dict[int, dict] = {}
+    for row in fixture_rows:
+        fixture_id = row.get("fixture_id")
+        if (
+            not isinstance(fixture_id, int)
+            or fixture_id <= 0
+            or fixture_id in existing_fixture_ids
+        ):
+            continue
+        embedded_performances = row.get("player_performances")
+        home_team_id = row.get("home_team_id")
+        away_team_id = row.get("away_team_id")
+        embedded_context_is_complete = (
+            isinstance(home_team_id, int)
+            and not isinstance(home_team_id, bool)
+            and isinstance(away_team_id, int)
+            and not isinstance(away_team_id, bool)
+            and isinstance(embedded_performances, list)
+            and is_fixture_player_context_complete(
+                (
+                    performance
+                    for performance in embedded_performances
+                    if isinstance(performance, dict)
+                ),
+                home_team_id=home_team_id,
+                away_team_id=away_team_id,
+            )
+        )
+        if embedded_context_is_complete:
+            continue
+        candidates_by_id[fixture_id] = row
+    candidates = sorted(
+        candidates_by_id.values(),
+        key=lambda row: (str(row.get("kickoff") or ""), row["fixture_id"]),
+        reverse=True,
+    )[:limit]
+    semaphore = asyncio.Semaphore(settings.PLAYER_CONTEXT_SYNC_CONCURRENCY)
+
+    async def enrich(row: dict) -> bool:
+        async with semaphore:
+            try:
+                context = await api_client.get_fixture_player_context(
+                    fixture_id=row["fixture_id"],
+                    league_id=row["league_id"],
+                    kickoff=row["kickoff"],
+                    home_team_id=row["home_team_id"],
+                    away_team_id=row["away_team_id"],
+                )
+            except Exception:
+                logger.exception(
+                    "Fixture player context fetch failed for fixture=%s",
+                    row["fixture_id"],
+                )
+                return False
+
+        performances = context.get("player_performances")
+        if not isinstance(performances, list) or not performances:
+            return False
+        normalized_performances = [
+            performance for performance in performances if isinstance(performance, dict)
+        ]
+        if not is_fixture_player_context_complete(
+            normalized_performances,
+            home_team_id=row["home_team_id"],
+            away_team_id=row["away_team_id"],
+        ):
+            logger.warning(
+                "Incomplete fixture player context rejected for fixture=%s",
+                row["fixture_id"],
+            )
+            return False
+        row["player_performances"] = normalized_performances
+        for side in ("home", "away"):
+            lineup = context.get(f"{side}_starting_xi")
+            if isinstance(lineup, list) and len(lineup) == 11:
+                row[f"{side}_starting_xi"] = lineup
+        return True
+
+    results = await asyncio.gather(*(enrich(row) for row in candidates))
+    return sum(not succeeded for succeeded in results)
+
+
 @shared_task(name="app.tasks.jobs.sync_historical_fixtures_task")
 def sync_historical_fixtures_task(seasons: list[int] | None = None) -> dict:
     """Ingest completed fixtures; pass seasons explicitly for a repeatable backfill."""
@@ -49,7 +146,7 @@ def sync_historical_fixtures_task(seasons: list[int] | None = None) -> dict:
     fixture_rows: list[dict] = []
     failures: list[dict[str, int | str]] = []
 
-    # Network work completes before opening a database transaction.
+    # Bulk fixture network work completes before opening a database transaction.
     for season in target_seasons:
         for league_id in league_ids:
             try:
@@ -71,8 +168,40 @@ def sync_historical_fixtures_task(seasons: list[int] | None = None) -> dict:
                 )
 
     try:
+        fixture_ids = {
+            row["fixture_id"]
+            for row in fixture_rows
+            if isinstance(row.get("fixture_id"), int) and row["fixture_id"] > 0
+        }
         with SessionLocal() as db:
-            processed = HistoricalFixtureRepository(db).upsert_many(fixture_rows)
+            existing_context_ids = PlayerContextRepository(
+                db
+            ).get_fixture_ids_with_complete_player_context(fixture_ids)
+        player_context_failures = _run_async(
+            _enrich_historical_player_context(
+                api_client,
+                fixture_rows,
+                existing_context_ids,
+            )
+        )
+
+        performance_rows: list[dict[str, object]] = []
+        normalized_fixture_rows: list[dict] = []
+        for fixture_row in fixture_rows:
+            normalized_fixture = dict(fixture_row)
+            nested_performances = normalized_fixture.pop("player_performances", [])
+            if isinstance(nested_performances, list):
+                performance_rows.extend(
+                    row for row in nested_performances if isinstance(row, dict)
+                )
+            normalized_fixture_rows.append(normalized_fixture)
+        with SessionLocal() as db:
+            processed = HistoricalFixtureRepository(db).upsert_many(
+                normalized_fixture_rows
+            )
+            player_performances_processed = PlayerContextRepository(
+                db
+            ).upsert_performances(performance_rows)
             DataQualityService(db).finish_sync(
                 sync_run_id,
                 processed=processed,
@@ -91,6 +220,8 @@ def sync_historical_fixtures_task(seasons: list[int] | None = None) -> dict:
     result: dict[str, object] = {
         "seasons": target_seasons,
         "fixtures_processed": processed,
+        "player_performances_processed": player_performances_processed,
+        "player_context_failures": player_context_failures,
         "failed_league_seasons": failures,
     }
     logger.info("Historical fixture synchronization completed: %s", result)
@@ -196,7 +327,12 @@ def retrain_ml_model_task() -> str:
         repo = MatchPredictionRepository(db)
         labeled_rows = repo.get_all_labeled()
         historical_fixtures = HistoricalFixtureRepository(db).get_all()
-        historical_rows = HistoricalTrainingDataBuilder().build(historical_fixtures)
+        player_context_repo = PlayerContextRepository(db)
+        historical_rows = HistoricalTrainingDataBuilder().build(
+            historical_fixtures,
+            player_performances=player_context_repo.get_all_performances(),
+            team_locations=player_context_repo.get_all_team_locations(),
+        )
         labeled_fixture_ids = {
             row.fixture_id for row in labeled_rows if row.fixture_id is not None
         }

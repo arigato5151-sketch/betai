@@ -17,6 +17,8 @@ Projenin kaynak koduna GitHub üzerinden ulaşabilirsiniz: [arigato5151-sketch/b
 - Yeterli etiketli veri oluştuğunda devreye giren çok sınıflı ML pipeline'ı
 - HMAC-SHA256 ile imzalanan ve yükleme/rollback öncesinde bütünlüğü doğrulanan ML artifact'ları
 - Açılış ve güncel 1X2 oranlarından üretilen dropping/drifting odds ML feature'ları
+- Oyuncu rating'i ve ilk 11 değişiminden üretilen Team Strength Ratio ile dinamik xG etkisi
+- Son 14 günlük maç yükü, dinlenme süresi ve deplasman mesafesini birleştiren yorgunluk feature'ı
 - Tahmin geçmişi, gerçek sonuç kaydı, ROI/Brier Score denetimi ve backtest
 - Redis erişilemediğinde Memcached, o da yoksa bellek içi TTL cache; PostgreSQL erişilemediğinde SQLite fallback
 - Redis kesintisinde process-local çalışan ve bağlantı geri geldiğinde otomatik olarak Redis'e dönen login rate limiter
@@ -43,7 +45,7 @@ React/Vite UI
 FastAPI endpoint'leri
      |
      +--> Manuel veri veya API-Football verisi
-     +--> StatsEngine (Poisson + Dixon-Coles + ikincil marketler)
+     +--> StatsEngine (Poisson + Dixon-Coles + oyuncu etkisi + ikincil marketler)
      +--> ValueCalc (de-vig + edge + Kelly)
      +--> ML pipeline / açıklanabilirlik (model hazırsa)
      |
@@ -272,11 +274,10 @@ tutulur. Algoritma ve tüm yapılandırma seçenekleri
 
 Fixture kimliği bulunan analizlerde API-Football sakatlık raporu da paralel çekilir ve
 4 saat cache'lenir. `ml_features_v2`, ev/deplasman için `Missing Fixture` ile
-`Questionable` sayılarını ve rapor bulunup bulunmadığını snapshot'a yazar. Oyuncu
-önem katsayısı için doğrulanmış bir veri kaynağı olmadığı için tüm eksikleri aynı
-ağırlıkta cezalandıran yapay bir xG çarpanı uygulanmaz; etki, yeterli etiket oluştukça
-ML tarafından öğrenilir. Eski `ml_features_v1` snapshot'ları yeni alanlarda sıfır
-varsayılanıyla eğitimde kullanılmaya devam eder.
+`Questionable` sayılarını ve rapor bulunup bulunmadığını snapshot'a yazar. Güncel
+normalizasyon bu sayaçları korurken bilinen oyuncunun kimliği, durumu ve nedeni de
+oyuncu-etkisi hesabına taşır. Kimliği veya rating'i bulunmayan kayıtlar ham sayıdan
+xG cezası türetmez.
 
 `ml_features_v3`, maç saatine yakın yayınlanan doğrulanmış ilk 11'i takımın son
 tamamlanmış maçındaki ilk 11 ile karşılaştırır. Her takım için lineup doğrulama,
@@ -297,6 +298,24 @@ deplasman için ayrı feature olarak ekler. Negatif değer dropping odds, poziti
 drifting odds anlamına gelir. İki eksiksiz 1X2 snapshot bulunmadığında üç feature da
 `0.0` olur. Sonuçtan sonra alınan closing odds bu pre-match feature'lara bağlanmaz;
 böylece gelecek bilgisi sızıntısı engellenir.
+
+`ml_features_v6`, `league_id`, `home_team_id` ve `away_team_id` alanlarını CatBoost
+ve LightGBM için native kategorik feature olarak ekler. Bu kimlikler bulunmadığında
+`0` unknown token'ı kullanılır; sayısal modeller ham ID kolonlarını görmez.
+
+`ml_features_v7`, ev ve deplasman için `team_strength_ratio` ile tek bir
+`fatigue_index` ekler. Son geçerli ilk 11'de yeterli rating kapsamı varsa güncel kadro
+kalitesi referans kadroya oranlanır; referans ortalamasının üzerindeki eksikler
+kritik kabul edilerek Poisson xG çarpanına daha güçlü yansır. Rating veya geçerli ilk
+11 yoksa oran ve xG çarpanı `1.0` olur.
+
+Yorgunluk skoru son 14 gündeki maç sayısını, son maçtan beri dinlenme gününü ve
+deplasman seyahat mesafesini birleştirir. `fatigue_index = away_load - home_load`
+olduğundan pozitif değer deplasman takımının daha yorgun olduğunu ifade eder. Eksik
+veya geçersiz tarih/mesafe verisi ceza üretmez; güvenli varsayılan `0.0`'dır.
+`ml_features_v1-v6` snapshot'ları bu nötr değerlerle eğitimde kullanılmaya devam
+eder. Formüller, tablolar ve tüm ayarlar
+[`docs/PLAYER_IMPACT_FATIGUE.md`](docs/PLAYER_IMPACT_FATIGUE.md) belgesindedir.
 
 ### Kalibrasyon doğrulaması
 
@@ -380,6 +399,24 @@ Audit:        roi, closing_odds, clv, created_at
 ```
 
 `fixture_id` benzersizdir. Aynı fixture tekrar analiz edildiğinde repository yeni satır eklemek yerine mevcut kaydı günceller. Manuel analizlerde `fixture_id` boş olabilir.
+
+Oyuncu etkisi ve seyahat bağlamı iki normalize tabloda tutulur:
+
+- `historical_player_performances`: tamamlanmış fixture'a bağlı ilk 11 durumu,
+  dakika, rating, pozisyon, gol ve asist. `(fixture_id, player_id)` benzersizdir.
+- `team_locations`: provider ve takım kimliğine göre takım/tesis konumu. Enlem ve
+  boylam bilinmiyorsa nullable kalır ve seyahat etkisi nötrdür.
+
+Doğrulanmış takım koordinatları admin tarafından `PUT /api/admin/team-locations`
+ile toplu yüklenir ve `GET /api/admin/team-locations` ile denetlenir. Provider
+koordinat sunmadığında sistem konum uydurmaz; kayıt yoksa travel bileşeni `0.0`
+kalır. Nötr saha için analiz isteğindeki `away_travel_distance_km` kullanılabilir.
+
+Bu tablolar `20260726_0010` Alembic revision'ıyla oluşturulur. Oyuncu performansı
+yalnız daha sonraki fixture'larda kullanılır; sorgular tahmin kickoff'u için katı
+`performance.kickoff < prediction.kickoff` sınırı uygular. API-Football
+`fixtures/players` backfill'i her senkronizasyonda varsayılan olarak en fazla 20
+eksik fixture'ı, 3 eşzamanlı istekle kademeli biçimde tamamlar.
 
 ### Auth ve istemci davranışı
 
@@ -497,6 +534,15 @@ API_FOOTBALL_KEY=DEMO_KEY
 DATABASE_URL=sqlite:///./matches.db
 ALLOW_DATABASE_FALLBACK=true
 GOAL_TIME_DECAY_FACTOR=0.01
+PLAYER_IMPACT_MIN_RATED_STARTERS=7
+PLAYER_IMPACT_LOOKBACK_MATCHES=10
+PLAYER_IMPACT_RATING_DECAY=0.85
+PLAYER_CONTEXT_SYNC_MAX_FIXTURES=20
+PLAYER_CONTEXT_SYNC_CONCURRENCY=3
+FATIGUE_LOOKBACK_DAYS=14
+FATIGUE_MATCH_WEIGHT=0.45
+FATIGUE_REST_WEIGHT=0.40
+FATIGUE_TRAVEL_WEIGHT=0.15
 ENABLE_CATBOOST_CANDIDATE=true
 ENABLE_LIGHTGBM_CANDIDATE=true
 ML_BOOSTER_THREADS=2
@@ -551,6 +597,15 @@ API_FOOTBALL_KEY=live_api_key
 DATABASE_URL=postgresql://betai:strong_password@postgres:5432/bet_ai
 ALLOW_DATABASE_FALLBACK=false
 GOAL_TIME_DECAY_FACTOR=0.01
+PLAYER_IMPACT_MIN_RATED_STARTERS=7
+PLAYER_IMPACT_LOOKBACK_MATCHES=10
+PLAYER_IMPACT_RATING_DECAY=0.85
+PLAYER_CONTEXT_SYNC_MAX_FIXTURES=20
+PLAYER_CONTEXT_SYNC_CONCURRENCY=3
+FATIGUE_LOOKBACK_DAYS=14
+FATIGUE_MATCH_WEIGHT=0.45
+FATIGUE_REST_WEIGHT=0.40
+FATIGUE_TRAVEL_WEIGHT=0.15
 ENABLE_CATBOOST_CANDIDATE=true
 ENABLE_LIGHTGBM_CANDIDATE=true
 ML_BOOSTER_THREADS=2

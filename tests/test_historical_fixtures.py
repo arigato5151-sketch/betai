@@ -5,10 +5,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db.historical_repository import HistoricalFixtureRepository
-from app.db.models import Base, HistoricalFixture
+from app.db.models import Base, HistoricalFixture, HistoricalPlayerPerformance
 from app.prediction.ml.historical import HistoricalFeatureService
 from app.tasks.jobs import (
     _current_football_season,
+    _enrich_historical_player_context,
     sync_football_data_fixtures_task,
     sync_historical_fixtures_task,
 )
@@ -23,6 +24,7 @@ def fixture_row(
     home_goals: int = 2,
     away_goals: int = 1,
     season: int = 2026,
+    league_id: int = 203,
     home_starting_xi: list[int] | None = None,
     away_starting_xi: list[int] | None = None,
 ) -> dict:
@@ -34,7 +36,7 @@ def fixture_row(
         result = "DRAW"
     return {
         "fixture_id": fixture_id,
-        "league_id": 203,
+        "league_id": league_id,
         "season": season,
         "kickoff": kickoff,
         "home_team_id": home_team_id,
@@ -48,6 +50,36 @@ def fixture_row(
         "actual_result": result,
         "status": "FT",
     }
+
+
+def player_context_rows(
+    fixture_id: int,
+    kickoff: datetime,
+    *,
+    home_team_id: int = 1,
+    away_team_id: int = 2,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "fixture_id": fixture_id,
+            "league_id": 203,
+            "kickoff": kickoff,
+            "team_id": team_id,
+            "player_id": player_id,
+            "started": True,
+            "minutes": 90,
+            "rating": 8.1,
+            "position": "M",
+            "goals": 0,
+            "assists": 0,
+            "source": "api_football_fixture_players",
+        }
+        for team_id, player_ids in (
+            (home_team_id, range(1, 8)),
+            (away_team_id, range(20, 27)),
+        )
+        for player_id in player_ids
+    ]
 
 
 @pytest.fixture
@@ -163,6 +195,47 @@ def test_historical_context_builds_elo_and_normalizes_reversed_h2h(
     assert context.away_previous_starting_xi == list(range(20, 31))
 
 
+def test_latest_starting_xi_can_cross_competitions(
+    historical_repository: HistoricalFixtureRepository,
+) -> None:
+    cutoff = datetime(2026, 7, 20, tzinfo=UTC)
+    league_lineup = list(range(1, 12))
+    cup_lineup = list(range(101, 112))
+    historical_repository.upsert_many(
+        [
+            fixture_row(
+                110,
+                cutoff - timedelta(days=5),
+                league_id=203,
+                home_starting_xi=league_lineup,
+            ),
+            fixture_row(
+                111,
+                cutoff - timedelta(days=2),
+                league_id=39,
+                home_starting_xi=cup_lineup,
+            ),
+        ]
+    )
+
+    context = HistoricalFeatureService(historical_repository).build_context(
+        home_team_id=1,
+        away_team_id=2,
+        league_id=203,
+        before=cutoff,
+    )
+
+    assert context.home_previous_starting_xi == cup_lineup
+    assert (
+        historical_repository.get_last_starting_xi(
+            team_id=1,
+            league_id=203,
+            before=cutoff,
+        )
+        == league_lineup
+    )
+
+
 def test_historical_context_carries_elo_across_seasons_with_regression(
     historical_repository: HistoricalFixtureRepository,
 ) -> None:
@@ -248,6 +321,31 @@ def test_current_football_season(today: date, expected: int) -> None:
     assert _current_football_season(today) == expected
 
 
+@pytest.mark.asyncio
+async def test_player_context_enrichment_replaces_incomplete_embedded_rows() -> None:
+    kickoff = datetime(2026, 7, 1, tzinfo=UTC)
+    row = fixture_row(100, kickoff)
+    row["player_performances"] = player_context_rows(100, kickoff)[:1]
+
+    class FakeClient:
+        calls = 0
+
+        async def get_fixture_player_context(self, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            return {
+                "home_starting_xi": list(range(1, 12)),
+                "away_starting_xi": list(range(20, 31)),
+                "player_performances": player_context_rows(100, kickoff),
+            }
+
+    client = FakeClient()
+    failures = await _enrich_historical_player_context(client, [row], set())
+
+    assert failures == 0
+    assert client.calls == 1
+    assert len(row["player_performances"]) == 14
+
+
 def test_historical_sync_task_fetches_then_persists_without_duplicates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -264,6 +362,20 @@ def test_historical_sync_task_fetches_then_persists_without_duplicates(
             assert (league_id, season) == (203, 2026)
             return [fixture_row(100, kickoff), fixture_row(100, kickoff)]
 
+        async def get_fixture_player_context(self, **kwargs) -> dict[str, object]:
+            assert kwargs == {
+                "fixture_id": 100,
+                "league_id": 203,
+                "kickoff": kickoff,
+                "home_team_id": 1,
+                "away_team_id": 2,
+            }
+            return {
+                "home_starting_xi": list(range(1, 12)),
+                "away_starting_xi": list(range(20, 31)),
+                "player_performances": player_context_rows(100, kickoff),
+            }
+
     monkeypatch.setattr(jobs, "ALLOWED_LEAGUE_IDS", {203})
     monkeypatch.setattr(jobs, "APIFootballClient", FakeClient)
     monkeypatch.setattr(jobs, "SessionLocal", lambda: Session(engine))
@@ -273,10 +385,13 @@ def test_historical_sync_task_fetches_then_persists_without_duplicates(
     assert result == {
         "seasons": [2026],
         "fixtures_processed": 1,
+        "player_performances_processed": 14,
+        "player_context_failures": 0,
         "failed_league_seasons": [],
     }
     with Session(engine) as session:
         assert session.query(HistoricalFixture).count() == 1
+        assert session.query(HistoricalPlayerPerformance).count() == 14
 
 
 def test_football_data_sync_task_persists_source_rows(

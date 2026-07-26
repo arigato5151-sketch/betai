@@ -150,23 +150,48 @@ class HistoricalFixtureRepository:
             .all()
         )
 
-    def get_last_starting_xi(
-        self, *, team_id: int, league_id: int, before: datetime
-    ) -> list[int] | None:
-        fixtures = (
+    def get_team_schedule(
+        self,
+        *,
+        team_id: int,
+        since: datetime,
+        before: datetime,
+    ) -> list[HistoricalFixture]:
+        """Return the strict point-in-time schedule across all competitions."""
+        return (
             self.db.query(HistoricalFixture)
             .filter(
-                HistoricalFixture.league_id == league_id,
                 or_(
                     HistoricalFixture.home_team_id == team_id,
                     HistoricalFixture.away_team_id == team_id,
                 ),
+                HistoricalFixture.kickoff >= since,
                 HistoricalFixture.kickoff < before,
             )
-            .order_by(HistoricalFixture.kickoff.desc())
-            .limit(50)
+            .order_by(
+                HistoricalFixture.kickoff.asc(),
+                HistoricalFixture.fixture_id.asc(),
+            )
             .all()
         )
+
+    def get_last_starting_xi(
+        self,
+        *,
+        team_id: int,
+        before: datetime,
+        league_id: int | None = None,
+    ) -> list[int] | None:
+        query = self.db.query(HistoricalFixture).filter(
+            or_(
+                HistoricalFixture.home_team_id == team_id,
+                HistoricalFixture.away_team_id == team_id,
+            ),
+            HistoricalFixture.kickoff < before,
+        )
+        if league_id is not None:
+            query = query.filter(HistoricalFixture.league_id == league_id)
+        fixtures = query.order_by(HistoricalFixture.kickoff.desc()).limit(50).all()
         for fixture in fixtures:
             lineup = (
                 fixture.home_starting_xi

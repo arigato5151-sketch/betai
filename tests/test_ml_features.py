@@ -5,7 +5,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from app.core.config import settings
 from app.prediction.ml.features import FeatureEngine
+from app.prediction.player_impact import PlayerImpactCalculator
 
 NOW = pd.Timestamp(datetime.now(UTC)).normalize()
 
@@ -185,6 +187,11 @@ def test_inference_feature_vector_has_stable_schema_and_rest_difference() -> Non
     home_frame = matches_frame()
     away_frame = matches_frame().copy()
     away_frame["match_date"] = away_frame["match_date"] - timedelta(days=3)
+    home_impact = PlayerImpactCalculator.assess(
+        {player_id: (9.0 if player_id == 1 else 6.0) for player_id in range(1, 12)},
+        reference_lineup=list(range(1, 12)),
+        missing_player_ids=[1],
+    )
 
     features = FeatureEngine.build_inference_features(
         home_stats={"form": 70, "attack": 75, "defense": 68, "xg": 1.7},
@@ -209,10 +216,12 @@ def test_inference_feature_vector_has_stable_schema_and_rest_difference() -> Non
         fixture_date=NOW,
         opening_odds={"HOME_WIN": 2.5, "DRAW": 3.0, "AWAY_WIN": 4.0},
         current_odds={"HOME_WIN": 2.0, "DRAW": 3.3, "AWAY_WIN": 3.6},
+        home_player_impact=home_impact,
     )
 
     assert list(features) == FeatureEngine.FEATURE_NAMES
     assert features["rest_days_diff"] == -3.0
+    assert -1.0 <= features["fatigue_index"] <= 1.0
     assert features["home_gf_last5"] == 1.67
     assert features["h2h_avg_goals_home"] == 2.0
     assert features["home_missing_players"] == 2.0
@@ -225,6 +234,8 @@ def test_inference_feature_vector_has_stable_schema_and_rest_difference() -> Non
     assert features["odds_movement_home"] == -20.0
     assert features["odds_movement_draw"] == 10.0
     assert features["odds_movement_away"] == -10.0
+    assert features["home_team_strength_ratio"] < 1.0
+    assert features["away_team_strength_ratio"] == 1.0
 
 
 def test_empty_feature_sources_use_documented_defaults() -> None:
@@ -242,6 +253,9 @@ def test_empty_feature_sources_use_documented_defaults() -> None:
     assert features["away_xg"] == 1.2
     assert features["home_form_ema"] == 50.0
     assert features["rest_days_diff"] == 0.0
+    assert features["fatigue_index"] == 0.0
+    assert features["home_team_strength_ratio"] == 1.0
+    assert features["away_team_strength_ratio"] == 1.0
     assert features["home_elo"] == 1500.0
     assert features["odds_movement_home"] == 0.0
     assert features["odds_movement_draw"] == 0.0
@@ -275,12 +289,20 @@ def test_training_uses_same_versioned_snapshot_schema_as_inference() -> None:
         "ml_features_v3",
         "ml_features_v4",
         "ml_features_v5",
+        "ml_features_v6",
     ],
 )
 def test_older_snapshots_are_forward_compatible_with_new_defaults(
     schema_version: str,
 ) -> None:
     excluded_names = {name for name in FeatureEngine.FEATURE_NAMES if "lineup" in name}
+    excluded_names.update(
+        {
+            "fatigue_index",
+            "home_team_strength_ratio",
+            "away_team_strength_ratio",
+        }
+    )
     if schema_version == "ml_features_v1":
         excluded_names.update(
             name for name in FeatureEngine.FEATURE_NAMES if "players" in name
@@ -306,6 +328,9 @@ def test_older_snapshots_are_forward_compatible_with_new_defaults(
     assert features["odds_movement_home"] == 0.0
     assert features["odds_movement_draw"] == 0.0
     assert features["odds_movement_away"] == 0.0
+    assert features["fatigue_index"] == 0.0
+    assert features["home_team_strength_ratio"] == 1.0
+    assert features["away_team_strength_ratio"] == 1.0
     assert features["league_id"] == 0.0
     assert features["home_team_id"] == 0.0
     assert features["away_team_id"] == 0.0
@@ -358,6 +383,226 @@ def test_legacy_training_rows_receive_explicit_full_schema_defaults() -> None:
     assert features["home_elo"] == 1500.0
     assert features["h2h_avg_goals_away"] == 1.0
     assert features["odds_movement_home"] == 0.0
+    assert features["fatigue_index"] == 0.0
+
+
+def test_team_fatigue_uses_lookback_boundary_and_excludes_non_prior_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "FATIGUE_LOOKBACK_DAYS", 14)
+    monkeypatch.setattr(settings, "FATIGUE_MATCH_REFERENCE_COUNT", 4)
+    monkeypatch.setattr(settings, "FATIGUE_IDEAL_REST_DAYS", 7.0)
+    monkeypatch.setattr(settings, "FATIGUE_TRAVEL_REFERENCE_KM", 1000.0)
+    monkeypatch.setattr(settings, "FATIGUE_MATCH_WEIGHT", 1.0)
+    monkeypatch.setattr(settings, "FATIGUE_REST_WEIGHT", 0.0)
+    monkeypatch.setattr(settings, "FATIGUE_TRAVEL_WEIGHT", 0.0)
+    schedule = pd.DataFrame(
+        {
+            "match_date": [
+                NOW - timedelta(days=14),
+                NOW,
+                NOW + timedelta(days=1),
+                "not-a-date",
+            ]
+        }
+    )
+
+    fatigue = FeatureEngine.compute_team_fatigue(schedule, NOW)
+
+    assert fatigue == 0.25
+
+
+def test_team_fatigue_normalizes_naive_and_aware_timestamps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "FATIGUE_LOOKBACK_DAYS", 14)
+    monkeypatch.setattr(settings, "FATIGUE_MATCH_REFERENCE_COUNT", 4)
+    monkeypatch.setattr(settings, "FATIGUE_MATCH_WEIGHT", 1.0)
+    monkeypatch.setattr(settings, "FATIGUE_REST_WEIGHT", 0.0)
+    monkeypatch.setattr(settings, "FATIGUE_TRAVEL_WEIGHT", 0.0)
+    naive_fixture_date = NOW.tz_localize(None)
+    schedule = pd.DataFrame(
+        {
+            "match_date": [
+                naive_fixture_date - timedelta(days=1),
+                NOW - timedelta(days=2),
+            ]
+        }
+    )
+
+    fatigue = FeatureEngine.compute_team_fatigue(schedule, naive_fixture_date)
+
+    assert fatigue == 0.5
+
+
+def test_fatigue_index_combines_congestion_rest_and_away_travel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "FATIGUE_LOOKBACK_DAYS", 14)
+    monkeypatch.setattr(settings, "FATIGUE_MATCH_REFERENCE_COUNT", 4)
+    monkeypatch.setattr(settings, "FATIGUE_IDEAL_REST_DAYS", 7.0)
+    monkeypatch.setattr(settings, "FATIGUE_TRAVEL_REFERENCE_KM", 1000.0)
+    monkeypatch.setattr(settings, "FATIGUE_MATCH_WEIGHT", 0.4)
+    monkeypatch.setattr(settings, "FATIGUE_REST_WEIGHT", 0.35)
+    monkeypatch.setattr(settings, "FATIGUE_TRAVEL_WEIGHT", 0.25)
+    home_schedule = pd.DataFrame(
+        {"match_date": [NOW - timedelta(days=14), NOW - timedelta(days=8)]}
+    )
+    away_schedule = pd.DataFrame(
+        {
+            "match_date": [
+                NOW - timedelta(days=13),
+                NOW - timedelta(days=6),
+                NOW - timedelta(days=3),
+                NOW - timedelta(days=1),
+            ]
+        }
+    )
+
+    fatigue_index = FeatureEngine.compute_fatigue_index(
+        home_schedule,
+        away_schedule,
+        NOW,
+        away_travel_distance_km=1000.0,
+    )
+
+    assert fatigue_index == 0.75
+
+
+@pytest.mark.parametrize(
+    "travel_distance",
+    [None, -10, float("nan"), float("inf"), True, "invalid"],
+)
+def test_fatigue_handles_malformed_inputs_with_neutral_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    travel_distance: object,
+) -> None:
+    monkeypatch.setattr(settings, "FATIGUE_MATCH_WEIGHT", 0.0)
+    monkeypatch.setattr(settings, "FATIGUE_REST_WEIGHT", 0.0)
+    monkeypatch.setattr(settings, "FATIGUE_TRAVEL_WEIGHT", 1.0)
+
+    assert (
+        FeatureEngine.compute_fatigue_index(
+            pd.DataFrame({"unexpected": [1]}),
+            pd.DataFrame({"match_date": ["not-a-date"]}),
+            NOW,
+            away_travel_distance_km=travel_distance,
+        )
+        == 0.0
+    )
+    assert (
+        FeatureEngine.compute_team_fatigue(
+            pd.DataFrame(),
+            "not-a-date",
+            travel_distance_km=500,
+        )
+        == 0.0
+    )
+
+
+def test_build_inference_features_uses_separate_schedule_and_travel_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "FATIGUE_LOOKBACK_DAYS", 14)
+    monkeypatch.setattr(settings, "FATIGUE_MATCH_REFERENCE_COUNT", 4)
+    monkeypatch.setattr(settings, "FATIGUE_IDEAL_REST_DAYS", 7.0)
+    monkeypatch.setattr(settings, "FATIGUE_TRAVEL_REFERENCE_KM", 1000.0)
+    monkeypatch.setattr(settings, "FATIGUE_MATCH_WEIGHT", 0.0)
+    monkeypatch.setattr(settings, "FATIGUE_REST_WEIGHT", 0.0)
+    monkeypatch.setattr(settings, "FATIGUE_TRAVEL_WEIGHT", 1.0)
+
+    features = FeatureEngine.build_inference_features(
+        home_stats={},
+        away_stats={},
+        home_matches_df=pd.DataFrame(),
+        away_matches_df=pd.DataFrame(),
+        h2h_rates={},
+        fixture_date=NOW,
+        home_schedule_df=pd.DataFrame({"match_date": [NOW - timedelta(days=2)]}),
+        away_schedule_df=pd.DataFrame({"match_date": [NOW - timedelta(days=1)]}),
+        away_travel_distance_km=500.0,
+    )
+
+    assert list(features) == FeatureEngine.FEATURE_NAMES
+    assert features["fatigue_index"] == 0.5
+
+
+def test_build_features_normalizes_naive_kickoff_for_rest_difference() -> None:
+    features = FeatureEngine.build_inference_features(
+        home_stats={},
+        away_stats={},
+        home_matches_df=pd.DataFrame({"match_date": [NOW - timedelta(days=2)]}),
+        away_matches_df=pd.DataFrame({"match_date": [NOW - timedelta(days=4)]}),
+        h2h_rates={},
+        fixture_date=NOW.tz_localize(None),
+    )
+
+    assert features["rest_days_diff"] == -2.0
+
+
+def test_empty_explicit_schedule_falls_back_to_recent_match_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "FATIGUE_MATCH_REFERENCE_COUNT", 4)
+    monkeypatch.setattr(settings, "FATIGUE_MATCH_WEIGHT", 1.0)
+    monkeypatch.setattr(settings, "FATIGUE_REST_WEIGHT", 0.0)
+    monkeypatch.setattr(settings, "FATIGUE_TRAVEL_WEIGHT", 0.0)
+    features = FeatureEngine.build_inference_features(
+        home_stats={},
+        away_stats={},
+        home_matches_df=pd.DataFrame({"match_date": [NOW - timedelta(days=5)]}),
+        away_matches_df=pd.DataFrame(
+            {
+                "match_date": [
+                    NOW - timedelta(days=5),
+                    NOW - timedelta(days=2),
+                ]
+            }
+        ),
+        h2h_rates={},
+        fixture_date=NOW,
+        home_schedule_df=pd.DataFrame(),
+        away_schedule_df=pd.DataFrame(),
+    )
+
+    assert features["fatigue_index"] == 0.25
+
+
+def test_asymmetric_schedule_coverage_keeps_schedule_penalty_neutral(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "FATIGUE_MATCH_WEIGHT", 1.0)
+    monkeypatch.setattr(settings, "FATIGUE_REST_WEIGHT", 0.0)
+    monkeypatch.setattr(settings, "FATIGUE_TRAVEL_WEIGHT", 0.0)
+    features = FeatureEngine.build_inference_features(
+        home_stats={},
+        away_stats={},
+        home_matches_df=pd.DataFrame({"match_date": [NOW - timedelta(days=1)]}),
+        away_matches_df=pd.DataFrame(),
+        h2h_rates={},
+        fixture_date=NOW,
+    )
+
+    assert features["rest_days_diff"] == 0.0
+    assert features["fatigue_index"] == 0.0
+
+
+def test_build_inference_features_keeps_fatigue_neutral_without_kickoff() -> None:
+    features = FeatureEngine.build_inference_features(
+        home_stats={},
+        away_stats={},
+        home_matches_df=pd.DataFrame({"match_date": [NOW - timedelta(days=2)]}),
+        away_matches_df=pd.DataFrame({"match_date": [NOW - timedelta(days=4)]}),
+        h2h_rates={},
+        fixture_date=None,
+        away_schedule_df=pd.DataFrame(
+            {"match_date": [pd.Timestamp.now(tz="UTC") - timedelta(days=1)]}
+        ),
+        away_travel_distance_km=3000.0,
+    )
+
+    assert features["fatigue_index"] == 0.0
+    assert features["rest_days_diff"] == 0.0
 
 
 def test_inference_preserves_raw_categorical_ids_for_native_boosters() -> None:

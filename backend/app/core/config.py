@@ -182,6 +182,46 @@ class Settings(BaseSettings):
     RECENT_FORM_MATCH_COUNT: int = Field(default=5, ge=1, le=20)
     # Eski yerel snapshot yerine canlı API fallback'ine geçiş eşiği.
     HISTORICAL_FORM_MAX_AGE_DAYS: int = Field(default=45, ge=1, le=365)
+    # Oyuncu rating kapsamı yetersizse kadro etkisi nötr kalır.
+    PLAYER_IMPACT_MIN_RATED_STARTERS: int = Field(default=7, ge=1, le=11)
+    PLAYER_IMPACT_LOOKBACK_MATCHES: int = Field(default=10, ge=1, le=50)
+    PLAYER_IMPACT_RATING_DECAY: float = Field(
+        default=0.85, gt=0, le=1, allow_inf_nan=False
+    )
+    PLAYER_IMPACT_REPLACEMENT_FACTOR: float = Field(
+        default=0.75, ge=0, le=1, allow_inf_nan=False
+    )
+    PLAYER_IMPACT_MIN_STRENGTH_RATIO: float = Field(
+        default=0.70, gt=0, le=1, allow_inf_nan=False
+    )
+    PLAYER_IMPACT_MAX_STRENGTH_RATIO: float = Field(
+        default=1.05, ge=1, le=1.25, allow_inf_nan=False
+    )
+    PLAYER_IMPACT_XG_ELASTICITY: float = Field(
+        default=1.0, gt=0, le=3, allow_inf_nan=False
+    )
+    PLAYER_IMPACT_MIN_XG_MULTIPLIER: float = Field(
+        default=0.75, gt=0, le=1, allow_inf_nan=False
+    )
+    PLAYER_CRITICAL_ABSENCE_WEIGHT: float = Field(
+        default=0.25, ge=0, le=1, allow_inf_nan=False
+    )
+    PLAYER_QUESTIONABLE_ABSENCE_WEIGHT: float = Field(
+        default=0.35, ge=0, le=1, allow_inf_nan=False
+    )
+    PLAYER_CONTEXT_SYNC_MAX_FIXTURES: int = Field(default=20, ge=0, le=500)
+    PLAYER_CONTEXT_SYNC_CONCURRENCY: int = Field(default=3, ge=1, le=20)
+    FATIGUE_LOOKBACK_DAYS: int = Field(default=14, ge=1, le=60)
+    FATIGUE_MATCH_REFERENCE_COUNT: int = Field(default=4, ge=1, le=20)
+    FATIGUE_IDEAL_REST_DAYS: float = Field(
+        default=7.0, gt=0, le=30, allow_inf_nan=False
+    )
+    FATIGUE_TRAVEL_REFERENCE_KM: float = Field(
+        default=3000.0, gt=0, le=20000, allow_inf_nan=False
+    )
+    FATIGUE_MATCH_WEIGHT: float = Field(default=0.45, ge=0, le=1, allow_inf_nan=False)
+    FATIGUE_REST_WEIGHT: float = Field(default=0.40, ge=0, le=1, allow_inf_nan=False)
+    FATIGUE_TRAVEL_WEIGHT: float = Field(default=0.15, ge=0, le=1, allow_inf_nan=False)
     # Kalibre edildi: bkz. docs/CALIBRATION.md
     ELO_K_FACTOR: float = Field(default=32.0, gt=0, le=100)
     # Kalibre edildi: bkz. docs/CALIBRATION.md
@@ -271,6 +311,25 @@ class Settings(BaseSettings):
         if len(("stats", "ml", "market")) * self.ENSEMBLE_MIN_SOURCE_WEIGHT >= 1:
             raise ValueError(
                 "ENSEMBLE_MIN_SOURCE_WEIGHT must leave posterior mass to distribute"
+            )
+        fatigue_weight = (
+            self.FATIGUE_MATCH_WEIGHT
+            + self.FATIGUE_REST_WEIGHT
+            + self.FATIGUE_TRAVEL_WEIGHT
+        )
+        if not abs(fatigue_weight - 1.0) <= 1e-9:
+            raise ValueError("fatigue feature weights must sum to 1.0")
+        if (
+            self.PLAYER_IMPACT_MIN_STRENGTH_RATIO
+            > self.PLAYER_IMPACT_MAX_STRENGTH_RATIO
+        ):
+            raise ValueError(
+                "PLAYER_IMPACT_MIN_STRENGTH_RATIO cannot exceed the maximum"
+            )
+        if self.PLAYER_IMPACT_MIN_XG_MULTIPLIER > self.PLAYER_IMPACT_MAX_STRENGTH_RATIO:
+            raise ValueError(
+                "PLAYER_IMPACT_MIN_XG_MULTIPLIER cannot exceed the maximum "
+                "strength ratio"
             )
         return self
 

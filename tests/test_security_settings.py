@@ -125,6 +125,113 @@ def test_booster_and_bma_settings_reject_invalid_values(
         Settings(_env_file=None, **{field: value})
 
 
+def test_player_impact_and_fatigue_settings_are_configurable() -> None:
+    settings = Settings(
+        _env_file=None,
+        PLAYER_IMPACT_MIN_RATED_STARTERS=8,
+        PLAYER_IMPACT_LOOKBACK_MATCHES=12,
+        PLAYER_IMPACT_RATING_DECAY=0.9,
+        PLAYER_IMPACT_REPLACEMENT_FACTOR=0.8,
+        PLAYER_IMPACT_MIN_STRENGTH_RATIO=0.75,
+        PLAYER_IMPACT_MAX_STRENGTH_RATIO=1.1,
+        PLAYER_IMPACT_XG_ELASTICITY=1.2,
+        PLAYER_IMPACT_MIN_XG_MULTIPLIER=0.8,
+        PLAYER_CRITICAL_ABSENCE_WEIGHT=0.3,
+        PLAYER_QUESTIONABLE_ABSENCE_WEIGHT=0.2,
+        PLAYER_CONTEXT_SYNC_MAX_FIXTURES=25,
+        PLAYER_CONTEXT_SYNC_CONCURRENCY=4,
+        FATIGUE_LOOKBACK_DAYS=21,
+        FATIGUE_MATCH_REFERENCE_COUNT=5,
+        FATIGUE_IDEAL_REST_DAYS=6.0,
+        FATIGUE_TRAVEL_REFERENCE_KM=2500.0,
+        FATIGUE_MATCH_WEIGHT=0.5,
+        FATIGUE_REST_WEIGHT=0.3,
+        FATIGUE_TRAVEL_WEIGHT=0.2,
+    )
+
+    assert settings.PLAYER_IMPACT_MIN_RATED_STARTERS == 8
+    assert settings.PLAYER_IMPACT_LOOKBACK_MATCHES == 12
+    assert settings.PLAYER_IMPACT_RATING_DECAY == 0.9
+    assert settings.PLAYER_IMPACT_REPLACEMENT_FACTOR == 0.8
+    assert settings.PLAYER_IMPACT_MIN_STRENGTH_RATIO == 0.75
+    assert settings.PLAYER_IMPACT_MAX_STRENGTH_RATIO == 1.1
+    assert settings.PLAYER_IMPACT_XG_ELASTICITY == 1.2
+    assert settings.PLAYER_IMPACT_MIN_XG_MULTIPLIER == 0.8
+    assert settings.PLAYER_CRITICAL_ABSENCE_WEIGHT == 0.3
+    assert settings.PLAYER_QUESTIONABLE_ABSENCE_WEIGHT == 0.2
+    assert settings.PLAYER_CONTEXT_SYNC_MAX_FIXTURES == 25
+    assert settings.PLAYER_CONTEXT_SYNC_CONCURRENCY == 4
+    assert settings.FATIGUE_LOOKBACK_DAYS == 21
+    assert settings.FATIGUE_MATCH_REFERENCE_COUNT == 5
+    assert settings.FATIGUE_IDEAL_REST_DAYS == 6.0
+    assert settings.FATIGUE_TRAVEL_REFERENCE_KM == 2500.0
+    assert settings.FATIGUE_MATCH_WEIGHT == 0.5
+    assert settings.FATIGUE_REST_WEIGHT == 0.3
+    assert settings.FATIGUE_TRAVEL_WEIGHT == 0.2
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("PLAYER_IMPACT_MIN_RATED_STARTERS", 0),
+        ("PLAYER_IMPACT_MIN_RATED_STARTERS", 12),
+        ("PLAYER_IMPACT_LOOKBACK_MATCHES", 0),
+        ("PLAYER_IMPACT_LOOKBACK_MATCHES", 51),
+        ("PLAYER_IMPACT_RATING_DECAY", 0),
+        ("PLAYER_IMPACT_RATING_DECAY", float("nan")),
+        ("PLAYER_IMPACT_REPLACEMENT_FACTOR", -0.01),
+        ("PLAYER_IMPACT_REPLACEMENT_FACTOR", 1.01),
+        ("PLAYER_IMPACT_MIN_STRENGTH_RATIO", 0),
+        ("PLAYER_IMPACT_MIN_STRENGTH_RATIO", 1.01),
+        ("PLAYER_IMPACT_MAX_STRENGTH_RATIO", 0.99),
+        ("PLAYER_IMPACT_MAX_STRENGTH_RATIO", 1.26),
+        ("PLAYER_IMPACT_XG_ELASTICITY", 0),
+        ("PLAYER_IMPACT_XG_ELASTICITY", float("inf")),
+        ("PLAYER_IMPACT_MIN_XG_MULTIPLIER", 0),
+        ("PLAYER_IMPACT_MIN_XG_MULTIPLIER", 1.01),
+        ("PLAYER_CRITICAL_ABSENCE_WEIGHT", -0.01),
+        ("PLAYER_CRITICAL_ABSENCE_WEIGHT", 1.01),
+        ("PLAYER_QUESTIONABLE_ABSENCE_WEIGHT", -0.01),
+        ("PLAYER_QUESTIONABLE_ABSENCE_WEIGHT", float("nan")),
+        ("PLAYER_CONTEXT_SYNC_MAX_FIXTURES", -1),
+        ("PLAYER_CONTEXT_SYNC_MAX_FIXTURES", 501),
+        ("PLAYER_CONTEXT_SYNC_CONCURRENCY", 0),
+        ("PLAYER_CONTEXT_SYNC_CONCURRENCY", 21),
+        ("FATIGUE_LOOKBACK_DAYS", 0),
+        ("FATIGUE_LOOKBACK_DAYS", 61),
+        ("FATIGUE_MATCH_REFERENCE_COUNT", 0),
+        ("FATIGUE_MATCH_REFERENCE_COUNT", 21),
+        ("FATIGUE_IDEAL_REST_DAYS", 0),
+        ("FATIGUE_IDEAL_REST_DAYS", 31),
+        ("FATIGUE_TRAVEL_REFERENCE_KM", 0),
+        ("FATIGUE_TRAVEL_REFERENCE_KM", 20001),
+        ("FATIGUE_MATCH_WEIGHT", -0.01),
+        ("FATIGUE_MATCH_WEIGHT", 1.01),
+        ("FATIGUE_REST_WEIGHT", float("inf")),
+        ("FATIGUE_TRAVEL_WEIGHT", float("nan")),
+    ],
+)
+def test_player_impact_and_fatigue_settings_reject_invalid_bounds(
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{field: value})
+
+
+def test_fatigue_weights_must_sum_to_one() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="fatigue feature weights must sum to 1.0",
+    ):
+        Settings(
+            _env_file=None,
+            FATIGUE_MATCH_WEIGHT=0.5,
+            FATIGUE_REST_WEIGHT=0.4,
+            FATIGUE_TRAVEL_WEIGHT=0.2,
+        )
+
+
 def make_origin_client(require_origin_header: bool = True) -> TestClient:
     app = FastAPI()
     app.add_middleware(

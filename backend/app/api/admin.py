@@ -1,13 +1,14 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.auth import CurrentUser, require_permission
 from app.core.passwords import hash_password
-from app.db.models import Role, User
+from app.db.models import Role, TeamLocation, User
+from app.db.player_context_repository import PlayerContextRepository
 from app.db.session import get_db
 from app.db.user_repository import UserRepository
 
@@ -78,6 +79,75 @@ class AdminRoleResponse(BaseModel):
     permissions: list[str]
 
 
+class AdminTeamLocationUpsert(BaseModel):
+    data_source: str = Field(
+        default="api_football",
+        min_length=1,
+        max_length=50,
+        pattern=r"^[A-Za-z0-9_.-]+$",
+    )
+    team_id: int = Field(..., gt=0)
+    name: str = Field(..., min_length=1, max_length=100)
+    latitude: float | None = Field(default=None, ge=-90, le=90, allow_inf_nan=False)
+    longitude: float | None = Field(
+        default=None,
+        ge=-180,
+        le=180,
+        allow_inf_nan=False,
+    )
+
+    @field_validator("team_id", "latitude", "longitude", mode="before")
+    @classmethod
+    def reject_boolean_numbers(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("Boolean değer sayısal alanlarda kullanılamaz.")
+        return value
+
+    @field_validator("data_source", mode="before")
+    @classmethod
+    def normalize_data_source(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("Değer boş olamaz.")
+        return normalized
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Değer boş olamaz.")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_coordinate_pair(self) -> "AdminTeamLocationUpsert":
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("Enlem ve boylam birlikte sağlanmalıdır.")
+        return self
+
+
+class AdminTeamLocationBatch(BaseModel):
+    locations: list[AdminTeamLocationUpsert] = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+    )
+
+
+class AdminTeamLocationResponse(BaseModel):
+    data_source: str
+    team_id: int
+    name: str
+    latitude: float | None
+    longitude: float | None
+
+
+class AdminTeamLocationUpsertResponse(BaseModel):
+    processed: int = Field(..., ge=0)
+
+
 def _user_response(user: User) -> AdminUserResponse:
     return AdminUserResponse(
         id=user.id,
@@ -96,6 +166,16 @@ def _role_response(role: Role) -> AdminRoleResponse:
         name=role.name,
         description=role.description,
         permissions=sorted(permission.code for permission in role.permissions),
+    )
+
+
+def _team_location_response(location: TeamLocation) -> AdminTeamLocationResponse:
+    return AdminTeamLocationResponse(
+        data_source=location.data_source,
+        team_id=location.team_id,
+        name=location.name,
+        latitude=location.latitude,
+        longitude=location.longitude,
     )
 
 
@@ -171,3 +251,47 @@ def list_roles(
     db: Session = Depends(get_db),
 ) -> list[AdminRoleResponse]:
     return [_role_response(role) for role in UserRepository(db).list_roles()]
+
+
+@router.get(
+    "/team-locations",
+    response_model=list[AdminTeamLocationResponse],
+)
+def list_team_locations(
+    data_source: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=50,
+        pattern=r"^[A-Za-z0-9_.-]+$",
+    ),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    _: CurrentUser = Depends(require_permission("users:manage")),
+    db: Session = Depends(get_db),
+) -> list[AdminTeamLocationResponse]:
+    """List travel-coordinate inputs managed by an administrator."""
+    return [
+        _team_location_response(location)
+        for location in PlayerContextRepository(db).list_team_locations(
+            data_source=data_source,
+            limit=limit,
+            offset=offset,
+        )
+    ]
+
+
+@router.put(
+    "/team-locations",
+    response_model=AdminTeamLocationUpsertResponse,
+)
+def upsert_team_locations(
+    body: AdminTeamLocationBatch,
+    _: CurrentUser = Depends(require_permission("users:manage")),
+    db: Session = Depends(get_db),
+) -> AdminTeamLocationUpsertResponse:
+    """Validate and atomically upsert team base coordinates used for travel load."""
+    repository = PlayerContextRepository(db)
+    processed = repository.upsert_team_locations(
+        [location.model_dump() for location in body.locations]
+    )
+    return AdminTeamLocationUpsertResponse(processed=processed)

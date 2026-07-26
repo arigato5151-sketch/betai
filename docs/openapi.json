@@ -166,6 +166,136 @@
         ]
       }
     },
+    "/api/admin/team-locations": {
+      "get": {
+        "tags": [
+          "RBAC administration"
+        ],
+        "summary": "List Team Locations",
+        "description": "List travel-coordinate inputs managed by an administrator.",
+        "operationId": "list_team_locations_api_admin_team_locations_get",
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "data_source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 50,
+                  "pattern": "^[A-Za-z0-9_.-]+$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Data Source"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminTeamLocationResponse"
+                  },
+                  "title": "Response List Team Locations Api Admin Team Locations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "RBAC administration"
+        ],
+        "summary": "Upsert Team Locations",
+        "description": "Validate and atomically upsert team base coordinates used for travel load.",
+        "operationId": "upsert_team_locations_api_admin_team_locations_put",
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminTeamLocationBatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminTeamLocationUpsertResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/status": {
       "get": {
         "summary": "Get Platform Status",
@@ -1041,6 +1171,140 @@
         ],
         "title": "AdminRoleResponse"
       },
+      "AdminTeamLocationBatch": {
+        "properties": {
+          "locations": {
+            "items": {
+              "$ref": "#/components/schemas/AdminTeamLocationUpsert"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Locations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "locations"
+        ],
+        "title": "AdminTeamLocationBatch"
+      },
+      "AdminTeamLocationResponse": {
+        "properties": {
+          "data_source": {
+            "type": "string",
+            "title": "Data Source"
+          },
+          "team_id": {
+            "type": "integer",
+            "title": "Team Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitude"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitude"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data_source",
+          "team_id",
+          "name",
+          "latitude",
+          "longitude"
+        ],
+        "title": "AdminTeamLocationResponse"
+      },
+      "AdminTeamLocationUpsert": {
+        "properties": {
+          "data_source": {
+            "type": "string",
+            "maxLength": 50,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Data Source",
+            "default": "api_football"
+          },
+          "team_id": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Team Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 90.0,
+                "minimum": -90.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitude"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 180.0,
+                "minimum": -180.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitude"
+          }
+        },
+        "type": "object",
+        "required": [
+          "team_id",
+          "name"
+        ],
+        "title": "AdminTeamLocationUpsert"
+      },
+      "AdminTeamLocationUpsertResponse": {
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Processed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "processed"
+        ],
+        "title": "AdminTeamLocationUpsertResponse"
+      },
       "AdminUserCreate": {
         "properties": {
           "username": {
@@ -1327,6 +1591,20 @@
             ],
             "title": "Kickoff",
             "description": "Fixture kickoff used for point-in-time rest features"
+          },
+          "away_travel_distance_km": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 20000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Travel Distance Km",
+            "description": "Optional away-team base-to-venue distance. Server-side team locations are used when omitted."
           }
         },
         "type": "object",

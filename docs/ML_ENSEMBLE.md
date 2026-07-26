@@ -19,8 +19,43 @@ sırasında bilinmeyen değerleri missing olarak ele alan pandas kategorilerine
 çevirir. Logistic Regression, Gradient Boosting, XGBoost ve Random Forest ham
 ID kolonlarını görmez; mevcut lig one-hot feature'larını kullanmaya devam eder.
 
-Eski `ml_features_v1-v5` snapshot'ları desteklenir. Eksik kategorik ID'ler `0`
-unknown token'ına dönüşür. Yeni snapshot sürümü `ml_features_v6`'dır.
+Eski `ml_features_v1-v6` snapshot'ları desteklenir. Eksik kategorik ID'ler `0`
+unknown token'ına dönüşür.
+
+## Feature schema v7
+
+Aktif snapshot sürümü `ml_features_v7`'dir. Bu sürüm model matrisine üç sayısal
+alan ekler:
+
+- `home_team_strength_ratio`
+- `away_team_strength_ratio`
+- `fatigue_index`
+
+Team Strength Ratio, geçmiş oyuncu rating'leriyle değerlenmiş son geçerli ilk 11'i
+güncel veya projekte edilen kadroyla karşılaştırır. Yeterli rating kapsamı yoksa
+oran `1.0` olur. Aynı nötr değer, eski snapshot'lar v7 matrisine yükseltilirken de
+kullanılır.
+
+`fatigue_index`, deplasman takımının maç yoğunluğu/dinlenme/seyahat yükü ile ev
+sahibinin maç yoğunluğu/dinlenme yükü arasındaki farktır. Alan `[-1, 1]` aralığındadır;
+pozitif değer deplasman tarafının daha yorgun olduğunu gösterir. Nokta-zamanlı tarih
+veya seyahat verisi bulunmadığında değer `0.0` olur.
+
+Rating geçmişi `historical_player_performances`, Haversine seyahat bağlamı
+`team_locations` tablosundan gelir; iki tablo da `20260726_0010` migration'ına
+dahildir. Sorgular yalnız tahmin kickoff'undan eski performansları görür.
+StatsEngine aynı strength ratio'dan üretilen bounded çarpanı Poisson lambda değerine
+uygular. Rating kapsamı yetersizse ratio ve xG çarpanı `1.0`, konum veya fikstür
+bağlamı yoksa fatigue `0.0` kalır.
+
+Bu alanlar mevcut kategorik preprocessing'i değiştirmez. CatBoost ve LightGBM takım
+ve lig kimliklerini native kategorik olarak işlerken üç v7 alanını sayısal feature
+olarak tüketir. Diğer adaylar da Team Strength Ratio ve fatigue değerlerini görür,
+ancak ham takım/lig ID'lerini görmez.
+
+Oyuncu-etkisi formülü, Poisson xG bağlantısı, veri sızıntısı koruması ve fatigue
+bileşenleri [`PLAYER_IMPACT_FATIGUE.md`](PLAYER_IMPACT_FATIGUE.md) belgesinde
+ayrıntılıdır.
 
 ## Lig bazlı Bayesian Model Averaging
 

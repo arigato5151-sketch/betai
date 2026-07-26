@@ -128,3 +128,48 @@ değerleri de bu 37 alanlık çalışmadan sonra eklenmiştir. Bunlar güvenli b
 değerleridir; lig başına yeterli çözülmüş tahmin birikmeden kalibre edilmiş kabul
 edilmemelidir. Ayrıntılı yöntem ve fallback zinciri için
 `docs/ML_ENSEMBLE.md` belgesine bakın.
+
+## Player impact ve fatigue parametreleri
+
+`ml_features_v7` ile eklenen aşağıdaki parametreler de 37 alanlık kalibrasyon
+çalışmasının parçası değildir:
+
+- `PLAYER_IMPACT_MIN_RATED_STARTERS`
+- `PLAYER_IMPACT_LOOKBACK_MATCHES`
+- `PLAYER_IMPACT_RATING_DECAY`
+- `PLAYER_IMPACT_REPLACEMENT_FACTOR`
+- `PLAYER_IMPACT_MIN_STRENGTH_RATIO`
+- `PLAYER_IMPACT_MAX_STRENGTH_RATIO`
+- `PLAYER_IMPACT_XG_ELASTICITY`
+- `PLAYER_IMPACT_MIN_XG_MULTIPLIER`
+- `PLAYER_CRITICAL_ABSENCE_WEIGHT`
+- `PLAYER_QUESTIONABLE_ABSENCE_WEIGHT`
+- `FATIGUE_LOOKBACK_DAYS`
+- `FATIGUE_MATCH_REFERENCE_COUNT`
+- `FATIGUE_IDEAL_REST_DAYS`
+- `FATIGUE_TRAVEL_REFERENCE_KM`
+- `FATIGUE_MATCH_WEIGHT`
+- `FATIGUE_REST_WEIGHT`
+- `FATIGUE_TRAVEL_WEIGHT`
+
+Mevcut 8.333 maçlık veri setinde geçmiş oyuncu rating kapsamı ve takım konum
+eşleşmeleri v7 feature'larını güvenilir biçimde yeniden üretmeye yeterli değildir.
+Ayrıca mevcut `scripts/calibrate_constants.py` çalışması player-performance ve
+seyahat bağlamını grid'e dahil etmez. Bu nedenle yukarıdaki değerler yalnız bounded,
+nötr fallback'li başlangıç varsayımlarıdır; Brier Score veya ROI üstünlüğü
+kanıtlanmış değerler değildir.
+
+Out-of-time kalibrasyon, en az bir tam sezon için kickoff öncesi oyuncu
+rating/availability snapshot'ları ve doğrulanmış takım koordinatları biriktikten
+sonra yapılmalıdır. Önerilen çalışma:
+
+1. Oyuncu rating ve fixture sorgularında katı `< kickoff` kesimini koru.
+2. Player impact ve fatigue gruplarını önce ayrı ablation testlerinde değerlendir.
+3. Strength ratio/xG elasticity ile fatigue ağırlıklarını yalnız ileri tarihli
+   holdout üzerinde grid-search et.
+4. Lig ve veri-kapsamı dilimlerinde Brier, log-loss ve ROI'yi birlikte raporla.
+5. İyileşme görülmezse production varsayılanlarını değiştirme ve nötr fallback'i
+   koru.
+
+Formüller, veri tabloları ve fallback sözleşmesi için
+`docs/PLAYER_IMPACT_FATIGUE.md` belgesine bakın.

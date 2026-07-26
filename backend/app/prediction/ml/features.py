@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 
 from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS
+from app.core.config import settings
+from app.prediction.player_impact import TeamStrengthImpact
 
 LEAGUE_ONE_HOT_FEATURES = [
     f"league_{league_id}" for league_id in sorted(cast(set[int], ALLOWED_LEAGUE_IDS))
@@ -13,13 +15,14 @@ LEAGUE_ONE_HOT_FEATURES = [
 
 
 class FeatureEngine:
-    SCHEMA_VERSION = "ml_features_v6"
+    SCHEMA_VERSION = "ml_features_v7"
     COMPATIBLE_SNAPSHOT_VERSIONS = {
         "ml_features_v1",
         "ml_features_v2",
         "ml_features_v3",
         "ml_features_v4",
         "ml_features_v5",
+        "ml_features_v6",
         SCHEMA_VERSION,
     }
     CATEGORICAL_FEATURE_NAMES = (
@@ -37,9 +40,12 @@ class FeatureEngine:
         "away_attack",
         "away_defense",
         "away_xg",
+        "home_team_strength_ratio",
+        "away_team_strength_ratio",
         "home_form_ema",
         "away_form_ema",
         "rest_days_diff",
+        "fatigue_index",
         "home_clean_sheet_streak",
         "away_clean_sheet_streak",
         "home_scoring_streak",
@@ -83,9 +89,12 @@ class FeatureEngine:
         "away_attack": 50.0,
         "away_defense": 50.0,
         "away_xg": 1.2,
+        "home_team_strength_ratio": 1.0,
+        "away_team_strength_ratio": 1.0,
         "home_form_ema": 50.0,
         "away_form_ema": 50.0,
         "rest_days_diff": 0.0,
+        "fatigue_index": 0.0,
         "home_clean_sheet_streak": 0.0,
         "away_clean_sheet_streak": 0.0,
         "home_scoring_streak": 0.0,
@@ -402,6 +411,139 @@ class FeatureEngine:
         }
 
     @staticmethod
+    def _as_utc_timestamp(value: object) -> pd.Timestamp | None:
+        if value is None:
+            return None
+        try:
+            timestamp = pd.Timestamp(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if pd.isna(timestamp):
+            return None
+        try:
+            if timestamp.tzinfo is None:
+                return timestamp.tz_localize("UTC")
+            return timestamp.tz_convert("UTC")
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @staticmethod
+    def _safe_non_negative_float(value: object) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            return 0.0
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return numeric if math.isfinite(numeric) and numeric >= 0.0 else 0.0
+
+    @staticmethod
+    def fatigue_schedule_horizon_days() -> int:
+        """Cover both the congestion window and the configured rest horizon."""
+        return max(
+            int(settings.FATIGUE_LOOKBACK_DAYS),
+            math.ceil(float(settings.FATIGUE_IDEAL_REST_DAYS)),
+        )
+
+    @classmethod
+    def _prior_match_dates(
+        cls,
+        matches_df: pd.DataFrame,
+        fixture_date: object,
+    ) -> pd.Series:
+        fixture_at = cls._as_utc_timestamp(fixture_date)
+        if (
+            fixture_at is None
+            or not isinstance(matches_df, pd.DataFrame)
+            or "match_date" not in matches_df.columns
+        ):
+            return pd.Series(dtype="datetime64[ns, UTC]")
+        try:
+            dates = pd.to_datetime(
+                matches_df["match_date"],
+                errors="coerce",
+                utc=True,
+            ).dropna()
+        except (TypeError, ValueError, OverflowError):
+            return pd.Series(dtype="datetime64[ns, UTC]")
+        return dates[dates < fixture_at]
+
+    @classmethod
+    def compute_team_fatigue(
+        cls,
+        matches_df: pd.DataFrame,
+        fixture_date: object,
+        travel_distance_km: object = 0.0,
+    ) -> float:
+        """Return a bounded team load from congestion, short rest and travel."""
+        fixture_at = cls._as_utc_timestamp(fixture_date)
+        if fixture_at is None:
+            return 0.0
+
+        # Point-in-time safety: the current fixture and any future rows never count.
+        prior_dates = cls._prior_match_dates(matches_df, fixture_at)
+        lookback_start = fixture_at - pd.Timedelta(days=settings.FATIGUE_LOOKBACK_DAYS)
+        matches_in_window = int((prior_dates >= lookback_start).sum())
+        match_load = float(
+            np.clip(
+                matches_in_window / settings.FATIGUE_MATCH_REFERENCE_COUNT,
+                0.0,
+                1.0,
+            )
+        )
+
+        rest_load = 0.0
+        if not prior_dates.empty:
+            latest_match = prior_dates.max()
+            rest_days = max(
+                0.0,
+                (fixture_at - latest_match).total_seconds() / 86400.0,
+            )
+            rest_load = float(
+                np.clip(
+                    (
+                        settings.FATIGUE_IDEAL_REST_DAYS
+                        - min(rest_days, settings.FATIGUE_IDEAL_REST_DAYS)
+                    )
+                    / settings.FATIGUE_IDEAL_REST_DAYS,
+                    0.0,
+                    1.0,
+                )
+            )
+
+        travel_load = float(
+            np.clip(
+                cls._safe_non_negative_float(travel_distance_km)
+                / settings.FATIGUE_TRAVEL_REFERENCE_KM,
+                0.0,
+                1.0,
+            )
+        )
+        fatigue = (
+            settings.FATIGUE_MATCH_WEIGHT * match_load
+            + settings.FATIGUE_REST_WEIGHT * rest_load
+            + settings.FATIGUE_TRAVEL_WEIGHT * travel_load
+        )
+        return round(float(np.clip(fatigue, 0.0, 1.0)), 4)
+
+    @classmethod
+    def compute_fatigue_index(
+        cls,
+        home_matches_df: pd.DataFrame,
+        away_matches_df: pd.DataFrame,
+        fixture_date: object,
+        away_travel_distance_km: object = 0.0,
+    ) -> float:
+        """Return away minus home load; positive values favour the home team."""
+        home_fatigue = cls.compute_team_fatigue(home_matches_df, fixture_date)
+        away_fatigue = cls.compute_team_fatigue(
+            away_matches_df,
+            fixture_date,
+            travel_distance_km=away_travel_distance_km,
+        )
+        return round(float(np.clip(away_fatigue - home_fatigue, -1.0, 1.0)), 4)
+
+    @staticmethod
     def build_inference_features(
         home_stats: Dict[str, Any],
         away_stats: Dict[str, Any],
@@ -419,6 +561,11 @@ class FeatureEngine:
         away_team_id: Optional[int] = None,
         opening_odds: Mapping[str, object] | None = None,
         current_odds: Mapping[str, object] | None = None,
+        home_schedule_df: Optional[pd.DataFrame] = None,
+        away_schedule_df: Optional[pd.DataFrame] = None,
+        away_travel_distance_km: object = 0.0,
+        home_player_impact: TeamStrengthImpact | None = None,
+        away_player_impact: TeamStrengthImpact | None = None,
     ) -> Dict[str, float]:
         """
         Robust feature vector inşa et - training'de kullanılan aynı formüllerle.
@@ -435,11 +582,7 @@ class FeatureEngine:
             else pd.DataFrame()
         )
         h2h_rates = h2h_rates or {}
-        fixture_date = (
-            pd.Timestamp(fixture_date)
-            if fixture_date is not None
-            else pd.Timestamp.today().normalize()
-        )
+        fixture_at = FeatureEngine._as_utc_timestamp(fixture_date)
         h2h_matches = h2h_matches or []
         availability = availability or {}
         lineup_context = lineup_context or {}
@@ -448,17 +591,62 @@ class FeatureEngine:
         home_form_ema = FeatureEngine.compute_form_ema(home_matches_df, span=5)
         away_form_ema = FeatureEngine.compute_form_ema(away_matches_df, span=5)
 
-        home_rest = away_rest = 7
-        if not home_matches_df.empty:
-            home_rest = max(
-                1, int((fixture_date - home_matches_df["match_date"].max()).days)
-            )
-        if not away_matches_df.empty:
-            away_rest = max(
-                1, int((fixture_date - away_matches_df["match_date"].max()).days)
-            )
+        home_schedule = (
+            home_schedule_df
+            if isinstance(home_schedule_df, pd.DataFrame) and not home_schedule_df.empty
+            else home_matches_df
+        )
+        away_schedule = (
+            away_schedule_df
+            if isinstance(away_schedule_df, pd.DataFrame) and not away_schedule_df.empty
+            else away_matches_df
+        )
+        home_prior_dates = FeatureEngine._prior_match_dates(
+            home_schedule,
+            fixture_at,
+        )
+        away_prior_dates = FeatureEngine._prior_match_dates(
+            away_schedule,
+            fixture_at,
+        )
+        schedule_coverage_is_symmetric = (
+            home_prior_dates.empty == away_prior_dates.empty
+        )
 
+        home_rest = away_rest = 7
+        if (
+            fixture_at is not None
+            and not home_prior_dates.empty
+            and not away_prior_dates.empty
+        ):
+            home_rest = max(
+                1,
+                int((fixture_at - home_prior_dates.max()).total_seconds() / 86400.0),
+            )
+            away_rest = max(
+                1,
+                int((fixture_at - away_prior_dates.max()).total_seconds() / 86400.0),
+            )
         rest_days_diff = float(home_rest - away_rest)
+
+        if not schedule_coverage_is_symmetric:
+            # One-sided history is unknown coverage, not evidence that one team
+            # was fully rested. Keep schedule components neutral for both sides.
+            fatigue_home_schedule = pd.DataFrame()
+            fatigue_away_schedule = pd.DataFrame()
+        else:
+            fatigue_home_schedule = home_schedule
+            fatigue_away_schedule = away_schedule
+        fatigue_index = (
+            FeatureEngine.compute_fatigue_index(
+                fatigue_home_schedule,
+                fatigue_away_schedule,
+                fixture_at,
+                away_travel_distance_km=away_travel_distance_km,
+            )
+            if fixture_at is not None
+            else 0.0
+        )
 
         home_cs_streak = FeatureEngine.compute_streak(home_matches_df, "clean_sheet")
         away_cs_streak = FeatureEngine.compute_streak(away_matches_df, "clean_sheet")
@@ -504,9 +692,20 @@ class FeatureEngine:
             "away_attack": float(away_stats.get("attack", 50.0)),
             "away_defense": float(away_stats.get("defense", 50.0)),
             "away_xg": float(away_stats.get("xg", 1.2)),
+            "home_team_strength_ratio": (
+                home_player_impact.team_strength_ratio
+                if home_player_impact is not None and home_player_impact.data_available
+                else 1.0
+            ),
+            "away_team_strength_ratio": (
+                away_player_impact.team_strength_ratio
+                if away_player_impact is not None and away_player_impact.data_available
+                else 1.0
+            ),
             "home_form_ema": float(home_form_ema),
             "away_form_ema": float(away_form_ema),
             "rest_days_diff": rest_days_diff,
+            "fatigue_index": fatigue_index,
             "home_clean_sheet_streak": float(home_cs_streak),
             "away_clean_sheet_streak": float(away_cs_streak),
             "home_scoring_streak": float(home_score_streak),

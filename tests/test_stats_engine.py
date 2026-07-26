@@ -9,6 +9,7 @@ from app.prediction.stats_engine import (
     build_team_profile,
     time_weighted_goal_averages,
 )
+from app.prediction.player_impact import PlayerImpactCalculator
 
 
 def test_time_weighted_goals_favor_recent_matches() -> None:
@@ -248,6 +249,56 @@ def test_analysis_clamps_extreme_inputs_and_returns_consistent_markets() -> None
     assert result["expected_score"]["probability"] > 0
     assert result["score_band"] in {"0-2 Gol", "3-4 Gol", "5+ Gol"}
     assert len(result["secondary_markets"]) >= 3
+
+
+def test_critical_player_absence_reduces_only_affected_team_xg() -> None:
+    profile = {
+        "form": 50,
+        "attack_strength": 1.0,
+        "defense_strength": 1.0,
+        "goals_for_avg": 1.3,
+        "goals_against_avg": 1.3,
+    }
+    ratings = {player_id: 6.0 for player_id in range(1, 12)}
+    ratings[1] = 9.0
+    impact = PlayerImpactCalculator.assess(
+        ratings,
+        reference_lineup=list(range(1, 12)),
+        missing_player_ids=[1],
+    )
+
+    baseline = StatsEngine.analyze_match(profile, profile, league_id=203)
+    penalized = StatsEngine.analyze_match(
+        profile,
+        profile,
+        league_id=203,
+        home_player_impact=impact,
+    )
+
+    assert impact.critical_missing_count == 1
+    assert penalized["expected_goals"]["home"] < baseline["expected_goals"]["home"]
+    assert penalized["expected_goals"]["away"] == baseline["expected_goals"]["away"]
+    assert penalized["player_impact"]["home"]["data_available"] is True
+    assert penalized["player_impact"]["away"]["team_strength_ratio"] == 1.0
+
+
+def test_invalid_player_multiplier_is_neutral() -> None:
+    profile = {
+        "form": 50,
+        "attack_strength": 1.0,
+        "defense_strength": 1.0,
+        "goals_for_avg": 1.3,
+        "goals_against_avg": 1.3,
+    }
+
+    baseline = StatsEngine._expected_goals(profile, profile, is_home=True)
+
+    assert StatsEngine._expected_goals(
+        profile,
+        profile,
+        is_home=True,
+        player_xg_multiplier=float("nan"),
+    ) == pytest.approx(baseline)
 
 
 @pytest.mark.parametrize("rho", [float("nan"), 1.0])

@@ -5,9 +5,10 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from app.core.config import settings
+from app.prediction.player_impact import TeamStrengthImpact
 
 MAX_GOALS = 7
-MODEL_VERSION = "poisson_dixon_coles_v4"
+MODEL_VERSION = "poisson_dixon_coles_v5"
 
 
 def time_weighted_goal_averages(
@@ -336,6 +337,8 @@ class StatsEngine:
         home_match_history: pd.DataFrame | None = None,
         away_match_history: pd.DataFrame | None = None,
         as_of: datetime | pd.Timestamp | None = None,
+        home_player_impact: TeamStrengthImpact | None = None,
+        away_player_impact: TeamStrengthImpact | None = None,
     ) -> dict:
         home_stats = _apply_time_weighted_goal_profile(
             home_stats,
@@ -354,8 +357,24 @@ class StatsEngine:
             if league_id
             else settings.DEFAULT_DIXON_COLES_RHO
         )
-        home_lambda = StatsEngine._expected_goals(home_stats, away_stats, is_home=True)
-        away_lambda = StatsEngine._expected_goals(away_stats, home_stats, is_home=False)
+        home_multiplier = (
+            home_player_impact.xg_multiplier if home_player_impact is not None else 1.0
+        )
+        away_multiplier = (
+            away_player_impact.xg_multiplier if away_player_impact is not None else 1.0
+        )
+        home_lambda = StatsEngine._expected_goals(
+            home_stats,
+            away_stats,
+            is_home=True,
+            player_xg_multiplier=home_multiplier,
+        )
+        away_lambda = StatsEngine._expected_goals(
+            away_stats,
+            home_stats,
+            is_home=False,
+            player_xg_multiplier=away_multiplier,
+        )
 
         matrix = StatsEngine._score_probability_matrix(
             home_lambda, away_lambda, rho=rho
@@ -399,6 +418,10 @@ class StatsEngine:
                 "away": round(away_lambda, 2),
                 "total": round(home_lambda + away_lambda, 2),
             },
+            "player_impact": {
+                "home": StatsEngine._player_impact_diagnostics(home_player_impact),
+                "away": StatsEngine._player_impact_diagnostics(away_player_impact),
+            },
             "expected_score": expected_score,
             "score_band": score_band,
             "alternate_picks": alternate_picks,
@@ -407,7 +430,12 @@ class StatsEngine:
         }
 
     @staticmethod
-    def _expected_goals(team: dict, opponent: dict, is_home: bool) -> float:
+    def _expected_goals(
+        team: dict,
+        opponent: dict,
+        is_home: bool,
+        player_xg_multiplier: float = 1.0,
+    ) -> float:
         """Calculate lambda utilizing Poisson regression style logic from team profiles."""
         if team.get("attack_strength") and opponent.get("defense_strength"):
             attack_s = float(team["attack_strength"])
@@ -448,7 +476,38 @@ class StatsEngine:
         else:
             lambda_goals *= settings.AWAY_ATTACK_PENALTY
 
+        try:
+            multiplier = float(player_xg_multiplier)
+        except (TypeError, ValueError):
+            multiplier = 1.0
+        if not math.isfinite(multiplier):
+            multiplier = 1.0
+        multiplier = max(
+            settings.PLAYER_IMPACT_MIN_XG_MULTIPLIER,
+            min(settings.PLAYER_IMPACT_MAX_STRENGTH_RATIO, multiplier),
+        )
+        lambda_goals *= multiplier
+
         return max(0.35, min(3.4, lambda_goals))
+
+    @staticmethod
+    def _player_impact_diagnostics(
+        impact: TeamStrengthImpact | None,
+    ) -> dict[str, object]:
+        if impact is None:
+            return {
+                "data_available": False,
+                "team_strength_ratio": 1.0,
+                "xg_multiplier": 1.0,
+                "critical_missing_count": 0,
+            }
+        return {
+            "data_available": impact.data_available,
+            "team_strength_ratio": impact.team_strength_ratio,
+            "xg_multiplier": impact.xg_multiplier,
+            "critical_missing_count": impact.critical_missing_count,
+            "critical_missing_player_ids": list(impact.critical_missing_player_ids),
+        }
 
     @staticmethod
     def _home_advantage_multiplier(team: dict, opponent: dict) -> float:

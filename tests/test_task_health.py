@@ -64,15 +64,34 @@ def test_celery_connection_recovery_and_delivery_guards_are_enabled() -> None:
 def test_retraining_task_calibrates_ensemble_before_training(monkeypatch) -> None:
     from app.tasks import jobs
 
-    labeled_rows = [Mock(id=1)]
+    labeled_rows = [Mock(id=1, fixture_id=1)]
+    historical_fixtures = [Mock(fixture_id=2)]
+    player_performances = [Mock(player_id=10)]
+    team_locations = [Mock(team_id=1)]
     session_context = MagicMock()
     repository = Mock()
     repository.get_all_labeled.return_value = labeled_rows
+    historical_repository = Mock()
+    historical_repository.get_all.return_value = historical_fixtures
+    player_context_repository = Mock()
+    player_context_repository.get_all_performances.return_value = player_performances
+    player_context_repository.get_all_team_locations.return_value = team_locations
     calibrate = Mock(return_value={"status": "insufficient_data"})
     train = Mock(return_value=True)
+    build = Mock(return_value=[])
     monkeypatch.setattr(jobs, "SessionLocal", Mock(return_value=session_context))
     monkeypatch.setattr(
         jobs, "MatchPredictionRepository", Mock(return_value=repository)
+    )
+    monkeypatch.setattr(
+        jobs,
+        "HistoricalFixtureRepository",
+        Mock(return_value=historical_repository),
+    )
+    monkeypatch.setattr(
+        jobs,
+        "PlayerContextRepository",
+        Mock(return_value=player_context_repository),
     )
     monkeypatch.setattr(
         jobs.ensemble_weight_manager, "optimize_and_activate", calibrate
@@ -81,11 +100,16 @@ def test_retraining_task_calibrates_ensemble_before_training(monkeypatch) -> Non
     monkeypatch.setattr(
         jobs.HistoricalTrainingDataBuilder,
         "build",
-        Mock(return_value=[]),
+        build,
     )
 
     result = jobs.retrain_ml_model_task.run()
 
     assert result == "Retraining success."
+    build.assert_called_once_with(
+        historical_fixtures,
+        player_performances=player_performances,
+        team_locations=team_locations,
+    )
     calibrate.assert_called_once_with(labeled_rows)
     train.assert_called_once_with(labeled_rows)

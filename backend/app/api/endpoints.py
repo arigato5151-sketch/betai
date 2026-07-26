@@ -1,6 +1,8 @@
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
+
 from fastapi import (
     APIRouter,
     Cookie,
@@ -27,6 +29,7 @@ import logging
 from app.db.session import SessionLocal, get_db
 from app.db.repository import MatchPredictionRepository
 from app.db.historical_repository import HistoricalFixtureRepository
+from app.db.player_context_repository import PlayerContextRepository
 from app.db.models import HistoricalFixture
 from app.services.api_football import APIFootballClient
 from app.services.data_quality import DataQualityService
@@ -38,7 +41,9 @@ from app.prediction.ml.features import FeatureEngine
 from app.prediction.ml.historical import (
     HistoricalFeatureContext,
     HistoricalFeatureService,
+    PlayerRatingValue,
 )
+from app.prediction.player_impact import PlayerImpactCalculator
 from app.prediction.ml.explain import ExplainabilityService
 from app.prediction.ml.active_learning import ActiveLearningSelector
 from app.prediction.audit import PredictionAuditor
@@ -316,6 +321,16 @@ class AnalysisRequest(BaseModel):
     kickoff: Optional[datetime] = Field(
         None, description="Fixture kickoff used for point-in-time rest features"
     )
+    away_travel_distance_km: Optional[float] = Field(
+        None,
+        ge=0,
+        le=20000,
+        allow_inf_nan=False,
+        description=(
+            "Optional away-team base-to-venue distance. Server-side team locations "
+            "are used when omitted."
+        ),
+    )
 
     @field_validator("home_team", "away_team")
     @classmethod
@@ -453,6 +468,7 @@ def _build_payload_from_prefill(prefill: Dict[str, Any]) -> AnalysisRequest:
         league_id=fixture.get("league_id"),
         season=fixture.get("season"),
         kickoff=fixture.get("kickoff"),
+        away_travel_distance_km=fixture.get("away_travel_distance_km"),
     )
 
 
@@ -589,6 +605,133 @@ async def _fetch_ml_match_data(
     )
 
 
+def _availability_player_ids(
+    availability: Dict[str, Any] | None,
+    *,
+    side: Literal["home", "away"],
+    status: Literal["missing", "questionable"],
+) -> list[int]:
+    """Extract stable provider IDs while preserving legacy count-only payloads."""
+    if not isinstance(availability, dict):
+        return []
+    rows = availability.get(f"{side}_unavailable_players")
+    if not isinstance(rows, list):
+        return []
+
+    player_ids: list[int] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("status") != status:
+            continue
+        player_id = row.get("player_id")
+        if (
+            isinstance(player_id, int)
+            and not isinstance(player_id, bool)
+            and player_id > 0
+        ):
+            player_ids.append(player_id)
+    return list(dict.fromkeys(player_ids))
+
+
+def _derive_reference_lineup(
+    player_ratings: Mapping[int, PlayerRatingValue],
+) -> list[int] | None:
+    """Infer a typical XI from season exposure when no prior XI was ingested."""
+    return PlayerImpactCalculator.derive_reference_lineup(player_ratings)
+
+
+def _select_reference_lineup(
+    previous_lineup: list[int] | None,
+    player_ratings: Mapping[int, PlayerRatingValue],
+) -> list[int] | None:
+    """Use a prior XI only when every member is still in the current rating pool."""
+    if isinstance(previous_lineup, list):
+        normalized = list(
+            dict.fromkeys(
+                player_id
+                for player_id in previous_lineup
+                if (
+                    isinstance(player_id, int)
+                    and not isinstance(player_id, bool)
+                    and player_id > 0
+                )
+            )
+        )
+        if len(normalized) == 11:
+            covered = {
+                player_id: player_ratings[player_id]
+                for player_id in normalized
+                if player_id in player_ratings
+            }
+            if (
+                len(covered) == 11
+                and PlayerImpactCalculator.derive_reference_lineup(covered) is not None
+            ):
+                return normalized
+    return _derive_reference_lineup(player_ratings)
+
+
+async def _fetch_player_rating_data(
+    payload: AnalysisRequest,
+    historical: HistoricalFeatureContext,
+) -> tuple[
+    dict[int, PlayerRatingValue],
+    dict[int, PlayerRatingValue],
+]:
+    """Merge point-in-time history with live season ratings for upcoming games."""
+    home_local = dict(historical.home_player_ratings or {})
+    away_local = dict(historical.away_player_ratings or {})
+    season = payload.season
+    if payload.home_team_id is None or payload.away_team_id is None or season is None:
+        return home_local, away_local
+
+    # A current season aggregate is safe for an upcoming match, but would leak
+    # future information into a historical replay.
+    if payload.kickoff is not None:
+        kickoff = payload.kickoff
+        if kickoff.tzinfo is None:
+            kickoff = kickoff.replace(tzinfo=timezone.utc)
+        if kickoff.astimezone(timezone.utc) < datetime.now(timezone.utc):
+            return home_local, away_local
+
+    async def merged_ratings(
+        team_id: int,
+        local: dict[int, PlayerRatingValue],
+        reference_lineup: list[int] | None,
+    ) -> dict[int, PlayerRatingValue]:
+        if _select_reference_lineup(reference_lineup, local) is not None:
+            return local
+        live = await football_api.get_team_player_ratings(
+            team_id,
+            season,
+            league_id=payload.league_id,
+        )
+        if _derive_reference_lineup(live) is None:
+            # Never manufacture an XI by mixing an incomplete current roster with
+            # stale local-only players. The downstream neutral fallback is safer.
+            return local
+
+        # The season feed defines current roster membership. Local rolling ratings
+        # remain the fresher signal, but only for players present in that roster.
+        return {
+            player_id: local.get(player_id, rating)
+            for player_id, rating in live.items()
+        }
+
+    home_ratings, away_ratings = await asyncio.gather(
+        merged_ratings(
+            payload.home_team_id,
+            home_local,
+            historical.home_previous_starting_xi,
+        ),
+        merged_ratings(
+            payload.away_team_id,
+            away_local,
+            historical.away_previous_starting_xi,
+        ),
+    )
+    return home_ratings, away_ratings
+
+
 def _get_historical_feature_context(
     payload: AnalysisRequest,
 ) -> HistoricalFeatureContext:
@@ -601,7 +744,10 @@ def _get_historical_feature_context(
         return HistoricalFeatureContext()
 
     with SessionLocal() as db:
-        service = HistoricalFeatureService(HistoricalFixtureRepository(db))
+        service = HistoricalFeatureService(
+            HistoricalFixtureRepository(db),
+            player_context_repository=PlayerContextRepository(db),
+        )
         return service.build_context(
             home_team_id=payload.home_team_id,
             away_team_id=payload.away_team_id,
@@ -628,6 +774,37 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     home_matches_df, away_matches_df, h2h_rates, availability, lineups = (
         await _fetch_ml_match_data(payload, historical)
     )
+    home_player_ratings, away_player_ratings = await _fetch_player_rating_data(
+        payload,
+        historical,
+    )
+    home_reference_lineup = _select_reference_lineup(
+        historical.home_previous_starting_xi,
+        home_player_ratings,
+    )
+    away_reference_lineup = _select_reference_lineup(
+        historical.away_previous_starting_xi,
+        away_player_ratings,
+    )
+    lineup_context = {
+        **(lineups or {}),
+        "home_previous_starting_xi": home_reference_lineup,
+        "away_previous_starting_xi": away_reference_lineup,
+    }
+    home_player_impact = PlayerImpactCalculator.assess(
+        home_player_ratings,
+        home_reference_lineup,
+        lineup_context.get("home_starting_xi"),
+        _availability_player_ids(availability, side="home", status="missing"),
+        _availability_player_ids(availability, side="home", status="questionable"),
+    )
+    away_player_impact = PlayerImpactCalculator.assess(
+        away_player_ratings,
+        away_reference_lineup,
+        lineup_context.get("away_starting_xi"),
+        _availability_player_ids(availability, side="away", status="missing"),
+        _availability_player_ids(availability, side="away", status="questionable"),
+    )
     stats_analysis = StatsEngine.analyze_match(
         home_stats,
         away_stats,
@@ -635,12 +812,9 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         home_match_history=home_matches_df,
         away_match_history=away_matches_df,
         as_of=payload.kickoff,
+        home_player_impact=home_player_impact,
+        away_player_impact=away_player_impact,
     )
-    lineup_context = {
-        **(lineups or {}),
-        "home_previous_starting_xi": historical.home_previous_starting_xi,
-        "away_previous_starting_xi": historical.away_previous_starting_xi,
-    }
     opening_odds = (
         payload.opening_odds_1x2.as_outcome_dict()
         if payload.opening_odds_1x2 is not None
@@ -668,6 +842,15 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         away_team_id=payload.away_team_id,
         opening_odds=opening_odds,
         current_odds=current_odds,
+        home_schedule_df=historical.home_schedule_df,
+        away_schedule_df=historical.away_schedule_df,
+        away_travel_distance_km=(
+            payload.away_travel_distance_km
+            if payload.away_travel_distance_km is not None
+            else historical.away_travel_distance_km
+        ),
+        home_player_impact=home_player_impact,
+        away_player_impact=away_player_impact,
     )
     if ml_pipeline.is_ready:
         ml_result = ml_pipeline.predict_match(feature_vector)
@@ -706,6 +889,12 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         "away_history_sufficient": history_away_count >= required_history,
         "availability_available": availability is not None,
         "lineups_available": lineups is not None,
+        "home_player_impact_available": home_player_impact.data_available,
+        "away_player_impact_available": away_player_impact.data_available,
+        "travel_context_available": (
+            payload.away_travel_distance_km is not None
+            or historical.away_travel_distance_km > 0
+        ),
     }
     data_quality = {
         "score": round(
@@ -718,6 +907,23 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         "home_history_matches": history_home_count,
         "away_history_matches": history_away_count,
         "required_history_matches": required_history,
+        "player_impact": {
+            "home_strength_ratio": home_player_impact.team_strength_ratio,
+            "away_strength_ratio": away_player_impact.team_strength_ratio,
+            "home_critical_missing": home_player_impact.critical_missing_count,
+            "away_critical_missing": away_player_impact.critical_missing_count,
+            "neutral_fallback_used": not (
+                home_player_impact.data_available and away_player_impact.data_available
+            ),
+        },
+        "away_travel_distance_km": round(
+            float(
+                payload.away_travel_distance_km
+                if payload.away_travel_distance_km is not None
+                else historical.away_travel_distance_km
+            ),
+            2,
+        ),
         "odds_snapshot": {
             "movement_features_used": bool(opening_odds and current_odds),
             "opening_captured_at": (

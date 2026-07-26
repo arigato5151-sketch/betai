@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 import pandas as pd
@@ -213,8 +214,8 @@ class APIFootballClient:
 
     async def get_fixture_availability(
         self, fixture_id: int, home_team_id: int, away_team_id: int
-    ) -> Optional[Dict[str, int | str]]:
-        """Return fixture-specific missing/questionable player counts by team."""
+    ) -> Optional[Dict[str, object]]:
+        """Return pre-match availability while preserving player identities."""
         if self._is_demo_key():
             return None
 
@@ -236,9 +237,15 @@ class APIFootballClient:
         }
         response_items = data.get("response", [])
         counts["availability_report_present"] = int(bool(response_items))
-        for item in response_items:
+        unavailable: dict[str, list[dict[str, object]]] = {
+            "home": [],
+            "away": [],
+        }
+        seen: set[tuple[str, str, int]] = set()
+        for index, item in enumerate(response_items):
             team_id = item.get("team", {}).get("id")
-            availability_type = str(item.get("player", {}).get("type", "")).lower()
+            player = item.get("player", {})
+            availability_type = str(player.get("type", "")).strip().lower()
             if team_id == home_team_id:
                 prefix = "home"
             elif team_id == away_team_id:
@@ -247,16 +254,175 @@ class APIFootballClient:
                 continue
 
             if availability_type == "questionable":
-                counts[f"{prefix}_questionable_players"] += 1
+                status = "questionable"
             elif availability_type == "missing fixture":
-                counts[f"{prefix}_missing_players"] += 1
+                status = "missing"
+            else:
+                continue
 
-        result: Dict[str, int | str] = {
+            player_id = player.get("id")
+            stable_player_id = (
+                player_id
+                if isinstance(player_id, int) and player_id > 0
+                else -(index + 1)
+            )
+            dedupe_key = (prefix, status, stable_player_id)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            counts[f"{prefix}_{status}_players"] += 1
+            if stable_player_id > 0:
+                unavailable[prefix].append(
+                    {
+                        "player_id": stable_player_id,
+                        "name": str(player.get("name") or "")[:100],
+                        "status": status,
+                        "reason": str(player.get("reason") or "")[:200],
+                    }
+                )
+
+        result: Dict[str, object] = {
             **counts,
+            "home_unavailable_players": unavailable["home"],
+            "away_unavailable_players": unavailable["away"],
             "source": "api_football_injuries",
         }
         await cache.set("match_data", cache_key, result, 14400)
         return result
+
+    async def get_team_player_ratings(
+        self,
+        team_id: int,
+        season: int,
+        *,
+        league_id: int | None = None,
+    ) -> dict[int, dict[str, float]]:
+        """Return point-in-time season ratings with bounded pagination."""
+        if self._is_demo_key() or team_id <= 0 or season < 2000:
+            return {}
+
+        cache_key = f"player_ratings:{team_id}:{league_id or 0}:{season}"
+        cached = await cache.get("stats", cache_key)
+        if isinstance(cached, dict):
+            return self._normalize_cached_player_ratings(cached)
+
+        params = {"team": str(team_id), "season": str(season), "page": "1"}
+        if league_id is not None:
+            params["league"] = str(league_id)
+        first_page = await self._request_with_retry("players", params)
+        if not first_page:
+            return {}
+
+        responses: list[object] = list(first_page.get("response", []))
+        paging = first_page.get("paging", {})
+        try:
+            total_pages = max(1, min(int(paging.get("total", 1)), 10))
+        except (TypeError, ValueError):
+            total_pages = 1
+        for page in range(2, total_pages + 1):
+            payload = await self._request_with_retry(
+                "players", {**params, "page": str(page)}
+            )
+            if payload:
+                responses.extend(payload.get("response", []))
+
+        ratings = self._extract_player_ratings(
+            responses,
+            team_id=team_id,
+            league_id=league_id,
+        )
+        await cache.set("stats", cache_key, ratings, 21600)
+        return ratings
+
+    @staticmethod
+    def _normalize_cached_player_ratings(
+        cached: dict[object, object],
+    ) -> dict[int, dict[str, float]]:
+        normalized: dict[int, dict[str, float]] = {}
+        for raw_player_id, raw_stats in cached.items():
+            if isinstance(raw_player_id, bool) or not isinstance(
+                raw_player_id, (int, str)
+            ):
+                continue
+            try:
+                player_id = int(raw_player_id)
+            except (TypeError, ValueError):
+                continue
+            if player_id <= 0 or not isinstance(raw_stats, dict):
+                continue
+            values: dict[str, float] = {}
+            for name in ("rating", "minutes", "appearances", "goals", "assists"):
+                try:
+                    value = float(raw_stats.get(name, 0.0))
+                except (TypeError, ValueError):
+                    value = 0.0
+                if math.isfinite(value) and value >= 0:
+                    values[name] = value
+            if 1.0 <= values.get("rating", 0.0) <= 10.0:
+                normalized[player_id] = values
+        return normalized
+
+    @classmethod
+    def _extract_player_ratings(
+        cls,
+        responses: object,
+        *,
+        team_id: int,
+        league_id: int | None,
+    ) -> dict[int, dict[str, float]]:
+        if not isinstance(responses, list):
+            return {}
+        ratings: dict[int, dict[str, float]] = {}
+        for item in responses:
+            if not isinstance(item, dict):
+                continue
+            player_id = item.get("player", {}).get("id")
+            if not isinstance(player_id, int) or player_id <= 0:
+                continue
+            candidates = item.get("statistics", [])
+            if not isinstance(candidates, list):
+                continue
+            for stats in candidates:
+                if not isinstance(stats, dict):
+                    continue
+                stats_team_id = stats.get("team", {}).get("id")
+                stats_league_id = stats.get("league", {}).get("id")
+                if stats_team_id not in {None, team_id}:
+                    continue
+                if league_id is not None and stats_league_id not in {None, league_id}:
+                    continue
+                games = stats.get("games", {})
+                goals = stats.get("goals", {})
+                try:
+                    rating = float(games.get("rating"))
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(rating) or not 1.0 <= rating <= 10.0:
+                    continue
+
+                def finite_count(value: object) -> float:
+                    candidate = value or 0.0
+                    if isinstance(candidate, bool) or not isinstance(
+                        candidate, (int, float, str)
+                    ):
+                        return 0.0
+                    try:
+                        number = float(candidate)
+                    except (TypeError, ValueError):
+                        return 0.0
+                    return number if math.isfinite(number) and number >= 0 else 0.0
+
+                candidate = {
+                    "rating": rating,
+                    "minutes": finite_count(games.get("minutes")),
+                    "appearances": finite_count(games.get("appearences")),
+                    "goals": finite_count(goals.get("total")),
+                    "assists": finite_count(goals.get("assists")),
+                }
+                current = ratings.get(player_id)
+                if current is None or candidate["minutes"] > current["minutes"]:
+                    ratings[player_id] = candidate
+        return ratings
 
     async def get_fixture_lineups(
         self, fixture_id: int, home_team_id: int, away_team_id: int
@@ -301,6 +467,150 @@ class APIFootballClient:
                     player_ids.append(player_id)
             if player_ids:
                 result[team_id] = list(dict.fromkeys(player_ids))
+        return result
+
+    @staticmethod
+    def _fixture_player_performances(
+        players: object,
+        *,
+        fixture_id: int,
+        league_id: int,
+        kickoff: datetime,
+        starting_xi: dict[int, list[int]],
+    ) -> list[dict[str, object]]:
+        """Normalize post-match player data for use by future fixtures only."""
+        if not isinstance(players, list):
+            return []
+        rows: list[dict[str, object]] = []
+        seen: set[tuple[int, int]] = set()
+        for team_block in players:
+            if not isinstance(team_block, dict):
+                continue
+            team_id = team_block.get("team", {}).get("id")
+            if not isinstance(team_id, int) or team_id <= 0:
+                continue
+            starters = set(starting_xi.get(team_id, []))
+            raw_players = team_block.get("players", [])
+            if not isinstance(raw_players, list):
+                continue
+            for entry in raw_players:
+                if not isinstance(entry, dict):
+                    continue
+                player_id = entry.get("player", {}).get("id")
+                if not isinstance(player_id, int) or player_id <= 0:
+                    continue
+                key = (fixture_id, player_id)
+                if key in seen:
+                    continue
+                statistics = entry.get("statistics", [])
+                stats = (
+                    statistics[0]
+                    if isinstance(statistics, list)
+                    and statistics
+                    and isinstance(statistics[0], dict)
+                    else {}
+                )
+                games = stats.get("games", {})
+                goals = stats.get("goals", {})
+                started = player_id in starters or (
+                    not starters and games.get("substitute") is False
+                )
+
+                def optional_number(value: object, *, integer: bool = False) -> object:
+                    if isinstance(value, bool) or not isinstance(
+                        value, (int, float, str)
+                    ):
+                        return None
+                    try:
+                        number = float(value)
+                    except (TypeError, ValueError):
+                        return None
+                    if not math.isfinite(number) or number < 0:
+                        return None
+                    return int(number) if integer else number
+
+                rating = optional_number(games.get("rating"))
+                if isinstance(rating, float) and not 1.0 <= rating <= 10.0:
+                    rating = None
+                rows.append(
+                    {
+                        "fixture_id": fixture_id,
+                        "league_id": league_id,
+                        "kickoff": kickoff,
+                        "team_id": team_id,
+                        "player_id": player_id,
+                        "started": started,
+                        "minutes": optional_number(games.get("minutes"), integer=True),
+                        "rating": rating,
+                        "position": str(games.get("position") or "")[:10] or None,
+                        "goals": optional_number(goals.get("total"), integer=True),
+                        "assists": optional_number(goals.get("assists"), integer=True),
+                        "source": "api_football_fixture_players",
+                    }
+                )
+                seen.add(key)
+        return rows
+
+    async def get_fixture_player_context(
+        self,
+        *,
+        fixture_id: int,
+        league_id: int,
+        kickoff: datetime,
+        home_team_id: int,
+        away_team_id: int,
+    ) -> dict[str, object]:
+        """Fetch immutable post-match player stats for bounded historical backfills."""
+        empty: dict[str, object] = {
+            "home_starting_xi": None,
+            "away_starting_xi": None,
+            "player_performances": [],
+        }
+        if (
+            self._is_demo_key()
+            or min(fixture_id, league_id, home_team_id, away_team_id) <= 0
+        ):
+            return empty
+
+        data = await self._request_with_retry(
+            "fixtures/players",
+            {"fixture": str(fixture_id)},
+        )
+        if not data or data.get("errors"):
+            return empty
+
+        performances = self._fixture_player_performances(
+            data.get("response", []),
+            fixture_id=fixture_id,
+            league_id=league_id,
+            kickoff=kickoff,
+            starting_xi={},
+        )
+        starters_by_team: dict[int, list[int]] = {
+            home_team_id: [],
+            away_team_id: [],
+        }
+        for performance in performances:
+            if performance.get("started") is not True:
+                continue
+            team_id = performance.get("team_id")
+            player_id = performance.get("player_id")
+            if (
+                isinstance(team_id, int)
+                and team_id in starters_by_team
+                and isinstance(player_id, int)
+            ):
+                starters_by_team[team_id].append(player_id)
+
+        def valid_starting_xi(team_id: int) -> list[int] | None:
+            player_ids = list(dict.fromkeys(starters_by_team[team_id]))
+            return player_ids if len(player_ids) == 11 else None
+
+        result: dict[str, object] = {
+            "home_starting_xi": valid_starting_xi(home_team_id),
+            "away_starting_xi": valid_starting_xi(away_team_id),
+            "player_performances": performances,
+        }
         return result
 
     async def get_completed_fixtures(self, league_id: int, season: int) -> List[Dict]:
@@ -376,6 +686,13 @@ class APIFootballClient:
         else:
             result = "DRAW"
         lineups = APIFootballClient._starting_xi_by_team(item.get("lineups", []))
+        player_performances = APIFootballClient._fixture_player_performances(
+            item.get("players", []),
+            fixture_id=int(fixture["id"]),
+            league_id=int(league["id"]),
+            kickoff=kickoff,
+            starting_xi=lineups,
+        )
         return {
             "fixture_id": int(fixture["id"]),
             "league_id": int(league["id"]),
@@ -389,6 +706,7 @@ class APIFootballClient:
             "away_goals": away_score,
             "home_starting_xi": lineups.get(int(home["id"])),
             "away_starting_xi": lineups.get(int(away["id"])),
+            "player_performances": player_performances,
             "actual_result": result,
             "status": status,
         }

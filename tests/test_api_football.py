@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import httpx
 import pandas as pd
@@ -288,6 +288,26 @@ async def test_completed_fixtures_are_normalized_and_invalid_rows_are_skipped() 
                             ],
                         },
                     ],
+                    "players": [
+                        {
+                            "team": {"id": 1},
+                            "players": [
+                                {
+                                    "player": {"id": 1},
+                                    "statistics": [
+                                        {
+                                            "games": {
+                                                "minutes": 90,
+                                                "position": "F",
+                                                "rating": "8.2",
+                                            },
+                                            "goals": {"total": 1, "assists": 1},
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
                 },
                 {
                     "fixture": {
@@ -307,6 +327,22 @@ async def test_completed_fixtures_are_normalized_and_invalid_rows_are_skipped() 
     assert fixtures[0]["actual_result"] == "HOME_WIN"
     assert fixtures[0]["home_starting_xi"] == list(range(1, 12))
     assert fixtures[0]["away_starting_xi"] == list(range(20, 31))
+    assert fixtures[0]["player_performances"] == [
+        {
+            "fixture_id": 500,
+            "league_id": 203,
+            "kickoff": pd.Timestamp("2026-07-18T18:00:00Z"),
+            "team_id": 1,
+            "player_id": 1,
+            "started": True,
+            "minutes": 90,
+            "rating": 8.2,
+            "position": "F",
+            "goals": 1,
+            "assists": 1,
+            "source": "api_football_fixture_players",
+        }
+    ]
     assert fixtures[0]["kickoff"] == pd.Timestamp("2026-07-18T18:00:00Z")
     client._request_with_retry.assert_awaited_once_with(
         "fixtures",
@@ -316,6 +352,63 @@ async def test_completed_fixtures_are_normalized_and_invalid_rows_are_skipped() 
             "status": "FT-AET-PEN",
             "timezone": "UTC",
         },
+    )
+
+
+@pytest.mark.asyncio
+async def test_fixture_player_context_derives_starting_xi_and_performances() -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+
+    def team_block(team_id: int, first_player_id: int) -> dict:
+        return {
+            "team": {"id": team_id},
+            "players": [
+                {
+                    "player": {"id": player_id},
+                    "statistics": [
+                        {
+                            "games": {
+                                "minutes": 90,
+                                "position": "M",
+                                "rating": "7.2",
+                                "substitute": False,
+                            },
+                            "goals": {"total": 0, "assists": 0},
+                        }
+                    ],
+                }
+                for player_id in range(first_player_id, first_player_id + 11)
+            ],
+        }
+
+    client._request_with_retry = AsyncMock(
+        return_value={
+            "response": [
+                team_block(1, 1),
+                team_block(2, 20),
+            ]
+        }
+    )
+    kickoff = pd.Timestamp("2026-07-18T18:00:00Z").to_pydatetime()
+
+    context = await client.get_fixture_player_context(
+        fixture_id=500,
+        league_id=203,
+        kickoff=kickoff,
+        home_team_id=1,
+        away_team_id=2,
+    )
+
+    assert context["home_starting_xi"] == list(range(1, 12))
+    assert context["away_starting_xi"] == list(range(20, 31))
+    performances = context["player_performances"]
+    assert isinstance(performances, list)
+    assert len(performances) == 22
+    assert all(row["started"] is True for row in performances)
+    client._request_with_retry.assert_awaited_once_with(
+        "fixtures/players",
+        {"fixture": "500"},
     )
 
 
@@ -336,9 +429,42 @@ async def test_fixture_availability_counts_missing_and_questionable_players() ->
     client._request_with_retry = AsyncMock(
         return_value={
             "response": [
-                {"team": {"id": 1}, "player": {"type": "Missing Fixture"}},
-                {"team": {"id": 1}, "player": {"type": "Questionable"}},
-                {"team": {"id": 2}, "player": {"type": "Missing Fixture"}},
+                {
+                    "team": {"id": 1},
+                    "player": {
+                        "id": 11,
+                        "name": "Critical Player",
+                        "type": "Missing Fixture",
+                        "reason": "Suspended",
+                    },
+                },
+                {
+                    "team": {"id": 1},
+                    "player": {
+                        "id": 12,
+                        "name": "Doubtful Player",
+                        "type": "Questionable",
+                        "reason": "Knock",
+                    },
+                },
+                {
+                    "team": {"id": 2},
+                    "player": {
+                        "id": 21,
+                        "name": "Away Player",
+                        "type": "Missing Fixture",
+                        "reason": "Injury",
+                    },
+                },
+                {
+                    "team": {"id": 2},
+                    "player": {
+                        "id": 21,
+                        "name": "Away Player",
+                        "type": "Missing Fixture",
+                        "reason": "Duplicate",
+                    },
+                },
                 {"team": {"id": 99}, "player": {"type": "Missing Fixture"}},
                 {"team": {"id": 2}, "player": {"type": "Unknown"}},
             ]
@@ -353,6 +479,28 @@ async def test_fixture_availability_counts_missing_and_questionable_players() ->
         "home_questionable_players": 1,
         "away_questionable_players": 0,
         "availability_report_present": 1,
+        "home_unavailable_players": [
+            {
+                "player_id": 11,
+                "name": "Critical Player",
+                "status": "missing",
+                "reason": "Suspended",
+            },
+            {
+                "player_id": 12,
+                "name": "Doubtful Player",
+                "status": "questionable",
+                "reason": "Knock",
+            },
+        ],
+        "away_unavailable_players": [
+            {
+                "player_id": 21,
+                "name": "Away Player",
+                "status": "missing",
+                "reason": "Injury",
+            }
+        ],
         "source": "api_football_injuries",
     }
     client._request_with_retry.assert_awaited_once_with(
@@ -369,6 +517,110 @@ async def test_fixture_availability_is_disabled_in_demo_mode() -> None:
     assert await client.get_fixture_availability(777002, 1, 2) is None
     assert await client.get_fixture_lineups(777002, 1, 2) is None
     client._request_with_retry.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_player_ratings_normalize_and_paginate() -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(
+        side_effect=[
+            {
+                "paging": {"current": 1, "total": 2},
+                "response": [
+                    {
+                        "player": {"id": 101},
+                        "statistics": [
+                            {
+                                "team": {"id": 987654},
+                                "league": {"id": 203},
+                                "games": {
+                                    "rating": "7.4",
+                                    "minutes": 900,
+                                    "appearences": 12,
+                                },
+                                "goals": {"total": 4, "assists": 3},
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "paging": {"current": 2, "total": 2},
+                "response": [
+                    {
+                        "player": {"id": 102},
+                        "statistics": [
+                            {
+                                "team": {"id": 987654},
+                                "league": {"id": 203},
+                                "games": {
+                                    "rating": "not-a-rating",
+                                    "minutes": 100,
+                                    "appearences": 2,
+                                },
+                                "goals": {"total": 0, "assists": 0},
+                            }
+                        ],
+                    },
+                    {
+                        "player": {"id": 103},
+                        "statistics": [
+                            {
+                                "team": {"id": 987654},
+                                "league": {"id": 203},
+                                "games": {
+                                    "rating": "6.8",
+                                    "minutes": 450,
+                                    "appearences": 7,
+                                },
+                                "goals": {"total": 1, "assists": 2},
+                            }
+                        ],
+                    },
+                ],
+            },
+        ]
+    )
+
+    ratings = await client.get_team_player_ratings(987654, 2026, league_id=203)
+
+    assert ratings == {
+        101: {
+            "rating": 7.4,
+            "minutes": 900.0,
+            "appearances": 12.0,
+            "goals": 4.0,
+            "assists": 3.0,
+        },
+        103: {
+            "rating": 6.8,
+            "minutes": 450.0,
+            "appearances": 7.0,
+            "goals": 1.0,
+            "assists": 2.0,
+        },
+    }
+    assert client._request_with_retry.await_args_list == [
+        call(
+            "players",
+            {
+                "team": "987654",
+                "season": "2026",
+                "page": "1",
+                "league": "203",
+            },
+        ),
+        call(
+            "players",
+            {
+                "team": "987654",
+                "season": "2026",
+                "page": "2",
+                "league": "203",
+            },
+        ),
+    ]
 
 
 @pytest.mark.asyncio

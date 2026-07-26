@@ -1,14 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
+import math
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Any
 
 import pandas as pd
 
+from app.core.config import settings
 from app.core.team_identity import normalize_team_name
 from app.db.historical_repository import HistoricalFixtureRepository
-from app.db.models import HistoricalFixture
+from app.db.models import HistoricalFixture, HistoricalPlayerPerformance
+from app.db.player_context_repository import PlayerContextRepository
 from app.prediction.ml.features import FeatureEngine
+
+PlayerRatingValue = float | dict[str, float]
 
 
 @dataclass(frozen=True)
@@ -21,13 +28,23 @@ class HistoricalFeatureContext:
     away_matches_df: pd.DataFrame | None = None
     home_previous_starting_xi: list[int] | None = None
     away_previous_starting_xi: list[int] | None = None
+    home_schedule_df: pd.DataFrame | None = None
+    away_schedule_df: pd.DataFrame | None = None
+    home_player_ratings: dict[int, PlayerRatingValue] = field(default_factory=dict)
+    away_player_ratings: dict[int, PlayerRatingValue] = field(default_factory=dict)
+    away_travel_distance_km: float = 0.0
 
 
 class HistoricalFeatureService:
     """Build point-in-time Elo and H2H inputs from completed fixtures."""
 
-    def __init__(self, repository: HistoricalFixtureRepository):
+    def __init__(
+        self,
+        repository: HistoricalFixtureRepository,
+        player_context_repository: PlayerContextRepository | None = None,
+    ):
         self.repository = repository
+        self.player_context_repository = player_context_repository
 
     def build_context(
         self,
@@ -83,11 +100,41 @@ class HistoricalFeatureService:
             limit=recent_match_count,
         )
         home_previous_starting_xi = self.repository.get_last_starting_xi(
-            team_id=home_team_id, league_id=league_id, before=before
+            team_id=home_team_id, before=before
         )
         away_previous_starting_xi = self.repository.get_last_starting_xi(
-            team_id=away_team_id, league_id=league_id, before=before
+            team_id=away_team_id, before=before
         )
+        schedule_start = before - timedelta(
+            days=FeatureEngine.fatigue_schedule_horizon_days()
+        )
+        home_schedule = self.repository.get_team_schedule(
+            team_id=home_team_id,
+            since=schedule_start,
+            before=before,
+        )
+        away_schedule = self.repository.get_team_schedule(
+            team_id=away_team_id,
+            since=schedule_start,
+            before=before,
+        )
+
+        home_player_ratings: dict[int, PlayerRatingValue] = {}
+        away_player_ratings: dict[int, PlayerRatingValue] = {}
+        away_travel_distance_km = 0.0
+        if self.player_context_repository is not None:
+            home_player_ratings = self._player_rating_map(home_team_id, before)
+            away_player_ratings = self._player_rating_map(away_team_id, before)
+            try:
+                away_travel_distance_km = (
+                    self.player_context_repository.travel_distance_km(
+                        away_team_id,
+                        home_team_id,
+                    )
+                )
+            except ValueError:
+                # Synthetic/legacy negative team IDs have no provider location mapping.
+                away_travel_distance_km = 0.0
 
         return HistoricalFeatureContext(
             home_elo=ratings.get(home_team_id, 1500.0),
@@ -98,7 +145,179 @@ class HistoricalFeatureService:
             away_matches_df=self._team_matches_frame(away_matches, away_team_id),
             home_previous_starting_xi=home_previous_starting_xi,
             away_previous_starting_xi=away_previous_starting_xi,
+            home_schedule_df=self._schedule_frame(
+                home_schedule,
+                team_id=home_team_id,
+                since=schedule_start,
+                before=before,
+            ),
+            away_schedule_df=self._schedule_frame(
+                away_schedule,
+                team_id=away_team_id,
+                since=schedule_start,
+                before=before,
+            ),
+            home_player_ratings=home_player_ratings,
+            away_player_ratings=away_player_ratings,
+            away_travel_distance_km=away_travel_distance_km,
         )
+
+    def _player_rating_map(
+        self,
+        team_id: int,
+        before: datetime,
+    ) -> dict[int, PlayerRatingValue]:
+        if self.player_context_repository is None:
+            return {}
+        try:
+            rows = self.player_context_repository.get_team_performances_before(
+                team_id,
+                before,
+            )
+        except ValueError:
+            return {}
+
+        observations: dict[int, list[HistoricalPlayerPerformance]] = defaultdict(list)
+        before_at = self._as_utc_timestamp(before)
+        if before_at is None:
+            return {}
+        # A per-player cutoff prevents transferred/departed players from ranking
+        # highly merely because they accumulated minutes earlier in the season.
+        freshness_cutoff = before_at - pd.Timedelta(
+            days=int(settings.HISTORICAL_FORM_MAX_AGE_DAYS)
+        )
+
+        for row in rows:
+            kickoff_at = self._as_utc_timestamp(row.kickoff)
+            if (
+                kickoff_at is None
+                or kickoff_at < freshness_cutoff
+                or kickoff_at >= before_at
+                or row.player_id <= 0
+            ):
+                continue
+            observations[row.player_id].append(row)
+
+        lookback = int(settings.PLAYER_IMPACT_LOOKBACK_MATCHES)
+        decay = float(settings.PLAYER_IMPACT_RATING_DECAY)
+        ratings: dict[int, PlayerRatingValue] = {}
+        for player_id, player_rows in observations.items():
+            ordered = sorted(
+                player_rows,
+                key=lambda row: (
+                    self._as_utc_timestamp(row.kickoff)
+                    or pd.Timestamp.min.tz_localize("UTC"),
+                    row.fixture_id,
+                ),
+            )[-lookback:]
+            weighted_total = 0.0
+            total_weight = 0.0
+            minutes = appearances = goals = assists = 0.0
+            for age, row in enumerate(reversed(ordered)):
+                rating = self._valid_rating(row.rating)
+                if rating is not None:
+                    weight = decay**age
+                    weighted_total += rating * weight
+                    total_weight += weight
+                row_minutes = self._valid_non_negative(row.minutes)
+                minutes += row_minutes
+                appearances += float(row_minutes > 0.0 or rating is not None)
+                goals += self._valid_non_negative(row.goals)
+                assists += self._valid_non_negative(row.assists)
+
+            player_summary = {
+                "minutes": minutes,
+                "appearances": appearances,
+                "goals": goals,
+                "assists": assists,
+            }
+            if total_weight > 0.0:
+                player_summary["rating"] = round(weighted_total / total_weight, 6)
+                ratings[player_id] = player_summary
+            elif max(appearances, minutes / 90.0) > 0.0 and goals + assists > 0.0:
+                ratings[player_id] = player_summary
+        return ratings
+
+    @classmethod
+    def _schedule_frame(
+        cls,
+        fixtures: list[HistoricalFixture],
+        *,
+        team_id: int,
+        since: datetime,
+        before: datetime,
+    ) -> pd.DataFrame:
+        columns = [
+            "match_date",
+            "fixture_id",
+            "league_id",
+            "is_home",
+            "opponent_team_id",
+        ]
+        since_at = cls._as_utc_timestamp(since)
+        before_at = cls._as_utc_timestamp(before)
+        if since_at is None or before_at is None:
+            return pd.DataFrame(columns=columns)
+
+        rows: list[dict[str, object]] = []
+        for fixture in fixtures:
+            kickoff_at = cls._as_utc_timestamp(fixture.kickoff)
+            if kickoff_at is None or not since_at <= kickoff_at < before_at:
+                continue
+            is_home = fixture.home_team_id == team_id
+            is_away = fixture.away_team_id == team_id
+            if not is_home and not is_away:
+                continue
+            rows.append(
+                {
+                    "match_date": kickoff_at,
+                    "fixture_id": fixture.fixture_id,
+                    "league_id": fixture.league_id,
+                    "is_home": is_home,
+                    "opponent_team_id": (
+                        fixture.away_team_id if is_home else fixture.home_team_id
+                    ),
+                }
+            )
+        return pd.DataFrame(rows, columns=columns).sort_values(
+            ["match_date", "fixture_id"],
+            ignore_index=True,
+        )
+
+    @staticmethod
+    def _as_utc_timestamp(value: object) -> pd.Timestamp | None:
+        try:
+            timestamp = pd.Timestamp(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if pd.isna(timestamp):
+            return None
+        try:
+            if timestamp.tzinfo is None:
+                return timestamp.tz_localize("UTC")
+            return timestamp.tz_convert("UTC")
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @staticmethod
+    def _valid_rating(value: Any) -> float | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        try:
+            rating = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return rating if math.isfinite(rating) and rating > 0.0 else None
+
+    @staticmethod
+    def _valid_non_negative(value: Any) -> float:
+        if isinstance(value, bool) or value is None:
+            return 0.0
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        return number if math.isfinite(number) and number >= 0.0 else 0.0
 
     @staticmethod
     def _resolve_team_id(

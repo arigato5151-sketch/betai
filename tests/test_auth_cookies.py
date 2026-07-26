@@ -278,3 +278,86 @@ def test_admin_cannot_remove_own_access() -> None:
 
     assert deactivate.status_code == 400
     assert remove_role.status_code == 400
+
+
+def test_admin_can_manage_team_locations_for_travel_features() -> None:
+    test_client = TestClient(app, base_url="https://testserver")
+    assert _login("admin", "admin-password-123", test_client).status_code == 200
+
+    response = test_client.put(
+        "/api/admin/team-locations",
+        json={
+            "locations": [
+                {
+                    "data_source": " API_FOOTBALL ",
+                    "team_id": 900001,
+                    "name": "Home Base",
+                    "latitude": 41.0082,
+                    "longitude": 28.9784,
+                },
+                {
+                    "team_id": 900002,
+                    "name": "Away Base",
+                    "latitude": 39.9334,
+                    "longitude": 32.8597,
+                },
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"processed": 2}
+    listing = test_client.get("/api/admin/team-locations")
+    assert listing.status_code == 200
+    locations = {
+        item["team_id"]: item for item in listing.json() if item["team_id"] >= 900001
+    }
+    assert locations[900001]["data_source"] == "api_football"
+    assert locations[900002]["longitude"] == pytest.approx(32.8597)
+    assert {item["team_id"] for item in listing.json()} >= {900001, 900002}
+
+    page = test_client.get(
+        "/api/admin/team-locations",
+        params={"data_source": "API_FOOTBALL", "limit": 1, "offset": 0},
+    )
+    assert page.status_code == 200
+    assert len(page.json()) == 1
+    assert page.json()[0]["data_source"] == "api_football"
+
+
+def test_team_location_management_requires_admin_and_coordinate_pairs() -> None:
+    viewer_client = TestClient(app, base_url="https://testserver")
+    assert _login("viewer", "viewer-password-123", viewer_client).status_code == 200
+    forbidden = viewer_client.get("/api/admin/team-locations")
+    assert forbidden.status_code == 403
+
+    admin_client = TestClient(app, base_url="https://testserver")
+    assert _login("admin", "admin-password-123", admin_client).status_code == 200
+    invalid = admin_client.put(
+        "/api/admin/team-locations",
+        json={
+            "locations": [
+                {
+                    "team_id": 900003,
+                    "name": "Incomplete Coordinates",
+                    "latitude": 41.0,
+                }
+            ]
+        },
+    )
+    assert invalid.status_code == 422
+
+    boolean_values = admin_client.put(
+        "/api/admin/team-locations",
+        json={
+            "locations": [
+                {
+                    "team_id": True,
+                    "name": "Boolean Coordinates",
+                    "latitude": True,
+                    "longitude": False,
+                }
+            ]
+        },
+    )
+    assert boolean_values.status_code == 422

@@ -14,6 +14,8 @@ from sqlalchemy import (
     JSON,
     String,
     Table,
+    UniqueConstraint,
+    Index,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -260,6 +262,82 @@ class HistoricalFixture(Base):
         server_default="api_football",
         index=True,
     )
+    ingested_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class HistoricalPlayerPerformance(Base):
+    __tablename__ = "historical_player_performances"
+    __table_args__ = (
+        UniqueConstraint(
+            "fixture_id",
+            "player_id",
+            name="uq_historical_player_performances_fixture_player",
+        ),
+        Index(
+            "ix_historical_player_performances_team_kickoff",
+            "team_id",
+            "kickoff",
+        ),
+        Index(
+            "ix_historical_player_performances_player_kickoff",
+            "player_id",
+            "kickoff",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fixture_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("historical_fixtures.fixture_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    league_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    kickoff: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    team_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    player_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    started: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rating: Mapped[float | None] = mapped_column(Float, nullable=True)
+    position: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    goals: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assists: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="api_football",
+        server_default="api_football",
+    )
+    ingested_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class TeamLocation(Base):
+    __tablename__ = "team_locations"
+    __table_args__ = (
+        UniqueConstraint(
+            "data_source",
+            "team_id",
+            name="uq_team_locations_source_team",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    data_source: Mapped[str] = mapped_column(String(50), nullable=False)
+    team_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     ingested_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )

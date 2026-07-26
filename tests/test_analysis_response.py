@@ -9,7 +9,10 @@ from app.api.endpoints import (
     AnalysisRequest,
     _build_analysis_response,
     _compute_analysis,
+    _derive_reference_lineup,
     _fetch_ml_match_data,
+    _fetch_player_rating_data,
+    _select_reference_lineup,
 )
 from app.core.config import settings
 from app.prediction.ml.features import FeatureEngine
@@ -254,6 +257,19 @@ async def test_analysis_prefers_complete_point_in_time_history_over_api(
         away_matches_df=away_matches,
         home_previous_starting_xi=list(range(1, 12)),
         away_previous_starting_xi=list(range(20, 31)),
+        home_schedule_df=home_matches,
+        away_schedule_df=away_matches,
+        home_player_ratings={
+            player_id: {
+                "rating": 9.5 if player_id == 11 else 7.0,
+                "minutes": 1000.0,
+            }
+            for player_id in range(1, 14)
+        },
+        away_player_ratings={
+            player_id: {"rating": 7.0, "minutes": 1000.0} for player_id in range(20, 33)
+        },
+        away_travel_distance_km=1200.0,
     )
     monkeypatch.setattr(endpoints, "_get_historical_feature_context", lambda _: context)
     monkeypatch.setattr(endpoints.ml_pipeline, "is_ready", False)
@@ -266,6 +282,22 @@ async def test_analysis_prefers_complete_point_in_time_history_over_api(
             "home_questionable_players": 0,
             "away_questionable_players": 1,
             "availability_report_present": 1,
+            "home_unavailable_players": [
+                {
+                    "player_id": 11,
+                    "status": "missing",
+                    "name": "Critical Starter",
+                    "reason": "injury",
+                }
+            ],
+            "away_unavailable_players": [
+                {
+                    "player_id": 30,
+                    "status": "questionable",
+                    "name": "Away Player",
+                    "reason": "fitness",
+                }
+            ],
         }
     )
     lineups_api = AsyncMock(
@@ -308,10 +340,136 @@ async def test_analysis_prefers_complete_point_in_time_history_over_api(
         9 / 11, abs=1e-4
     )
     assert computed["feature_vector"]["away_lineup_continuity"] == 1.0
+    assert computed["feature_vector"]["home_team_strength_ratio"] < 1.0
+    # A confirmed starter supersedes the stale pre-match questionable status.
+    assert computed["feature_vector"]["away_team_strength_ratio"] == 1.0
+    assert computed["feature_vector"]["fatigue_index"] > 0.0
+    assert computed["analysis"]["player_impact"]["home"][
+        "critical_missing_player_ids"
+    ] == [11]
+    assert computed["data_quality"]["away_travel_distance_km"] == 1200.0
     home_api.assert_not_awaited()
     h2h_api.assert_not_awaited()
     availability_api.assert_awaited_once_with(999, 1, 2)
     lineups_api.assert_awaited_once_with(999, 1, 2)
+
+
+@pytest.mark.asyncio
+async def test_upcoming_match_uses_season_ratings_to_derive_typical_xi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    home_ratings = {
+        player_id: {
+            "rating": 6.0 + player_id / 100,
+            "minutes": float(2000 - player_id),
+            "appearances": 20.0,
+        }
+        for player_id in range(1, 14)
+    }
+    away_ratings = {
+        player_id: {
+            "rating": 7.0,
+            "minutes": float(3000 - player_id),
+            "appearances": 25.0,
+        }
+        for player_id in range(20, 33)
+    }
+    ratings_api = AsyncMock(side_effect=[home_ratings, away_ratings])
+    monkeypatch.setattr(
+        endpoints.football_api,
+        "get_team_player_ratings",
+        ratings_api,
+    )
+    payload = AnalysisRequest(
+        home_team="Home",
+        away_team="Away",
+        home_team_id=1,
+        away_team_id=2,
+        league_id=203,
+        season=2098,
+        kickoff="2099-07-20T18:00:00Z",
+        home_stats={"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
+        away_stats={"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        odd=2.1,
+    )
+
+    home, away = await _fetch_player_rating_data(
+        payload,
+        HistoricalFeatureContext(),
+    )
+
+    assert home == home_ratings
+    assert away == away_ratings
+    assert _derive_reference_lineup(home) == list(range(1, 12))
+    assert ratings_api.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_current_season_roster_replaces_incomplete_stale_local_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    stale_local = {
+        player_id: {
+            "rating": 9.0,
+            "minutes": 900.0,
+            "appearances": 10.0,
+        }
+        for player_id in range(1, 8)
+    }
+    current_home = {
+        player_id: {
+            "rating": 7.0,
+            "minutes": float(3000 - player_id),
+            "appearances": 20.0,
+        }
+        for player_id in range(20, 33)
+    }
+    current_away = {
+        player_id: {
+            "rating": 7.0,
+            "minutes": float(3000 - player_id),
+            "appearances": 20.0,
+        }
+        for player_id in range(40, 53)
+    }
+    ratings_api = AsyncMock(side_effect=[current_home, current_away])
+    monkeypatch.setattr(
+        endpoints.football_api,
+        "get_team_player_ratings",
+        ratings_api,
+    )
+    payload = AnalysisRequest(
+        home_team="Home",
+        away_team="Away",
+        home_team_id=1,
+        away_team_id=2,
+        league_id=203,
+        season=2098,
+        kickoff="2099-07-20T18:00:00Z",
+        home_stats={"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
+        away_stats={"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        odd=2.1,
+    )
+    historical = HistoricalFeatureContext(
+        home_previous_starting_xi=list(range(1, 12)),
+        away_previous_starting_xi=list(range(40, 51)),
+        home_player_ratings=stale_local,
+    )
+
+    home, away = await _fetch_player_rating_data(payload, historical)
+
+    assert home == current_home
+    assert away == current_away
+    assert not set(stale_local).intersection(home)
+    assert _select_reference_lineup(
+        historical.home_previous_starting_xi,
+        home,
+    ) == list(range(20, 31))
+    assert ratings_api.await_count == 2
 
 
 @pytest.mark.asyncio
