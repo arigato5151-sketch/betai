@@ -17,36 +17,34 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.alter_column(
-        "historical_fixtures",
-        "fixture_id",
-        existing_type=sa.Integer(),
-        type_=sa.BigInteger(),
-        existing_nullable=False,
-    )
-    op.alter_column(
-        "historical_fixtures",
-        "home_team_id",
-        existing_type=sa.Integer(),
-        type_=sa.BigInteger(),
-        existing_nullable=False,
-    )
-    op.alter_column(
-        "historical_fixtures",
-        "away_team_id",
-        existing_type=sa.Integer(),
-        type_=sa.BigInteger(),
-        existing_nullable=False,
-    )
-    op.add_column(
-        "historical_fixtures",
-        sa.Column(
-            "data_source",
-            sa.String(length=50),
-            nullable=False,
-            server_default="api_football",
-        ),
-    )
+    # SQLite requires Alembic's table-copy strategy for column type changes.
+    with op.batch_alter_table("historical_fixtures") as batch_op:
+        batch_op.alter_column(
+            "fixture_id",
+            existing_type=sa.Integer(),
+            type_=sa.BigInteger(),
+            existing_nullable=False,
+        )
+        batch_op.alter_column(
+            "home_team_id",
+            existing_type=sa.Integer(),
+            type_=sa.BigInteger(),
+            existing_nullable=False,
+        )
+        batch_op.alter_column(
+            "away_team_id",
+            existing_type=sa.Integer(),
+            type_=sa.BigInteger(),
+            existing_nullable=False,
+        )
+        batch_op.add_column(
+            sa.Column(
+                "data_source",
+                sa.String(length=50),
+                nullable=False,
+                server_default="api_football",
+            )
+        )
     op.create_index(
         "ix_historical_fixtures_data_source",
         "historical_fixtures",
@@ -59,25 +57,23 @@ def downgrade() -> None:
         "ix_historical_fixtures_data_source",
         table_name="historical_fixtures",
     )
-    op.drop_column("historical_fixtures", "data_source")
-    op.alter_column(
-        "historical_fixtures",
-        "away_team_id",
-        existing_type=sa.BigInteger(),
-        type_=sa.Integer(),
-        existing_nullable=False,
-    )
-    op.alter_column(
-        "historical_fixtures",
-        "home_team_id",
-        existing_type=sa.BigInteger(),
-        type_=sa.Integer(),
-        existing_nullable=False,
-    )
-    op.alter_column(
-        "historical_fixtures",
-        "fixture_id",
-        existing_type=sa.BigInteger(),
-        type_=sa.Integer(),
-        existing_nullable=False,
-    )
+    with op.batch_alter_table("historical_fixtures") as batch_op:
+        batch_op.drop_column("data_source")
+        batch_op.alter_column(
+            "away_team_id",
+            existing_type=sa.BigInteger(),
+            type_=sa.Integer(),
+            existing_nullable=False,
+        )
+        batch_op.alter_column(
+            "home_team_id",
+            existing_type=sa.BigInteger(),
+            type_=sa.Integer(),
+            existing_nullable=False,
+        )
+        batch_op.alter_column(
+            "fixture_id",
+            existing_type=sa.BigInteger(),
+            type_=sa.Integer(),
+            existing_nullable=False,
+        )
