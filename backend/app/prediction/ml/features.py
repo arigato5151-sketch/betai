@@ -1,6 +1,9 @@
+import math
+from collections.abc import Mapping
+from typing import Any, Dict, List, Optional, cast
+
 import numpy as np
 import pandas as pd
-from typing import Any, Dict, List, Optional, cast
 
 from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS
 
@@ -10,11 +13,12 @@ LEAGUE_ONE_HOT_FEATURES = [
 
 
 class FeatureEngine:
-    SCHEMA_VERSION = "ml_features_v4"
+    SCHEMA_VERSION = "ml_features_v5"
     COMPATIBLE_SNAPSHOT_VERSIONS = {
         "ml_features_v1",
         "ml_features_v2",
         "ml_features_v3",
+        "ml_features_v4",
         SCHEMA_VERSION,
     }
     LEAGUE_FEATURE_NAMES = list(LEAGUE_ONE_HOT_FEATURES)
@@ -58,6 +62,9 @@ class FeatureEngine:
         "away_lineup_reference_available",
         "home_lineup_continuity",
         "away_lineup_continuity",
+        "odds_movement_home",
+        "odds_movement_draw",
+        "odds_movement_away",
         *LEAGUE_FEATURE_NAMES,
     ]
     FEATURE_DEFAULTS = {
@@ -99,6 +106,9 @@ class FeatureEngine:
         "away_lineup_reference_available": 0.0,
         "home_lineup_continuity": 0.0,
         "away_lineup_continuity": 0.0,
+        "odds_movement_home": 0.0,
+        "odds_movement_draw": 0.0,
+        "odds_movement_away": 0.0,
         **{name: 0.0 for name in LEAGUE_ONE_HOT_FEATURES},
     }
 
@@ -334,6 +344,54 @@ class FeatureEngine:
         return confirmed, reference_available, round(continuity, 4)
 
     @staticmethod
+    def compute_odds_movement(opening_odd: object, current_odd: object) -> float:
+        """Return percentage odds movement; negative values represent a drop."""
+        accepted_types = (int, float, str)
+        if (
+            isinstance(opening_odd, bool)
+            or isinstance(current_odd, bool)
+            or not isinstance(opening_odd, accepted_types)
+            or not isinstance(current_odd, accepted_types)
+        ):
+            return 0.0
+        try:
+            opening = float(opening_odd)
+            current = float(current_odd)
+        except (TypeError, ValueError):
+            return 0.0
+        if (
+            not math.isfinite(opening)
+            or not math.isfinite(current)
+            or opening <= 1.0
+            or current <= 1.0
+        ):
+            return 0.0
+        return round(((current / opening) - 1.0) * 100.0, 4)
+
+    @classmethod
+    def compute_odds_movement_features(
+        cls,
+        opening_odds: Mapping[str, object] | None,
+        current_odds: Mapping[str, object] | None,
+    ) -> Dict[str, float]:
+        opening = opening_odds or {}
+        current = current_odds or {}
+        return {
+            "odds_movement_home": cls.compute_odds_movement(
+                opening.get("HOME_WIN"),
+                current.get("HOME_WIN"),
+            ),
+            "odds_movement_draw": cls.compute_odds_movement(
+                opening.get("DRAW"),
+                current.get("DRAW"),
+            ),
+            "odds_movement_away": cls.compute_odds_movement(
+                opening.get("AWAY_WIN"),
+                current.get("AWAY_WIN"),
+            ),
+        }
+
+    @staticmethod
     def build_inference_features(
         home_stats: Dict[str, Any],
         away_stats: Dict[str, Any],
@@ -347,6 +405,8 @@ class FeatureEngine:
         lineup_context: Optional[Dict[str, Any]] = None,
         fixture_date: Optional[pd.Timestamp] = None,
         league_id: Optional[int] = None,
+        opening_odds: Mapping[str, object] | None = None,
+        current_odds: Mapping[str, object] | None = None,
     ) -> Dict[str, float]:
         """
         Robust feature vector inşa et - training'de kullanılan aynı formüllerle.
@@ -418,6 +478,10 @@ class FeatureEngine:
             lineup_context.get("away_starting_xi"),
             lineup_context.get("away_previous_starting_xi"),
         )
+        odds_movements = FeatureEngine.compute_odds_movement_features(
+            opening_odds,
+            current_odds,
+        )
 
         return {
             "home_form": float(home_stats.get("form", 50.0)),
@@ -465,6 +529,7 @@ class FeatureEngine:
             "away_lineup_reference_available": away_lineup[1],
             "home_lineup_continuity": home_lineup[2],
             "away_lineup_continuity": away_lineup[2],
+            **odds_movements,
             **{
                 name: float(name == f"league_{league_id}")
                 for name in FeatureEngine.LEAGUE_FEATURE_NAMES

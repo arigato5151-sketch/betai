@@ -1,7 +1,9 @@
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pandas as pd
 import pytest
+from pydantic import ValidationError
 
 from app.api.endpoints import (
     AnalysisRequest,
@@ -113,6 +115,105 @@ async def test_analysis_collects_feature_snapshot_before_first_model(
     assert captured_stats_kwargs["away_match_history"] is away_matches
     assert captured_stats_kwargs["as_of"] == payload.kickoff
     assert computed["ml_result"] == {"ready": False}
+
+
+@pytest.mark.asyncio
+async def test_analysis_maps_validated_odds_snapshots_to_ml_features(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    monkeypatch.setattr(endpoints.ml_pipeline, "is_ready", False)
+    kickoff = datetime(2030, 7, 20, 18, tzinfo=UTC)
+    payload = AnalysisRequest(
+        home_team="Home",
+        away_team="Away",
+        home_stats={"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
+        away_stats={"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        odd=2.0,
+        kickoff=kickoff,
+        opening_odds_1x2={
+            "HOME_WIN": 2.5,
+            "DRAW": 3.0,
+            "AWAY_WIN": 4.0,
+        },
+        current_odds_1x2={
+            "HOME_WIN": 2.0,
+            "DRAW": 3.3,
+            "AWAY_WIN": 3.6,
+        },
+        opening_odds_at=kickoff - timedelta(days=3),
+        current_odds_at=kickoff - timedelta(hours=1),
+    )
+
+    computed = await _compute_analysis(payload)
+
+    assert computed["feature_vector"]["odds_movement_home"] == -20.0
+    assert computed["feature_vector"]["odds_movement_draw"] == 10.0
+    assert computed["feature_vector"]["odds_movement_away"] == -10.0
+    assert computed["data_quality"]["odds_snapshot"] == {
+        "movement_features_used": True,
+        "opening_captured_at": (kickoff - timedelta(days=3)).isoformat(),
+        "current_captured_at": (kickoff - timedelta(hours=1)).isoformat(),
+    }
+
+
+def test_analysis_rejects_incomplete_or_invalid_odds_snapshots() -> None:
+    base = {
+        "home_team": "Home",
+        "away_team": "Away",
+        "home_stats": {"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
+        "away_stats": {"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        "odd": 2.0,
+    }
+
+    with pytest.raises(ValidationError):
+        AnalysisRequest(
+            **base,
+            opening_odds_1x2={"HOME_WIN": 2.5, "AWAY_WIN": 4.0},
+            opening_odds_at="2030-07-17T18:00:00Z",
+            kickoff="2030-07-20T18:00:00Z",
+        )
+    with pytest.raises(ValidationError):
+        AnalysisRequest(
+            **base,
+            current_odds_1x2={
+                "HOME_WIN": 1.0,
+                "DRAW": 3.0,
+                "AWAY_WIN": 4.0,
+            },
+            current_odds_at="2030-07-20T17:00:00Z",
+            kickoff="2030-07-20T18:00:00Z",
+        )
+
+
+def test_analysis_rejects_unversioned_or_post_kickoff_odds_snapshots() -> None:
+    base = {
+        "home_team": "Home",
+        "away_team": "Away",
+        "home_stats": {"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
+        "away_stats": {"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        "odd": 2.0,
+        "kickoff": "2030-07-20T18:00:00Z",
+    }
+    odds = {"HOME_WIN": 2.5, "DRAW": 3.0, "AWAY_WIN": 4.0}
+
+    with pytest.raises(ValidationError, match="provided together"):
+        AnalysisRequest(**base, current_odds_1x2=odds)
+    with pytest.raises(ValidationError, match="before kickoff"):
+        AnalysisRequest(
+            **base,
+            current_odds_1x2=odds,
+            current_odds_at="2030-07-20T18:00:00Z",
+        )
+    with pytest.raises(ValidationError, match="cannot follow"):
+        AnalysisRequest(
+            **base,
+            opening_odds_1x2=odds,
+            opening_odds_at="2030-07-20T17:30:00Z",
+            current_odds_1x2=odds,
+            current_odds_at="2030-07-20T17:00:00Z",
+        )
 
 
 @pytest.mark.asyncio

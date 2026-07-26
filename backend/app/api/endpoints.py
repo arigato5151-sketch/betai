@@ -11,7 +11,14 @@ from fastapi import (
     Response,
     status,
 )
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -263,6 +270,23 @@ class TeamStatsInput(BaseModel):
         return round(float(v), 3)
 
 
+class Odds1X2Input(BaseModel):
+    """Validated decimal 1X2 snapshot using public API outcome aliases."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    home_win: float = Field(..., alias="HOME_WIN", gt=1.0, le=1000.0)
+    draw: float = Field(..., alias="DRAW", gt=1.0, le=1000.0)
+    away_win: float = Field(..., alias="AWAY_WIN", gt=1.0, le=1000.0)
+
+    def as_outcome_dict(self) -> Dict[str, float]:
+        return {
+            "HOME_WIN": self.home_win,
+            "DRAW": self.draw,
+            "AWAY_WIN": self.away_win,
+        }
+
+
 class AnalysisRequest(BaseModel):
     home_team: str = Field(
         ..., min_length=1, max_length=100, description="Home team name"
@@ -274,6 +298,10 @@ class AnalysisRequest(BaseModel):
     away_stats: TeamStatsInput
     odd: float = Field(..., gt=1.0, le=1000.0, description="Betting odd (>1.0)")
     market_1x2: Optional[Dict[str, Any]] = None
+    opening_odds_1x2: Optional[Odds1X2Input] = None
+    current_odds_1x2: Optional[Odds1X2Input] = None
+    opening_odds_at: Optional[datetime] = None
+    current_odds_at: Optional[datetime] = None
     fixture_id: Optional[int] = Field(None, gt=0, description="API Football fixture ID")
     home_team_id: Optional[int] = Field(
         None, gt=0, description="API Football home team ID"
@@ -302,6 +330,45 @@ class AnalysisRequest(BaseModel):
         if not isinstance(v, (int, float)) or v <= 1.0:
             raise ValueError("Odd must be numeric and > 1.0")
         return round(float(v), 3)
+
+    @model_validator(mode="after")
+    def validate_odds_snapshot_timeline(self) -> "AnalysisRequest":
+        snapshots = (
+            ("opening", self.opening_odds_1x2, self.opening_odds_at),
+            ("current", self.current_odds_1x2, self.current_odds_at),
+        )
+        for label, odds, captured_at in snapshots:
+            if (odds is None) != (captured_at is None):
+                raise ValueError(
+                    f"{label}_odds_1x2 and {label}_odds_at must be provided together"
+                )
+
+        supplied_timestamps = [
+            captured_at for _, _, captured_at in snapshots if captured_at is not None
+        ]
+        if not supplied_timestamps:
+            return self
+        if self.kickoff is None:
+            raise ValueError("kickoff is required when odds snapshots are provided")
+        if self.kickoff.utcoffset() is None:
+            raise ValueError("kickoff must include a timezone for odds validation")
+        if any(captured_at.utcoffset() is None for captured_at in supplied_timestamps):
+            raise ValueError("odds snapshot timestamps must include a timezone")
+
+        kickoff_utc = self.kickoff.astimezone(timezone.utc)
+        if any(
+            captured_at.astimezone(timezone.utc) >= kickoff_utc
+            for captured_at in supplied_timestamps
+        ):
+            raise ValueError("odds snapshots must be captured before kickoff")
+        if (
+            self.opening_odds_at is not None
+            and self.current_odds_at is not None
+            and self.opening_odds_at.astimezone(timezone.utc)
+            > self.current_odds_at.astimezone(timezone.utc)
+        ):
+            raise ValueError("opening odds timestamp cannot follow current odds")
+        return self
 
 
 class ActualResultUpdate(BaseModel):
@@ -371,13 +438,15 @@ class BacktestRequest(BaseModel):
 
 def _build_payload_from_prefill(prefill: Dict[str, Any]) -> AnalysisRequest:
     fixture = prefill.get("fixture") or {}
+    raw_market = prefill.get("market_1x2")
+    market = raw_market if isinstance(raw_market, dict) else {}
     return AnalysisRequest(
         home_team=prefill["home_team"],
         away_team=prefill["away_team"],
         home_stats=TeamStatsInput(**prefill["home_stats"]),
         away_stats=TeamStatsInput(**prefill["away_stats"]),
         odd=prefill["odd"],
-        market_1x2=prefill.get("market_1x2"),
+        market_1x2=market or None,
         fixture_id=fixture.get("fixture_id"),
         home_team_id=fixture.get("home_team_id"),
         away_team_id=fixture.get("away_team_id"),
@@ -572,6 +641,16 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         "home_previous_starting_xi": historical.home_previous_starting_xi,
         "away_previous_starting_xi": historical.away_previous_starting_xi,
     }
+    opening_odds = (
+        payload.opening_odds_1x2.as_outcome_dict()
+        if payload.opening_odds_1x2 is not None
+        else None
+    )
+    current_odds = (
+        payload.current_odds_1x2.as_outcome_dict()
+        if payload.current_odds_1x2 is not None
+        else None
+    )
     feature_vector = FeatureEngine.build_inference_features(
         home_stats=payload.home_stats.model_dump(),
         away_stats=payload.away_stats.model_dump(),
@@ -585,6 +664,8 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         lineup_context=lineup_context,
         fixture_date=payload.kickoff,
         league_id=payload.league_id,
+        opening_odds=opening_odds,
+        current_odds=current_odds,
     )
     if ml_pipeline.is_ready:
         ml_result = ml_pipeline.predict_match(feature_vector)
@@ -634,6 +715,19 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         "home_history_matches": history_home_count,
         "away_history_matches": history_away_count,
         "required_history_matches": required_history,
+        "odds_snapshot": {
+            "movement_features_used": bool(opening_odds and current_odds),
+            "opening_captured_at": (
+                payload.opening_odds_at.isoformat()
+                if payload.opening_odds_at is not None
+                else None
+            ),
+            "current_captured_at": (
+                payload.current_odds_at.isoformat()
+                if payload.current_odds_at is not None
+                else None
+            ),
+        },
     }
 
     return {
@@ -703,7 +797,8 @@ def _persist_analysis(payload: AnalysisRequest, computed: dict):
         "kickoff": kickoff,
         "analyzed_at": analyzed_at,
         "analysis_lead_minutes": analysis_lead_minutes,
-        "market_snapshot_at": analyzed_at if payload.market_1x2 else None,
+        "market_snapshot_at": payload.current_odds_at
+        or (analyzed_at if payload.market_1x2 else None),
     }
 
     with SessionLocal() as db:

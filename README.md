@@ -16,6 +16,7 @@ Projenin kaynak koduna GitHub üzerinden ulaşabilirsiniz: [arigato5151-sketch/b
 - Piyasa olasılığını marjdan arındıran (de-vig) value bet ve Kelly stake hesabı
 - Yeterli etiketli veri oluştuğunda devreye giren çok sınıflı ML pipeline'ı
 - HMAC-SHA256 ile imzalanan ve yükleme/rollback öncesinde bütünlüğü doğrulanan ML artifact'ları
+- Açılış ve güncel 1X2 oranlarından üretilen dropping/drifting odds ML feature'ları
 - Tahmin geçmişi, gerçek sonuç kaydı, ROI/Brier Score denetimi ve backtest
 - Redis erişilemediğinde Memcached, o da yoksa bellek içi TTL cache; PostgreSQL erişilemediğinde SQLite fallback
 - Redis kesintisinde process-local çalışan ve bağlantı geri geldiğinde otomatik olarak Redis'e dönen login rate limiter
@@ -289,6 +290,13 @@ nötr kalabilir ve maç saatine yakın yeniden analiz daha zengin snapshot üret
 `ml_features_v4`, desteklenen ligleri one-hot feature olarak ekler. Böylece model
 ligler arasındaki ev sahibi/beraberlik/deplasman dağılımı farklarını öğrenebilir;
 eski snapshot'lar bu alanlarda sıfır varsayılanıyla geriye uyumlu kalır.
+
+`ml_features_v5`, açılış oranı ile analiz anındaki güncel/kapanışa yakın oran
+arasındaki `((current / opening) - 1) * 100` değişimini ev sahibi, beraberlik ve
+deplasman için ayrı feature olarak ekler. Negatif değer dropping odds, pozitif değer
+drifting odds anlamına gelir. İki eksiksiz 1X2 snapshot bulunmadığında üç feature da
+`0.0` olur. Sonuçtan sonra alınan closing odds bu pre-match feature'lara bağlanmaz;
+böylece gelecek bilgisi sızıntısı engellenir.
 
 ### Kalibrasyon doğrulaması
 
@@ -658,13 +666,30 @@ curl -b cookies.txt -X POST http://localhost:8000/api/analyze \
   -d '{
     "home_team": "Fenerbahce",
     "away_team": "Galatasaray",
+    "kickoff": "2030-07-20T18:00:00Z",
     "home_stats": {"form": 85, "attack": 88, "defense": 82, "xg": 2.1},
     "away_stats": {"form": 78, "attack": 84, "defense": 76, "xg": 1.8},
-    "odd": 2.30
+    "odd": 2.30,
+    "opening_odds_1x2": {
+      "HOME_WIN": 2.50,
+      "DRAW": 3.20,
+      "AWAY_WIN": 2.90
+    },
+    "current_odds_1x2": {
+      "HOME_WIN": 2.30,
+      "DRAW": 3.30,
+      "AWAY_WIN": 3.10
+    },
+    "opening_odds_at": "2030-07-17T18:00:00Z",
+    "current_odds_at": "2030-07-20T17:00:00Z"
   }'
 ```
 
 Doğrulama sınırları: form/hücum/savunma `0-100`, xG `0-5`, oran `1.0` değerinden büyük olmalıdır.
+Odds snapshot'ları opsiyoneldir; verildiğinde `HOME_WIN`, `DRAW` ve `AWAY_WIN`
+alanlarının üçü de geçerli decimal oran içermelidir. Her snapshot timezone içeren
+bir `*_odds_at` alanı ve maçın `kickoff` zamanını gerektirir; kickoff anındaki veya
+sonrasındaki oranlar veri sızıntısını engellemek için reddedilir.
 
 ### Gerçek sonuç kaydetme
 

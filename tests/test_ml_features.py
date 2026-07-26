@@ -159,6 +159,28 @@ def test_home_advantage_and_h2h_goals_are_bounded() -> None:
     ) == (2.0, 2.0)
 
 
+@pytest.mark.parametrize(
+    ("opening", "current", "expected"),
+    [
+        pytest.param(2.5, 2.0, -20.0, id="dropping-odds"),
+        pytest.param(3.0, 3.3, 10.0, id="drifting-odds"),
+        pytest.param(2.2, 2.2, 0.0, id="unchanged-odds"),
+        pytest.param(None, 2.0, 0.0, id="missing-opening"),
+        pytest.param(2.0, None, 0.0, id="missing-current"),
+        pytest.param("invalid", 2.0, 0.0, id="non-numeric"),
+        pytest.param(float("nan"), 2.0, 0.0, id="non-finite"),
+        pytest.param(True, 2.0, 0.0, id="boolean"),
+        pytest.param(1.0, 2.0, 0.0, id="invalid-decimal-odd"),
+    ],
+)
+def test_odds_movement_is_percentage_change_with_safe_fallback(
+    opening: object,
+    current: object,
+    expected: float,
+) -> None:
+    assert FeatureEngine.compute_odds_movement(opening, current) == expected
+
+
 def test_inference_feature_vector_has_stable_schema_and_rest_difference() -> None:
     home_frame = matches_frame()
     away_frame = matches_frame().copy()
@@ -185,6 +207,8 @@ def test_inference_feature_vector_has_stable_schema_and_rest_difference() -> Non
             "away_previous_starting_xi": list(range(20, 31)),
         },
         fixture_date=NOW,
+        opening_odds={"HOME_WIN": 2.5, "DRAW": 3.0, "AWAY_WIN": 4.0},
+        current_odds={"HOME_WIN": 2.0, "DRAW": 3.3, "AWAY_WIN": 3.6},
     )
 
     assert list(features) == FeatureEngine.FEATURE_NAMES
@@ -198,6 +222,9 @@ def test_inference_feature_vector_has_stable_schema_and_rest_difference() -> Non
     assert features["home_lineup_reference_available"] == 1.0
     assert features["home_lineup_continuity"] == pytest.approx(9 / 11, abs=1e-4)
     assert features["away_lineup_continuity"] == 1.0
+    assert features["odds_movement_home"] == -20.0
+    assert features["odds_movement_draw"] == 10.0
+    assert features["odds_movement_away"] == -10.0
 
 
 def test_empty_feature_sources_use_documented_defaults() -> None:
@@ -216,6 +243,9 @@ def test_empty_feature_sources_use_documented_defaults() -> None:
     assert features["home_form_ema"] == 50.0
     assert features["rest_days_diff"] == 0.0
     assert features["home_elo"] == 1500.0
+    assert features["odds_movement_home"] == 0.0
+    assert features["odds_movement_draw"] == 0.0
+    assert features["odds_movement_away"] == 0.0
 
 
 def test_training_uses_same_versioned_snapshot_schema_as_inference() -> None:
@@ -237,7 +267,10 @@ def test_training_uses_same_versioned_snapshot_schema_as_inference() -> None:
     assert features == snapshot
 
 
-@pytest.mark.parametrize("schema_version", ["ml_features_v1", "ml_features_v2"])
+@pytest.mark.parametrize(
+    "schema_version",
+    ["ml_features_v1", "ml_features_v2", "ml_features_v3", "ml_features_v4"],
+)
 def test_older_snapshots_are_forward_compatible_with_new_defaults(
     schema_version: str,
 ) -> None:
@@ -264,6 +297,9 @@ def test_older_snapshots_are_forward_compatible_with_new_defaults(
     assert features["home_missing_players"] == 0.0
     assert features["away_questionable_players"] == 0.0
     assert features["home_lineup_continuity"] == 0.0
+    assert features["odds_movement_home"] == 0.0
+    assert features["odds_movement_draw"] == 0.0
+    assert features["odds_movement_away"] == 0.0
     assert list(features) == FeatureEngine.FEATURE_NAMES
 
 
@@ -312,3 +348,4 @@ def test_legacy_training_rows_receive_explicit_full_schema_defaults() -> None:
     assert features["home_form_ema"] == 50.0
     assert features["home_elo"] == 1500.0
     assert features["h2h_avg_goals_away"] == 1.0
+    assert features["odds_movement_home"] == 0.0

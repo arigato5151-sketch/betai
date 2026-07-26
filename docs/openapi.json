@@ -1205,6 +1205,50 @@
             ],
             "title": "Market 1X2"
           },
+          "opening_odds_1x2": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Odds1X2Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current_odds_1x2": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Odds1X2Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "opening_odds_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Odds At"
+          },
+          "current_odds_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Odds At"
+          },
           "fixture_id": {
             "anyOf": [
               {
@@ -1449,6 +1493,37 @@
           "password"
         ],
         "title": "LoginRequest"
+      },
+      "Odds1X2Input": {
+        "properties": {
+          "HOME_WIN": {
+            "type": "number",
+            "maximum": 1000.0,
+            "exclusiveMinimum": 1.0,
+            "title": "Home Win"
+          },
+          "DRAW": {
+            "type": "number",
+            "maximum": 1000.0,
+            "exclusiveMinimum": 1.0,
+            "title": "Draw"
+          },
+          "AWAY_WIN": {
+            "type": "number",
+            "maximum": 1000.0,
+            "exclusiveMinimum": 1.0,
+            "title": "Away Win"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "HOME_WIN",
+          "DRAW",
+          "AWAY_WIN"
+        ],
+        "title": "Odds1X2Input",
+        "description": "Validated decimal 1X2 snapshot using public API outcome aliases."
       },
       "PlatformStatusResponse": {
         "properties": {

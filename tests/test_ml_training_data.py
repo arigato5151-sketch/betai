@@ -54,6 +54,9 @@ def test_historical_training_features_use_only_prior_matches() -> None:
     assert first_snapshot["away_gf_last5"] == 1.0
     assert first_snapshot["home_scoring_streak"] == 1.0
     assert first_snapshot["away_scoring_streak"] == 1.0
+    assert first_snapshot["odds_movement_home"] == 0.0
+    assert first_snapshot["odds_movement_draw"] == 0.0
+    assert first_snapshot["odds_movement_away"] == 0.0
     assert first_snapshot["league_203"] == 1.0
     assert (
         sum(first_snapshot[name] for name in FeatureEngine.LEAGUE_FEATURE_NAMES) == 1.0
