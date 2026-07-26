@@ -1,4 +1,24 @@
+import {
+  CategoryScale,
+  Chart as ChartJS,
+  Filler,
+  Legend,
+  LineElement,
+  LinearScale,
+  PointElement,
+  Tooltip,
+} from "chart.js";
 import { Line } from "react-chartjs-2";
+
+ChartJS.register(
+  CategoryScale,
+  Filler,
+  Legend,
+  LineElement,
+  LinearScale,
+  PointElement,
+  Tooltip,
+);
 
 function BankrollChart({ backtest, bankrollSeries, error, loading, onRun }) {
   return (
