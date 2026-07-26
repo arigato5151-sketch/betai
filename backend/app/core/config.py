@@ -60,6 +60,9 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000"]
     )
     LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: Literal["text", "json"] = "text"
+    FOOTBALL_DATA_BASE_URL: str = "https://www.football-data.co.uk"
+    FOOTBALL_DATA_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
 
     # TODO: kalibrasyon kaynağını doğrula — lig başına ortalama gol tabanı.
     LEAGUE_BASELINE_GOALS: float = Field(default=1.32, gt=0)
@@ -164,6 +167,17 @@ class Settings(BaseSettings):
 
     MIN_TRAINING_SAMPLES: int = 200
     RETRAIN_EVERY_N_NEW: int = 25
+    HISTORICAL_TRAINING_MIN_TEAM_MATCHES: int = Field(default=3, ge=1, le=10)
+    MIN_MODEL_BASELINE_BRIER_IMPROVEMENT: float = Field(default=0.005, ge=0, le=1)
+    MAX_MODEL_BASELINE_LOG_LOSS_REGRESSION: float = Field(default=0.0, ge=0, le=1)
+    MIN_MODEL_CHAMPION_BRIER_IMPROVEMENT: float = Field(default=0.001, ge=0, le=1)
+    MIN_MODEL_CHAMPION_LOG_LOSS_IMPROVEMENT: float = Field(default=0.01, ge=0, le=1)
+    MAX_MODEL_CHAMPION_BRIER_REGRESSION: float = Field(default=0.01, ge=0, le=1)
+    MIN_CALIBRATION_LOG_LOSS_IMPROVEMENT: float = Field(default=0.001, ge=0, le=1)
+    MIN_ISOTONIC_CALIBRATION_SAMPLES: int = Field(default=500, ge=30)
+    MAX_MODEL_BRIER_SCORE: float = Field(default=0.8, gt=0, le=2)
+    MAX_MODEL_LOG_LOSS: float = Field(default=1.5, gt=0)
+    MAX_MODEL_CALIBRATION_ERROR: float = Field(default=0.2, ge=0, le=1)
     MODEL_ARTIFACTS_DIR: str = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         "artifacts",

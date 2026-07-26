@@ -4,6 +4,7 @@ import datetime
 import uuid
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     DateTime,
@@ -203,6 +204,21 @@ class MatchPrediction(Base):
         JSON, nullable=True
     )
     ensemble_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    model_artifact_version: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    data_quality: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    kickoff: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    analyzed_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=utc_now
+    )
+    analysis_lead_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_snapshot_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     actual_result: Mapped[str | None] = mapped_column(String, nullable=True)
     actual_score_home: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -221,14 +237,14 @@ class HistoricalFixture(Base):
     __tablename__ = "historical_fixtures"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    fixture_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+    fixture_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     league_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     season: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     kickoff: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
-    home_team_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    away_team_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    home_team_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    away_team_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     home_team: Mapped[str] = mapped_column(String(100), nullable=False)
     away_team: Mapped[str] = mapped_column(String(100), nullable=False)
     home_goals: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -237,9 +253,38 @@ class HistoricalFixture(Base):
     away_starting_xi: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     actual_result: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(8), nullable=False)
+    data_source: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="api_football",
+        server_default="api_football",
+        index=True,
+    )
     ingested_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
     )
+
+
+class SyncRun(Base):
+    __tablename__ = "sync_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    started_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, index=True
+    )
+    finished_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    target_seasons: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    fixtures_processed: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    failures: Mapped[list[dict[str, object]] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    error_type: Mapped[str | None] = mapped_column(String(100), nullable=True)

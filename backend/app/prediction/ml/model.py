@@ -1,6 +1,7 @@
 import os
 import math
 import shutil
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 import joblib
@@ -8,8 +9,11 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
 from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.metrics import log_loss
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, f1_score, log_loss
 from sklearn.model_selection import TimeSeriesSplit
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 from app.core.config import settings
 from app.core.logging_config import logger
 from app.prediction.ml.features import FeatureEngine
@@ -51,12 +55,14 @@ class MLModelPipeline:
         self.artifact_version: Optional[str] = None
         self.runtime_stats = {"inference_success": 0, "inference_failure": 0}
         self._artifact_mtime_ns: int | None = None
+        self._reload_lock = threading.Lock()
 
     @staticmethod
     def _previous_model_path() -> Path:
         return Path(settings.ACTIVE_MODEL_PATH).with_name("previous_model.pkl")
 
     def status(self) -> Dict[str, Any]:
+        self._refresh_artifact_if_changed()
         return {
             "ready": self.is_ready,
             "model_name": self.active_model_name,
@@ -65,6 +71,22 @@ class MLModelPipeline:
             "runtime": dict(self.runtime_stats),
             "rollback_available": self._previous_model_path().is_file(),
         }
+
+    def _refresh_artifact_if_changed(self) -> None:
+        active_path = Path(settings.ACTIVE_MODEL_PATH)
+        try:
+            current_mtime = active_path.stat().st_mtime_ns
+        except OSError:
+            return
+        if current_mtime == self._artifact_mtime_ns:
+            return
+        with self._reload_lock:
+            try:
+                current_mtime = active_path.stat().st_mtime_ns
+            except OSError:
+                return
+            if current_mtime != self._artifact_mtime_ns:
+                self.load_active_model()
 
     def load_active_model(self) -> bool:
         """Loads model artifact from disk if it exists."""
@@ -168,7 +190,20 @@ class MLModelPipeline:
         return False
 
     def _get_candidate_models(self) -> List[Tuple[str, Any]]:
-        candidates = []
+        candidates = [
+            (
+                "Regularized Logistic Regression",
+                make_pipeline(
+                    StandardScaler(),
+                    LogisticRegression(
+                        C=0.5,
+                        class_weight="balanced",
+                        max_iter=2000,
+                        random_state=42,
+                    ),
+                ),
+            )
+        ]
 
         if XGB_AVAILABLE:
             candidates.append(
@@ -273,6 +308,61 @@ class MLModelPipeline:
         )
         return brier, loss
 
+    @classmethod
+    def _multiclass_calibration_error(
+        cls,
+        labels: np.ndarray,
+        probabilities: np.ndarray,
+        n_bins: int = 10,
+    ) -> float:
+        """Confidence-based ECE for mutually exclusive multiclass predictions."""
+        if not len(labels):
+            return 0.0
+        normalized = probabilities / probabilities.sum(axis=1, keepdims=True)
+        confidence = normalized.max(axis=1)
+        predicted = normalized.argmax(axis=1)
+        correct = (predicted == labels).astype(float)
+        edges = np.linspace(0.0, 1.0, n_bins + 1)
+        error = 0.0
+        for index in range(n_bins):
+            lower, upper = edges[index], edges[index + 1]
+            mask = (confidence >= lower) & (
+                (confidence < upper) | ((index == n_bins - 1) & (confidence == upper))
+            )
+            if not np.any(mask):
+                continue
+            error += float(np.mean(mask)) * abs(
+                float(np.mean(confidence[mask])) - float(np.mean(correct[mask]))
+            )
+        return error
+
+    def _feature_importance_summary(
+        self, model: Any, limit: int = 10
+    ) -> list[dict[str, float | str]]:
+        estimator = model.steps[-1][1] if hasattr(model, "steps") else model
+        raw_importance = getattr(estimator, "feature_importances_", None)
+        if raw_importance is None:
+            coefficients = getattr(estimator, "coef_", None)
+            if coefficients is not None:
+                raw_importance = np.mean(np.abs(coefficients), axis=0)
+        if raw_importance is None:
+            return []
+        importance = np.asarray(raw_importance, dtype=float).reshape(-1)
+        if len(importance) != len(self.feature_names):
+            return []
+        total = float(importance.sum())
+        if not math.isfinite(total) or total <= 0:
+            return []
+        normalized = importance / total
+        indices = np.argsort(normalized)[::-1][:limit]
+        return [
+            {
+                "feature": self.feature_names[int(index)],
+                "importance": round(float(normalized[index]), 6),
+            }
+            for index in indices
+        ]
+
     def train_pipeline(self, rows: List[Any]) -> bool:
         """
         Gathers database features, splits into train/validation,
@@ -285,6 +375,9 @@ class MLModelPipeline:
             )
             return False
 
+        champion_predictor = self.calibrator or self.model
+        champion_feature_names = list(self.feature_names)
+
         # Retraining upgrades legacy artifacts to the current inference schema.
         self.feature_names = list(FeatureEngine.FEATURE_NAMES)
 
@@ -294,6 +387,9 @@ class MLModelPipeline:
         # Extract features and targets from DB rows.
         X_list = []
         y_list = []
+        source_counts: dict[str, int] = {}
+        leagues: set[int] = set()
+        sample_timestamps: list[float] = []
 
         for row in chronological_rows:
             if not row.actual_result:
@@ -306,6 +402,12 @@ class MLModelPipeline:
                 continue
             X_list.append(feats)
             y_list.append(label)
+            source = str(getattr(row, "training_source", "labeled_prediction"))
+            source_counts[source] = source_counts.get(source, 0) + 1
+            league_id = getattr(row, "league_id", None)
+            if isinstance(league_id, int):
+                leagues.add(league_id)
+            sample_timestamps.append(self._training_sort_key(row))
 
         X = np.array(X_list, dtype=float)
         y = np.array(y_list, dtype=int)
@@ -315,7 +417,7 @@ class MLModelPipeline:
 
         outcome_count = len(self.LABEL_MAP)
         test_size = max(outcome_count, math.ceil(len(y) * 0.2))
-        calibration_size = max(outcome_count, math.ceil(len(y) * 0.15))
+        calibration_size = max(outcome_count * 2, math.ceil(len(y) * 0.15))
         train_end = len(y) - calibration_size - test_size
         calibration_end = len(y) - test_size
         if train_end < outcome_count * 2:
@@ -330,12 +432,23 @@ class MLModelPipeline:
             y[train_end:calibration_end],
         )
         X_test, y_test = X[calibration_end:], y[calibration_end:]
+        calibration_fit_size = max(outcome_count, len(y_calibration) // 2)
+        X_calibration_fit = X_calibration[:calibration_fit_size]
+        y_calibration_fit = y_calibration[:calibration_fit_size]
+        X_calibration_validation = X_calibration[calibration_fit_size:]
+        y_calibration_validation = y_calibration[calibration_fit_size:]
         if not all(
             self._has_all_outcomes(labels)
-            for labels in (y_train, y_calibration, y_test)
+            for labels in (
+                y_train,
+                y_calibration_fit,
+                y_calibration_validation,
+                y_test,
+            )
         ):
             logger.warning(
-                "Training skipped: every temporal window must contain all outcomes."
+                "Training skipped: every temporal train/calibration/test window "
+                "must contain all outcomes."
             )
             return False
 
@@ -410,40 +523,179 @@ class MLModelPipeline:
         best_model = clone(best_template)
         best_model.fit(X_train, y_train)
         calibrator = MultiClassCalibrator(best_model)
-        calibrator.fit(X_calibration, y_calibration)
-        test_probabilities = np.asarray(calibrator.predict_proba(X_test), dtype=float)
+        calibrator.fit(X_calibration_fit, y_calibration_fit)
+        raw_selection_probabilities = np.asarray(
+            best_model.predict_proba(X_calibration_validation), dtype=float
+        )
+        calibrated_selection_probabilities = np.asarray(
+            calibrator.predict_proba(X_calibration_validation), dtype=float
+        )
+        raw_selection_brier, raw_selection_loss = self._probability_metrics(
+            y_calibration_validation, raw_selection_probabilities
+        )
+        calibrated_selection_brier, calibrated_selection_loss = (
+            self._probability_metrics(
+                y_calibration_validation, calibrated_selection_probabilities
+            )
+        )
+        calibration_applied = (
+            len(y_calibration_fit) >= settings.MIN_ISOTONIC_CALIBRATION_SAMPLES
+            and calibrated_selection_brier <= raw_selection_brier
+            and raw_selection_loss - calibrated_selection_loss
+            >= settings.MIN_CALIBRATION_LOG_LOSS_IMPROVEMENT
+        )
+        selected_calibrator = calibrator if calibration_applied else None
+        test_predictor = selected_calibrator or best_model
+        test_probabilities = np.asarray(
+            test_predictor.predict_proba(X_test), dtype=float
+        )
         test_brier, test_loss = self._probability_metrics(y_test, test_probabilities)
-        best_metrics = {
+        test_calibration_error = self._multiclass_calibration_error(
+            y_test, test_probabilities
+        )
+        test_predictions = test_probabilities.argmax(axis=1)
+        test_accuracy = float(accuracy_score(y_test, test_predictions))
+        test_macro_f1 = float(
+            f1_score(y_test, test_predictions, average="macro", zero_division=0)
+        )
+        class_counts = np.bincount(y_train, minlength=outcome_count).astype(float)
+        class_priors = class_counts / class_counts.sum()
+        baseline_probabilities = np.tile(class_priors, (len(y_test), 1))
+        baseline_brier, baseline_loss = self._probability_metrics(
+            y_test, baseline_probabilities
+        )
+        champion_brier: float | None = None
+        champion_loss: float | None = None
+        champion_feature_indices = (
+            [self.feature_names.index(name) for name in champion_feature_names]
+            if champion_feature_names
+            and all(name in self.feature_names for name in champion_feature_names)
+            else None
+        )
+        if champion_predictor is not None and champion_feature_indices is not None:
+            try:
+                champion_probabilities = np.asarray(
+                    champion_predictor.predict_proba(
+                        X_test[:, champion_feature_indices]
+                    ),
+                    dtype=float,
+                )
+                champion_brier, champion_loss = self._probability_metrics(
+                    y_test, champion_probabilities
+                )
+            except (AttributeError, TypeError, ValueError) as exc:
+                logger.warning("Champion comparison skipped: %s", exc)
+
+        label_distribution = {
+            self.INV_LABEL_MAP[index]: int(count)
+            for index, count in enumerate(
+                np.bincount(y, minlength=outcome_count).tolist()
+            )
+        }
+        best_metrics: Dict[str, object] = {
             "brier_score": test_brier,
             "log_loss": test_loss,
+            "calibration_error": test_calibration_error,
+            "accuracy": test_accuracy,
+            "macro_f1": test_macro_f1,
+            "calibration_applied": calibration_applied,
+            "calibration_minimum_samples": (settings.MIN_ISOTONIC_CALIBRATION_SAMPLES),
+            "calibration_selection_raw_brier": raw_selection_brier,
+            "calibration_selection_calibrated_brier": calibrated_selection_brier,
+            "calibration_selection_raw_log_loss": raw_selection_loss,
+            "calibration_selection_calibrated_log_loss": calibrated_selection_loss,
+            "baseline_brier_score": baseline_brier,
+            "baseline_log_loss": baseline_loss,
+            "brier_improvement_vs_baseline": baseline_brier - test_brier,
+            "champion_brier_score": champion_brier,
+            "champion_log_loss": champion_loss,
+            "brier_improvement_vs_champion": (
+                champion_brier - test_brier if champion_brier is not None else None
+            ),
             "walk_forward_brier_score": best_brier,
             "walk_forward_log_loss": best_cv_loss,
             "samples": float(len(X)),
             "training_samples": float(len(X_train)),
             "calibration_samples": float(len(X_calibration)),
+            "calibration_fit_samples": float(len(X_calibration_fit)),
+            "calibration_validation_samples": float(len(X_calibration_validation)),
             "test_samples": float(len(X_test)),
+            "training_sources": source_counts,
+            "league_count": len(leagues),
+            "label_distribution": label_distribution,
+            "top_features": self._feature_importance_summary(best_model),
+            "sample_start_timestamp": min(sample_timestamps),
+            "sample_end_timestamp": max(sample_timestamps),
             "evaluation_strategy": "walk_forward_temporal_holdout",
         }
+        guard_failures = {
+            "brier_score": (
+                test_brier,
+                settings.MAX_MODEL_BRIER_SCORE,
+            ),
+            "log_loss": (
+                test_loss,
+                settings.MAX_MODEL_LOG_LOSS,
+            ),
+            "calibration_error": (
+                test_calibration_error,
+                settings.MAX_MODEL_CALIBRATION_ERROR,
+            ),
+        }
+        rejected_metrics = {
+            name: {"actual": actual, "maximum": maximum}
+            for name, (actual, maximum) in guard_failures.items()
+            if actual > maximum
+        }
+        if baseline_brier - test_brier < settings.MIN_MODEL_BASELINE_BRIER_IMPROVEMENT:
+            rejected_metrics["baseline_brier_improvement"] = {
+                "actual": baseline_brier - test_brier,
+                "minimum": settings.MIN_MODEL_BASELINE_BRIER_IMPROVEMENT,
+            }
+        if test_loss - baseline_loss > settings.MAX_MODEL_BASELINE_LOG_LOSS_REGRESSION:
+            rejected_metrics["baseline_log_loss"] = {
+                "actual": test_loss,
+                "maximum": (
+                    baseline_loss + settings.MAX_MODEL_BASELINE_LOG_LOSS_REGRESSION
+                ),
+            }
+        if champion_brier is not None and champion_loss is not None:
+            brier_improved = (
+                champion_brier - test_brier
+                >= settings.MIN_MODEL_CHAMPION_BRIER_IMPROVEMENT
+            )
+            log_loss_tradeoff_accepted = (
+                champion_loss - test_loss
+                >= settings.MIN_MODEL_CHAMPION_LOG_LOSS_IMPROVEMENT
+                and test_brier - champion_brier
+                <= settings.MAX_MODEL_CHAMPION_BRIER_REGRESSION
+            )
+            if not brier_improved and not log_loss_tradeoff_accepted:
+                rejected_metrics["champion_comparison"] = {
+                    "brier_improvement": champion_brier - test_brier,
+                    "log_loss_improvement": champion_loss - test_loss,
+                }
+        if rejected_metrics:
+            logger.warning(
+                "Candidate model rejected by quality guard; active model preserved: %s",
+                rejected_metrics,
+            )
+            return False
 
-        # Save active model
+        # Persist first; an artifact write failure must leave the champion active.
+        self._save_active_model(
+            best_model, selected_calibrator, best_model_name, best_metrics
+        )
         self.model = best_model
-        self.calibrator = calibrator
+        self.calibrator = selected_calibrator
         self.active_model_name = best_model_name
         self.metrics = best_metrics
         self.is_ready = True
-
-        self._save_active_model(best_model, calibrator, best_model_name, best_metrics)
         return True
 
     def predict_match(self, feature_dict: Dict[str, float]) -> Dict[str, Any]:
         """Runs model inference and returns calibrated probabilities."""
-        active_path = Path(settings.ACTIVE_MODEL_PATH)
-        try:
-            current_mtime = active_path.stat().st_mtime_ns
-            if current_mtime != self._artifact_mtime_ns:
-                self.load_active_model()
-        except OSError:
-            pass
+        self._refresh_artifact_if_changed()
         if not self.is_ready or not self.model:
             return {"ready": False, "probabilities": None}
 

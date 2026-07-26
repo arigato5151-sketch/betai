@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from app.core.demo_data import DEMO_UPCOMING_FIXTURES
+from app.core.exceptions import APIDataError
 from app.services.api_football import APIFootballClient
 
 
@@ -131,6 +132,21 @@ async def test_demo_upcoming_and_prefill_never_require_network() -> None:
     assert prefill["auto_filled"] is True
     assert prefill["market_1x2"]["overround_pct"] > 0
     client._request_with_retry.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_completed_fixtures_surfaces_provider_plan_errors() -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(
+        return_value={
+            "errors": {"plan": "Season is unavailable"},
+            "response": [],
+        }
+    )
+
+    with pytest.raises(APIDataError, match="Season is unavailable"):
+        await client.get_completed_fixtures(203, 2025)
 
 
 @pytest.mark.asyncio

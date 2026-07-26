@@ -5,6 +5,7 @@ from datetime import datetime
 
 import pandas as pd
 
+from app.core.team_identity import normalize_team_name
 from app.db.historical_repository import HistoricalFixtureRepository
 from app.db.models import HistoricalFixture
 from app.prediction.ml.features import FeatureEngine
@@ -33,6 +34,8 @@ class HistoricalFeatureService:
         *,
         home_team_id: int,
         away_team_id: int,
+        home_team_name: str | None = None,
+        away_team_name: str | None = None,
         league_id: int,
         before: datetime,
         recent_match_count: int = 5,
@@ -42,6 +45,12 @@ class HistoricalFeatureService:
     ) -> HistoricalFeatureContext:
         league_matches = self.repository.get_league_history(
             league_id=league_id, before=before
+        )
+        home_team_id = self._resolve_team_id(
+            league_matches, home_team_id, home_team_name
+        )
+        away_team_id = self._resolve_team_id(
+            league_matches, away_team_id, away_team_name
         )
         elo_rows = [self._elo_row(fixture) for fixture in league_matches]
         ratings = FeatureEngine.calculate_elo_ratings(
@@ -90,6 +99,28 @@ class HistoricalFeatureService:
             home_previous_starting_xi=home_previous_starting_xi,
             away_previous_starting_xi=away_previous_starting_xi,
         )
+
+    @staticmethod
+    def _resolve_team_id(
+        fixtures: list[HistoricalFixture],
+        requested_team_id: int,
+        requested_team_name: str | None,
+    ) -> int:
+        known_ids = {
+            team_id
+            for fixture in fixtures
+            for team_id in (fixture.home_team_id, fixture.away_team_id)
+        }
+        if requested_team_id in known_ids or not requested_team_name:
+            return requested_team_id
+
+        target = normalize_team_name(requested_team_name)
+        for fixture in reversed(fixtures):
+            if normalize_team_name(fixture.home_team) == target:
+                return fixture.home_team_id
+            if normalize_team_name(fixture.away_team) == target:
+                return fixture.away_team_id
+        return requested_team_id
 
     @staticmethod
     def _elo_row(fixture: HistoricalFixture) -> dict:

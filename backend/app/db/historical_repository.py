@@ -83,6 +83,16 @@ class HistoricalFixtureRepository:
             .first()
         )
 
+    def get_all(self) -> list[HistoricalFixture]:
+        return (
+            self.db.query(HistoricalFixture)
+            .order_by(
+                HistoricalFixture.kickoff.asc(),
+                HistoricalFixture.fixture_id.asc(),
+            )
+            .all()
+        )
+
     def get_league_history(
         self, *, league_id: int, before: datetime, season: int | None = None
     ) -> list[HistoricalFixture]:

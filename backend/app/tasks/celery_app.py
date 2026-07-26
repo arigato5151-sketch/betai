@@ -25,8 +25,8 @@ celery_app.conf.update(
     worker_cancel_long_running_tasks_on_connection_loss=True,
     # Celery Beat schedules
     beat_schedule={
-        "sync-historical-fixtures-daily": {
-            "task": "app.tasks.jobs.sync_historical_fixtures_task",
+        "sync-football-data-fixtures-daily": {
+            "task": "app.tasks.jobs.sync_football_data_fixtures_task",
             "schedule": 86400.0,  # 24 hours
         },
         "sync-completed-matches-daily": {

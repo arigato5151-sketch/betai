@@ -323,6 +323,9 @@ class APIFootballClient:
         )
         if not data:
             return []
+        provider_errors = data.get("errors")
+        if provider_errors:
+            raise APIDataError("fixtures", 200, str(provider_errors))
 
         fixtures: List[Dict] = []
         for item in data.get("response", []):

@@ -2,15 +2,16 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.api_mode import get_api_mode
 from app.core.config import SECRET_SOURCE_STATUS, settings
 from app.core.logging_config import logger
 from app.core.security import OriginValidationMiddleware
+from app.core.observability import ObservabilityMiddleware, request_metrics
 from app.services.cache import cache
 from app.api.endpoints import router as api_router
 from app.db.session import get_database_status
@@ -43,6 +44,7 @@ app.add_middleware(
         settings.CSRF_HEADER_NAME,
     ],
 )
+app.add_middleware(ObservabilityMiddleware)
 app.add_middleware(
     OriginValidationMiddleware,
     allowed_origins=settings.BACKEND_CORS_ORIGINS,
@@ -84,6 +86,32 @@ def health_check():
         "database": get_database_status(),
         "database_fallback_active": get_database_status()["fallback_active"],
     }
+
+
+@app.get("/health/live", include_in_schema=False)
+def liveness():
+    return {"status": "ok"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+def readiness(response: Response):
+    database = get_database_status()
+    ready = database["status"] in {"ready", "degraded"}
+    if not ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return {
+        "status": "ready" if ready else "not_ready",
+        "database": database["status"],
+        "cache": cache.status()["status"],
+    }
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    return PlainTextResponse(
+        request_metrics.render_prometheus(),
+        media_type="text/plain; version=0.0.4",
+    )
 
 
 @app.get("/ui")

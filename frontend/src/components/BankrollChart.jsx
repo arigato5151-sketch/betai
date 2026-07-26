@@ -15,12 +15,21 @@ function BankrollChart({ backtest, bankrollSeries, error, loading, onRun }) {
       {error && <p className="rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">{error}</p>}
       {backtest && (
         <>
-          <div className="mb-4 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
+          <div className="mb-4 grid grid-cols-2 gap-2 text-center sm:grid-cols-4 lg:grid-cols-8">
             <div className="rounded bg-slate-950 p-2"><span className="block text-xs text-slate-500">Son Bankroll</span><strong>{backtest.final_bankroll}</strong></div>
             <div className="rounded bg-slate-950 p-2"><span className="block text-xs text-slate-500">Net Degisim</span><strong className={bankrollSeries.change >= 0 ? "text-emerald-400" : "text-red-400"}>{bankrollSeries.change}</strong></div>
             <div className="rounded bg-slate-950 p-2"><span className="block text-xs text-slate-500">ROI</span><strong>%{backtest.total_roi_pct}</strong></div>
             <div className="rounded bg-slate-950 p-2"><span className="block text-xs text-slate-500">Toplam Bahis</span><strong>{backtest.total_bets}</strong></div>
+            <div className="rounded bg-slate-950 p-2"><span className="block text-xs text-slate-500">Max Drawdown</span><strong>%{backtest.max_drawdown_pct}</strong></div>
+            <div className="rounded bg-slate-950 p-2"><span className="block text-xs text-slate-500">Profit Factor</span><strong>{backtest.profit_factor}</strong></div>
+            <div className="rounded bg-slate-950 p-2"><span className="block text-xs text-slate-500">Ruin Riski</span><strong>%{backtest.risk_of_ruin_pct}</strong></div>
+            <div className="rounded bg-slate-950 p-2"><span className="block text-xs text-slate-500">Closing Odds</span><strong>%{backtest.closing_odds_coverage_pct}</strong></div>
           </div>
+          {Object.keys(backtest.skipped_reasons ?? {}).length > 0 && (
+            <p className="mb-4 text-xs text-slate-500">
+              Atlanan kayıtlar: {Object.entries(backtest.skipped_reasons).map(([reason, count]) => `${reason}: ${count}`).join(" · ")}
+            </p>
+          )}
           <div className="h-64" data-testid="bankroll-chart">
             <Line
               data={{ labels: bankrollSeries.labels, datasets: [{ label: "Bankroll", data: bankrollSeries.values, borderColor: "#34d399", backgroundColor: "rgba(52, 211, 153, 0.12)", fill: true, tension: 0.25, pointRadius: 3 }] }}

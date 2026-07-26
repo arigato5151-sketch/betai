@@ -1,15 +1,23 @@
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional, cast
+
+from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS
+
+LEAGUE_ONE_HOT_FEATURES = [
+    f"league_{league_id}" for league_id in sorted(cast(set[int], ALLOWED_LEAGUE_IDS))
+]
 
 
 class FeatureEngine:
-    SCHEMA_VERSION = "ml_features_v3"
+    SCHEMA_VERSION = "ml_features_v4"
     COMPATIBLE_SNAPSHOT_VERSIONS = {
         "ml_features_v1",
         "ml_features_v2",
+        "ml_features_v3",
         SCHEMA_VERSION,
     }
+    LEAGUE_FEATURE_NAMES = list(LEAGUE_ONE_HOT_FEATURES)
     FEATURE_NAMES = [
         "home_form",
         "home_attack",
@@ -50,6 +58,7 @@ class FeatureEngine:
         "away_lineup_reference_available",
         "home_lineup_continuity",
         "away_lineup_continuity",
+        *LEAGUE_FEATURE_NAMES,
     ]
     FEATURE_DEFAULTS = {
         "home_form": 50.0,
@@ -90,6 +99,7 @@ class FeatureEngine:
         "away_lineup_reference_available": 0.0,
         "home_lineup_continuity": 0.0,
         "away_lineup_continuity": 0.0,
+        **{name: 0.0 for name in LEAGUE_ONE_HOT_FEATURES},
     }
 
     @classmethod
@@ -336,6 +346,7 @@ class FeatureEngine:
         availability: Optional[Dict[str, Any]] = None,
         lineup_context: Optional[Dict[str, Any]] = None,
         fixture_date: Optional[pd.Timestamp] = None,
+        league_id: Optional[int] = None,
     ) -> Dict[str, float]:
         """
         Robust feature vector inşa et - training'de kullanılan aynı formüllerle.
@@ -454,4 +465,8 @@ class FeatureEngine:
             "away_lineup_reference_available": away_lineup[1],
             "home_lineup_continuity": home_lineup[2],
             "away_lineup_continuity": away_lineup[2],
+            **{
+                name: float(name == f"league_{league_id}")
+                for name in FeatureEngine.LEAGUE_FEATURE_NAMES
+            },
         }

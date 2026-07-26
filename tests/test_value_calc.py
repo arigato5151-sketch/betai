@@ -209,9 +209,7 @@ def test_kelly_edge_case_boundaries(
     probability_pct: float, odd: float, expected_stake: float
 ) -> None:
     assert ValueCalc._kelly_stake(probability_pct, odd) == expected_stake
-    assert ValueCalc._kelly_stake(probability_pct, odd) <= ValueCalc._max_kelly_pct(
-        odd
-    )
+    assert ValueCalc._kelly_stake(probability_pct, odd) <= ValueCalc._max_kelly_pct(odd)
 
 
 @pytest.mark.parametrize(
@@ -265,7 +263,5 @@ def test_quarter_kelly_fraction_is_applied_before_cap(
     probability = probability_pct / 100.0
     full_kelly = (((odd - 1.0) * probability) - (1.0 - probability)) / (odd - 1.0)
 
-    assert full_kelly * ValueCalc.KELLY_FRACTION * 100 == pytest.approx(
-        expected_stake
-    )
+    assert full_kelly * ValueCalc.KELLY_FRACTION * 100 == pytest.approx(expected_stake)
     assert ValueCalc._kelly_stake(probability_pct, odd) == expected_stake

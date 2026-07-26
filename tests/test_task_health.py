@@ -55,7 +55,7 @@ def test_celery_connection_recovery_and_delivery_guards_are_enabled() -> None:
     assert celery_app.conf.task_reject_on_worker_lost is True
     assert celery_app.conf.worker_cancel_long_running_tasks_on_connection_loss is True
     assert set(celery_app.conf.beat_schedule) == {
-        "sync-historical-fixtures-daily",
+        "sync-football-data-fixtures-daily",
         "sync-completed-matches-daily",
         "retrain-ml-model-weekly",
     }
@@ -78,6 +78,11 @@ def test_retraining_task_calibrates_ensemble_before_training(monkeypatch) -> Non
         jobs.ensemble_weight_manager, "optimize_and_activate", calibrate
     )
     monkeypatch.setattr(jobs.ml_pipeline, "train_pipeline", train)
+    monkeypatch.setattr(
+        jobs.HistoricalTrainingDataBuilder,
+        "build",
+        Mock(return_value=[]),
+    )
 
     result = jobs.retrain_ml_model_task.run()
 

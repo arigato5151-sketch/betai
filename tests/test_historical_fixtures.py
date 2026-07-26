@@ -7,7 +7,11 @@ from sqlalchemy.orm import Session
 from app.db.historical_repository import HistoricalFixtureRepository
 from app.db.models import Base, HistoricalFixture
 from app.prediction.ml.historical import HistoricalFeatureService
-from app.tasks.jobs import _current_football_season, sync_historical_fixtures_task
+from app.tasks.jobs import (
+    _current_football_season,
+    sync_football_data_fixtures_task,
+    sync_historical_fixtures_task,
+)
 
 
 def fixture_row(
@@ -200,6 +204,39 @@ def test_historical_context_carries_elo_across_seasons_with_regression(
     ] == [2024, 2026]
 
 
+def test_historical_context_resolves_external_team_ids_by_name(
+    historical_repository: HistoricalFixtureRepository,
+) -> None:
+    cutoff = datetime(2026, 1, 10, tzinfo=UTC)
+    row = fixture_row(
+        -(1 << 40),
+        cutoff - timedelta(days=7),
+        home_team_id=-(1 << 41),
+        away_team_id=-(1 << 42),
+        season=2025,
+    )
+    row["home_team"] = "Man City"
+    row["away_team"] = "Wolves"
+    row["data_source"] = "football_data_csv"
+    historical_repository.upsert_many([row])
+
+    context = HistoricalFeatureService(historical_repository).build_context(
+        home_team_id=50,
+        away_team_id=51,
+        home_team_name="Manchester City",
+        away_team_name="Wolverhampton Wanderers",
+        league_id=203,
+        before=cutoff,
+    )
+
+    assert context.home_elo > 1500.0
+    assert context.away_elo < 1500.0
+    assert context.home_matches_df is not None
+    assert context.home_matches_df["goals_for"].tolist() == [2]
+    assert context.away_matches_df is not None
+    assert context.away_matches_df["goals_for"].tolist() == [1]
+
+
 @pytest.mark.parametrize(
     ("today", "expected"),
     [
@@ -237,6 +274,97 @@ def test_historical_sync_task_fetches_then_persists_without_duplicates(
         "seasons": [2026],
         "fixtures_processed": 1,
         "failed_league_seasons": [],
+    }
+    with Session(engine) as session:
+        assert session.query(HistoricalFixture).count() == 1
+
+
+def test_football_data_sync_task_persists_source_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.football_data_csv import FootballDataImport
+    from app.tasks import jobs
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    kickoff = datetime(2025, 8, 8, tzinfo=UTC)
+    row = fixture_row(100, kickoff, season=2025)
+    row["fixture_id"] = -(1 << 40)
+    row["home_team_id"] = -(1 << 41)
+    row["away_team_id"] = -(1 << 42)
+    row["data_source"] = "football_data_csv"
+
+    class FakeClient:
+        supported_league_ids = frozenset({203})
+
+        async def get_completed_fixtures(
+            self, league_id: int, season: int
+        ) -> FootballDataImport:
+            assert (league_id, season) == (203, 2025)
+            return FootballDataImport(fixtures=[row, row], skipped_rows=2)
+
+    monkeypatch.setattr(jobs, "FootballDataCSVClient", FakeClient)
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: Session(engine))
+
+    result = sync_football_data_fixtures_task.run([2025])
+
+    assert result == {
+        "seasons": [2025],
+        "fixtures_processed": 1,
+        "skipped_incomplete_rows": 2,
+        "failed_league_seasons": [],
+    }
+    with Session(engine) as session:
+        stored = session.query(HistoricalFixture).one()
+        assert stored.fixture_id == -(1 << 40)
+        assert stored.data_source == "football_data_csv"
+
+
+def test_football_data_sync_falls_back_until_new_feed_is_published(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.football_data_csv import (
+        FootballDataDownloadError,
+        FootballDataImport,
+    )
+    from app.tasks import jobs
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    row = fixture_row(
+        -(1 << 40),
+        datetime(2025, 8, 8, tzinfo=UTC),
+        season=2025,
+    )
+    row["data_source"] = "football_data_csv"
+
+    class FakeClient:
+        supported_league_ids = frozenset({39})
+
+        async def get_completed_fixtures(
+            self, league_id: int, season: int
+        ) -> FootballDataImport:
+            assert league_id == 39
+            if season == 2026:
+                raise FootballDataDownloadError(
+                    "not published",
+                    status_code=404,
+                )
+            assert season == 2025
+            return FootballDataImport(fixtures=[row], skipped_rows=0)
+
+    monkeypatch.setattr(jobs, "_current_football_season", lambda: 2026)
+    monkeypatch.setattr(jobs, "FootballDataCSVClient", FakeClient)
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: Session(engine))
+
+    result = sync_football_data_fixtures_task.run()
+
+    assert result == {
+        "seasons": [2025],
+        "fixtures_processed": 1,
+        "skipped_incomplete_rows": 0,
+        "failed_league_seasons": [],
+        "fallback_from_season": 2026,
     }
     with Session(engine) as session:
         assert session.query(HistoricalFixture).count() == 1

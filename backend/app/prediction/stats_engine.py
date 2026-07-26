@@ -19,9 +19,7 @@ def build_team_profile(api_data: Optional[Dict], venue: str) -> Dict:
     goals_against = _avg_goals(goals.get("against", {}), venue)
     form_string = api_data.get("form", "")
 
-    attack_strength = max(
-        0.55, min(1.75, goals_for / settings.LEAGUE_BASELINE_GOALS)
-    )
+    attack_strength = max(0.55, min(1.75, goals_for / settings.LEAGUE_BASELINE_GOALS))
     defense_strength = max(
         0.55, min(1.75, goals_against / settings.LEAGUE_BASELINE_GOALS)
     )
@@ -249,9 +247,11 @@ class StatsEngine:
         if team.get("attack_strength") and opponent.get("defense_strength"):
             attack_s = float(team["attack_strength"])
             defense_weakness = float(opponent["defense_strength"])
-            form_factor = settings.PROFILE_FORM_FACTOR_BASE + (
-                float(team.get("form", 50)) / 100.0
-            ) * settings.PROFILE_FORM_FACTOR_WEIGHT
+            form_factor = (
+                settings.PROFILE_FORM_FACTOR_BASE
+                + (float(team.get("form", 50)) / 100.0)
+                * settings.PROFILE_FORM_FACTOR_WEIGHT
+            )
             lambda_goals = (
                 settings.LEAGUE_BASELINE_GOALS
                 * attack_s
@@ -259,19 +259,22 @@ class StatsEngine:
                 * form_factor
             )
         else:
-            attack_factor = settings.LEGACY_ATTACK_FACTOR_BASE + (
-                team["attack"] / 100.0
-            ) * settings.LEGACY_ATTACK_FACTOR_WEIGHT
-            defense_factor = settings.LEGACY_DEFENSE_FACTOR_BASE + (
-                (100 - opponent["defense"]) / 100.0
-            ) * settings.LEGACY_DEFENSE_FACTOR_WEIGHT
-            form_factor = settings.LEGACY_FORM_FACTOR_BASE + (
-                team["form"] / 100.0
-            ) * settings.LEGACY_FORM_FACTOR_WEIGHT
+            attack_factor = (
+                settings.LEGACY_ATTACK_FACTOR_BASE
+                + (team["attack"] / 100.0) * settings.LEGACY_ATTACK_FACTOR_WEIGHT
+            )
+            defense_factor = (
+                settings.LEGACY_DEFENSE_FACTOR_BASE
+                + ((100 - opponent["defense"]) / 100.0)
+                * settings.LEGACY_DEFENSE_FACTOR_WEIGHT
+            )
+            form_factor = (
+                settings.LEGACY_FORM_FACTOR_BASE
+                + (team["form"] / 100.0) * settings.LEGACY_FORM_FACTOR_WEIGHT
+            )
             xg_base = (
                 team["xg"] * settings.LEGACY_XG_OBSERVED_WEIGHT
-                + settings.LEAGUE_BASELINE_GOALS
-                * settings.LEGACY_XG_BASELINE_WEIGHT
+                + settings.LEAGUE_BASELINE_GOALS * settings.LEGACY_XG_BASELINE_WEIGHT
             )
             lambda_goals = xg_base * attack_factor * defense_factor * form_factor
 
@@ -287,17 +290,14 @@ class StatsEngine:
         home_gf = float(team.get("goals_for_avg") or 0)
         away_ga = float(opponent.get("goals_against_avg") or 0)
         if home_gf > 0 and away_ga > 0:
-            ratio = home_gf / max(
-                settings.HOME_ADVANTAGE_OPPONENT_GOALS_FLOOR, away_ga
-            )
+            ratio = home_gf / max(settings.HOME_ADVANTAGE_OPPONENT_GOALS_FLOOR, away_ga)
             return max(
                 settings.HOME_ADVANTAGE_MIN_MULTIPLIER,
                 min(settings.HOME_ADVANTAGE_MAX_MULTIPLIER, ratio),
             )
         form_boost = max(
             0.0,
-            (float(team.get("form", 50)) - 50.0)
-            / settings.HOME_FORM_BOOST_DIVISOR,
+            (float(team.get("form", 50)) - 50.0) / settings.HOME_FORM_BOOST_DIVISOR,
         )
         return settings.HOME_FORM_BASE_MULTIPLIER + form_boost
 

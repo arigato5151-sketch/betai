@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from typing import Optional, Sequence
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENV_FILES = [ROOT_DIR / ".env", ROOT_DIR / "backend" / ".env"]

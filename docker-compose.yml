@@ -40,6 +40,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     command: alembic -c alembic.ini upgrade head
+    healthcheck:
+      disable: true
     environment:
       DATABASE_URL: postgresql://betai:betai@postgres:5432/bet_ai
       API_FOOTBALL_KEY: DEMO_KEY
@@ -52,6 +54,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     command: python -m app.cli.bootstrap_admin
+    healthcheck:
+      disable: true
     environment:
       DATABASE_URL: postgresql://betai:betai@postgres:5432/bet_ai
       API_FOOTBALL_KEY: DEMO_KEY
@@ -82,6 +86,7 @@ services:
       FRONTEND_URL: http://localhost:3000
       BACKEND_CORS_ORIGINS: http://localhost:3000
       LOG_LEVEL: INFO
+      LOG_FORMAT: json
     volumes:
       - model_artifacts:/app/artifacts/models
     depends_on:
@@ -102,13 +107,16 @@ services:
       - "3000:3000"
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
   worker:
     build:
       context: .
       dockerfile: backend/Dockerfile
     command: celery -A app.tasks.celery_app:celery_app worker --loglevel=INFO --concurrency=1
+    healthcheck:
+      disable: true
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://betai:betai@postgres:5432/bet_ai
@@ -123,6 +131,7 @@ services:
       FRONTEND_URL: http://localhost:3000
       BACKEND_CORS_ORIGINS: http://localhost:3000
       LOG_LEVEL: INFO
+      LOG_FORMAT: json
     volumes:
       - model_artifacts:/app/artifacts/models
     depends_on:
@@ -138,16 +147,21 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     command: celery -A app.tasks.celery_app:celery_app beat --loglevel=INFO --schedule=/var/run/celery/celerybeat-schedule
+    healthcheck:
+      disable: true
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://betai:betai@postgres:5432/bet_ai
       REDIS_URL: redis://redis:6379/0
-      API_FOOTBALL_KEY: your_api_football_key
-      JWT_SECRET_KEY: your_jwt_secret_key
-      JWT_REFRESH_SECRET_KEY: your_jwt_refresh_secret_key
+      API_FOOTBALL_KEY: ${API_FOOTBALL_KEY:-DEMO_KEY}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-development-access-secret-change-me}
+      JWT_REFRESH_SECRET_KEY: ${JWT_REFRESH_SECRET_KEY:-development-refresh-secret-change-me}
+      COOKIE_SECURE: "false"
+      ALLOW_SELF_REGISTRATION: ${ALLOW_SELF_REGISTRATION:-false}
       FRONTEND_URL: http://localhost:3000
       BACKEND_CORS_ORIGINS: http://localhost:3000
       LOG_LEVEL: INFO
+      LOG_FORMAT: json
     volumes:
       - celery_beat_data:/var/run/celery
     depends_on:

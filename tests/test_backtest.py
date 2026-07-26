@@ -18,6 +18,7 @@ def prediction(
     kelly: float | None = 4.0,
     probability: float = 60.0,
     minute: int = 0,
+    closing_odds: float | None = None,
 ) -> MatchPrediction:
     return MatchPrediction(
         prediction=predicted,
@@ -27,6 +28,7 @@ def prediction(
         kelly_stake=kelly,
         probability=probability,
         created_at=NOW + timedelta(minutes=minute),
+        closing_odds=closing_odds,
     )
 
 
@@ -112,6 +114,45 @@ def test_calibration_error_matches_known_example() -> None:
     assert error == pytest.approx(0.4)
 
 
+def test_commission_and_portfolio_limits_are_applied() -> None:
+    result = BacktestEngine.run_simulation(
+        [prediction(), prediction(minute=1)],
+        initial_bankroll=100,
+        strategy="flat",
+        flat_stake_amount=20,
+        commission_pct=10,
+        max_stake_pct=10,
+        max_daily_exposure_pct=15,
+    )
+
+    assert result["bankroll_history"] == [100, 109, 113.5]
+    assert result["total_staked"] == 15
+    assert result["commission_pct"] == 10
+
+
+def test_closing_odds_requirement_reports_skipped_records() -> None:
+    result = BacktestEngine.run_simulation(
+        [prediction(), prediction(closing_odds=1.95, minute=1)],
+        strategy="flat",
+        require_closing_odds=True,
+    )
+
+    assert result["total_bets"] == 1
+    assert result["closing_odds_coverage_pct"] == 50
+    assert result["skipped_reasons"] == {"missing_closing_odds": 1}
+
+
+def test_post_kickoff_analysis_is_excluded_as_leakage() -> None:
+    row = prediction()
+    row.analyzed_at = datetime(2026, 7, 23, 20, tzinfo=UTC)
+    row.kickoff = datetime(2026, 7, 23, 19, tzinfo=UTC)
+
+    result = BacktestEngine.run_simulation([row], strategy="flat")
+
+    assert result["total_bets"] == 0
+    assert result["skipped_reasons"] == {"post_kickoff_analysis": 1}
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -121,6 +162,9 @@ def test_calibration_error_matches_known_example() -> None:
         {"kelly_fraction": 0},
         {"kelly_fraction": 1.1},
         {"min_edge_pct": -1},
+        {"commission_pct": 21},
+        {"max_stake_pct": 0},
+        {"max_daily_exposure_pct": 101},
     ],
 )
 def test_engine_rejects_invalid_direct_inputs(overrides: dict[str, object]) -> None:

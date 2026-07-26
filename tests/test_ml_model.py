@@ -167,6 +167,8 @@ def test_training_uses_disjoint_temporal_calibration_and_test_windows(
     RecordingCalibrator.predict_range = None
     pipeline = MLModelPipeline()
     monkeypatch.setattr(settings, "MIN_TRAINING_SAMPLES", 30)
+    monkeypatch.setattr(settings, "MIN_MODEL_BASELINE_BRIER_IMPROVEMENT", -1.0)
+    monkeypatch.setattr(settings, "MAX_MODEL_BASELINE_LOG_LOSS_REGRESSION", 1.0)
     monkeypatch.setattr(
         pipeline,
         "_get_candidate_models",
@@ -181,12 +183,35 @@ def test_training_uses_disjoint_temporal_calibration_and_test_windows(
     # Final model sees only the oldest training window.
     assert RecordingClassifier.fit_ranges[-1] == (0.0, 38.0)
     # Calibration and test windows are later and mutually disjoint.
-    assert RecordingCalibrator.fit_range == (39.0, 47.0)
-    assert RecordingCalibrator.predict_range == (48.0, 59.0)
+    assert RecordingCalibrator.fit_range == (39.0, 42.0)
+    assert RecordingCalibrator.predict_range == (43.0, 47.0)
+    assert pipeline.metrics["calibration_applied"] is False
     assert pipeline.metrics["evaluation_strategy"] == ("walk_forward_temporal_holdout")
     assert pipeline.metrics["training_samples"] == 39.0
     assert pipeline.metrics["calibration_samples"] == 9.0
     assert pipeline.metrics["test_samples"] == 12.0
+
+
+def test_training_rejects_candidate_that_does_not_beat_naive_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.prediction.ml import calibrate
+
+    pipeline = MLModelPipeline()
+    monkeypatch.setattr(settings, "MIN_TRAINING_SAMPLES", 30)
+    monkeypatch.setattr(
+        pipeline,
+        "_get_candidate_models",
+        lambda: [("Recording", RecordingClassifier())],
+    )
+    monkeypatch.setattr(calibrate, "MultiClassCalibrator", RecordingCalibrator)
+    save = Mock()
+    monkeypatch.setattr(pipeline, "_save_active_model", save)
+    rows = [temporal_training_row(index) for index in range(60)]
+
+    assert pipeline.train_pipeline(rows) is False
+    save.assert_not_called()
+    assert pipeline.is_ready is False
 
 
 def test_load_model_clears_stale_state_when_artifact_is_missing(
@@ -236,6 +261,21 @@ def test_calibrator_falls_back_to_base_probabilities_for_zero_rows() -> None:
 
     assert probabilities == pytest.approx([0.2, 0.3, 0.5])
     assert probabilities.sum() == pytest.approx(1.0)
+
+
+def test_multiclass_calibration_error_uses_prediction_confidence() -> None:
+    labels = np.array([0, 1, 2])
+    probabilities = np.array(
+        [
+            [0.8, 0.1, 0.1],
+            [0.1, 0.8, 0.1],
+            [0.1, 0.1, 0.8],
+        ]
+    )
+
+    error = MLModelPipeline._multiclass_calibration_error(labels, probabilities)
+
+    assert error == pytest.approx(0.2)
 
 
 def test_versioned_artifacts_support_validated_rollback(

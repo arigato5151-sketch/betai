@@ -904,6 +904,27 @@
         ]
       }
     },
+    "/api/operations/data-quality": {
+      "get": {
+        "summary": "Get Data Quality",
+        "operationId": "get_data_quality_api_operations_data_quality_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ]
+      }
+    },
     "/": {
       "get": {
         "summary": "Health Check",
@@ -1314,6 +1335,42 @@
             "title": "Min Edge Pct",
             "description": "Minimum edge% to bet",
             "default": 3.0
+          },
+          "commission_pct": {
+            "type": "number",
+            "maximum": 20.0,
+            "minimum": 0.0,
+            "title": "Commission Pct",
+            "description": "Commission deducted from winning profit",
+            "default": 0.0
+          },
+          "max_stake_pct": {
+            "type": "number",
+            "maximum": 100.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Max Stake Pct",
+            "description": "Maximum bankroll percentage per bet",
+            "default": 5.0
+          },
+          "max_daily_exposure_pct": {
+            "type": "number",
+            "maximum": 100.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Max Daily Exposure Pct",
+            "description": "Maximum daily bankroll exposure",
+            "default": 15.0
+          },
+          "require_closing_odds": {
+            "type": "boolean",
+            "title": "Require Closing Odds",
+            "description": "Skip records without a valid closing price",
+            "default": false
+          },
+          "exclude_post_kickoff": {
+            "type": "boolean",
+            "title": "Exclude Post Kickoff",
+            "description": "Exclude analyses generated at or after kickoff",
+            "default": true
           }
         },
         "type": "object",

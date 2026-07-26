@@ -1,5 +1,12 @@
 name: CI
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [main, master]
@@ -29,6 +36,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
+          python -m pip check
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -41,12 +49,18 @@ jobs:
         run: npm --prefix frontend run lint
       - name: Frontend tests
         run: npm --prefix frontend run test --if-present
+      - name: Frontend production build
+        run: npm --prefix frontend run build
       - name: Ruff
         run: python -m ruff check backend/app backend/migrations tests scripts
       - name: Black
         run: python -m black --check backend/app backend/migrations tests scripts
       - name: Mypy (typed domain boundary)
         run: python -m mypy backend/app
+      - name: OpenAPI contract drift
+        run: |
+          python scripts/export_openapi.py
+          git diff --exit-code -- docs/openapi.json
       - name: Alembic migration smoke test
         run: |
           python -m alembic -c backend/alembic.ini upgrade head

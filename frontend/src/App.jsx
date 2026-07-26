@@ -18,8 +18,10 @@ import { normalizeApiMode } from "./apiMode.js";
 import AdminPanel from "./AdminPanel.jsx";
 import AnalysisForm from "./components/AnalysisForm.jsx";
 import BankrollChart from "./components/BankrollChart.jsx";
+import DataQualityCard from "./components/DataQualityCard.jsx";
 import HistoryTable from "./components/HistoryTable.jsx";
 import LoginForm, { DemoModeBadge } from "./components/LoginForm.jsx";
+import ModelStatusCard from "./components/ModelStatusCard.jsx";
 import { apiFetch, useAuth } from "./hooks/useAuth.js";
 
 ChartJS.register(
@@ -65,6 +67,12 @@ function App() {
   const [backtest, setBacktest] = useState(null);
   const [backtestLoading, setBacktestLoading] = useState(false);
   const [backtestError, setBacktestError] = useState("");
+  const [dataQuality, setDataQuality] = useState(null);
+  const [dataQualityLoading, setDataQualityLoading] = useState(false);
+  const [dataQualityError, setDataQualityError] = useState("");
+  const [modelStatus, setModelStatus] = useState(null);
+  const [modelStatusLoading, setModelStatusLoading] = useState(false);
+  const [modelStatusError, setModelStatusError] = useState("");
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const bankrollSeries = useMemo(
     () => buildBankrollSeries(backtest?.bankroll_history),
@@ -120,7 +128,45 @@ function App() {
       ml_ready: !mlInsufficient,
       record_id: rawDbItem.id,
       actual_result: rawDbItem.actual_result,
+      data_quality: rawDbItem.data_quality,
+      provenance: {
+        model_name: rawDbItem.model_name,
+        model_artifact_version: rawDbItem.model_artifact_version,
+        feature_schema_version: rawDbItem.feature_schema_version,
+        ensemble_version: rawDbItem.ensemble_version,
+        analysis_lead_minutes: rawDbItem.analysis_lead_minutes,
+      },
     });
+  };
+
+  const fetchDataQuality = async () => {
+    if (!actions.readAudit) return;
+    setDataQualityLoading(true);
+    setDataQualityError("");
+    try {
+      const response = await apiFetch("/operations/data-quality");
+      if (!response.ok) throw new Error("Veri kalitesi durumu alınamadı.");
+      setDataQuality(await response.json());
+    } catch (error) {
+      setDataQualityError(error.message || "Veri kalitesi durumu alınamadı.");
+    } finally {
+      setDataQualityLoading(false);
+    }
+  };
+
+  const fetchModelStatus = async () => {
+    if (!actions.readHistory) return;
+    setModelStatusLoading(true);
+    setModelStatusError("");
+    try {
+      const response = await apiFetch("/ml/status");
+      if (!response.ok) throw new Error("ML model durumu alınamadı.");
+      setModelStatus(await response.json());
+    } catch (error) {
+      setModelStatusError(error.message || "ML model durumu alınamadı.");
+    } finally {
+      setModelStatusLoading(false);
+    }
   };
 
   const fetchHistory = (requestedPage = historyPage) => {
@@ -187,6 +233,14 @@ function App() {
     historyFilters.sort,
   ]);
 
+  useEffect(() => {
+    if (authenticated === true && actions.readAudit) fetchDataQuality();
+  }, [authenticated, actions.readAudit]);
+
+  useEffect(() => {
+    if (authenticated === true && actions.readHistory) fetchModelStatus();
+  }, [authenticated, actions.readHistory]);
+
   const handleLogout = async () => {
     await logout();
     setHistory([]);
@@ -222,6 +276,11 @@ function App() {
           strategy: "fractional_kelly",
           kelly_fraction: 0.25,
           min_edge_pct: 3,
+          commission_pct: 2,
+          max_stake_pct: 5,
+          max_daily_exposure_pct: 15,
+          require_closing_odds: false,
+          exclude_post_kickoff: true,
         }),
       });
       if (!response.ok) throw new Error("Backtest calistirilamadi.");
@@ -261,6 +320,9 @@ function App() {
           ml_ready: data.ml_ready,
           ml_samples: data.ml_samples,
           ml_min_samples: data.ml_min_samples,
+          data_quality: data.data_quality,
+          provenance: data.provenance,
+          insights: data.insights,
         });
       })
       .finally(() => setLoading(false));
@@ -327,6 +389,24 @@ function App() {
         <AdminPanel request={apiFetch} currentUserId={sessionUser?.id} onClose={() => setAdminPanelOpen(false)} />
       )}
 
+      {actions.readAudit && (
+        <DataQualityCard
+          data={dataQuality}
+          error={dataQualityError}
+          loading={dataQualityLoading}
+          onRefresh={fetchDataQuality}
+        />
+      )}
+
+      {actions.readHistory && (
+        <ModelStatusCard
+          status={modelStatus}
+          error={modelStatusError}
+          loading={modelStatusLoading}
+          onRefresh={fetchModelStatus}
+        />
+      )}
+
       <main className="mx-auto grid max-w-7xl grid-cols-1 gap-8 lg:grid-cols-3">
         {actions.analyze ? (
           <AnalysisForm
@@ -354,6 +434,20 @@ function App() {
                     <span className="text-xs text-slate-400">Yapay Zeka Tahmini</span>
                     <p className="text-lg font-bold text-amber-400">{selectedMatch.analysis.prediction} (%{selectedMatch.analysis.probability})</p>
                   </div>
+                  {selectedMatch.data_quality && (
+                    <div className="rounded border border-slate-800 bg-slate-950/60 p-3 text-xs">
+                      <span className="text-slate-500">Analiz veri skoru</span>
+                      <strong className="ml-2 text-emerald-400">{selectedMatch.data_quality.score}/100</strong>
+                      {selectedMatch.provenance?.model_name && (
+                        <p className="mt-2 text-slate-400">
+                          Model: {selectedMatch.provenance.model_name}
+                          {selectedMatch.provenance.model_artifact_version
+                            ? ` · ${selectedMatch.provenance.model_artifact_version}`
+                            : ""}
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <div>
                     <span className="text-xs text-slate-400">Finansal Deger / Value Bet</span>
                     <p className={`text-sm font-bold ${selectedMatch.value_assessment.value_bet ? "text-emerald-400" : "text-slate-400"}`}>

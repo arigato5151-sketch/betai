@@ -12,6 +12,7 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, Field, ValidationError, field_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 import logging
@@ -19,7 +20,9 @@ import logging
 from app.db.session import SessionLocal, get_db
 from app.db.repository import MatchPredictionRepository
 from app.db.historical_repository import HistoricalFixtureRepository
+from app.db.models import HistoricalFixture
 from app.services.api_football import APIFootballClient
+from app.services.data_quality import DataQualityService
 from app.prediction.stats_engine import StatsEngine
 from app.prediction.ensemble import ProbabilityEnsembler
 from app.prediction.value_calc import ValueCalc
@@ -334,6 +337,21 @@ class BacktestRequest(BaseModel):
         0.25, gt=0, le=1.0, description="Kelly fraction (0-1)"
     )
     min_edge_pct: float = Field(3.0, ge=0, le=100, description="Minimum edge% to bet")
+    commission_pct: float = Field(
+        0.0, ge=0, le=20, description="Commission deducted from winning profit"
+    )
+    max_stake_pct: float = Field(
+        5.0, gt=0, le=100, description="Maximum bankroll percentage per bet"
+    )
+    max_daily_exposure_pct: float = Field(
+        15.0, gt=0, le=100, description="Maximum daily bankroll exposure"
+    )
+    require_closing_odds: bool = Field(
+        False, description="Skip records without a valid closing price"
+    )
+    exclude_post_kickoff: bool = Field(
+        True, description="Exclude analyses generated at or after kickoff"
+    )
 
     @field_validator("initial_bankroll")
     @classmethod
@@ -518,6 +536,8 @@ def _get_historical_feature_context(
         return service.build_context(
             home_team_id=payload.home_team_id,
             away_team_id=payload.away_team_id,
+            home_team_name=payload.home_team,
+            away_team_name=payload.away_team,
             league_id=payload.league_id,
             before=payload.kickoff,
             recent_match_count=settings.RECENT_FORM_MATCH_COUNT,
@@ -559,6 +579,7 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         availability=availability,
         lineup_context=lineup_context,
         fixture_date=payload.kickoff,
+        league_id=payload.league_id,
     )
     if ml_pipeline.is_ready:
         ml_result = ml_pipeline.predict_match(feature_vector)
@@ -585,6 +606,30 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         }
     insights = StatsEngine.build_insights(analysis, value_data)
     insights.extend(ml_explanations)
+    history_home_count = len(home_matches_df) if home_matches_df is not None else 0
+    history_away_count = len(away_matches_df) if away_matches_df is not None else 0
+    required_history = settings.RECENT_FORM_MATCH_COUNT
+    quality_checks = {
+        "fixture_identified": payload.fixture_id is not None,
+        "kickoff_known": payload.kickoff is not None,
+        "market_available": payload.market_1x2 is not None,
+        "home_history_sufficient": history_home_count >= required_history,
+        "away_history_sufficient": history_away_count >= required_history,
+        "availability_available": availability is not None,
+        "lineups_available": lineups is not None,
+    }
+    data_quality = {
+        "score": round(
+            100.0
+            * sum(1 for passed in quality_checks.values() if passed)
+            / len(quality_checks),
+            2,
+        ),
+        "checks": quality_checks,
+        "home_history_matches": history_home_count,
+        "away_history_matches": history_away_count,
+        "required_history_matches": required_history,
+    }
 
     return {
         "analysis": analysis,
@@ -592,6 +637,7 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         "ml_result": ml_result,
         "feature_vector": feature_vector,
         "insights": insights,
+        "data_quality": data_quality,
     }
 
 
@@ -600,8 +646,18 @@ def _persist_analysis(payload: AnalysisRequest, computed: dict):
     value_data = computed["value_data"]
     ml_result = computed["ml_result"]
     feature_vector = computed["feature_vector"]
+    data_quality = computed["data_quality"]
     probs = analysis["all_probabilities"]
     best_pick = value_data.get("best_pick") or {}
+    analyzed_at = datetime.now(timezone.utc)
+    kickoff = payload.kickoff
+    if kickoff is not None and kickoff.tzinfo is None:
+        kickoff = kickoff.replace(tzinfo=timezone.utc)
+    analysis_lead_minutes = (
+        round((kickoff - analyzed_at).total_seconds() / 60.0, 2)
+        if kickoff is not None
+        else None
+    )
 
     record_data = {
         "fixture_id": payload.fixture_id,
@@ -636,6 +692,13 @@ def _persist_analysis(payload: AnalysisRequest, computed: dict):
         "feature_snapshot_at": datetime.now(timezone.utc),
         "probability_components": analysis.get("ensemble"),
         "ensemble_version": (analysis.get("ensemble") or {}).get("version"),
+        "model_name": ml_result.get("model_name") or analysis.get("model"),
+        "model_artifact_version": ml_result.get("artifact_version"),
+        "data_quality": data_quality,
+        "kickoff": kickoff,
+        "analyzed_at": analyzed_at,
+        "analysis_lead_minutes": analysis_lead_minutes,
+        "market_snapshot_at": analyzed_at if payload.market_1x2 else None,
     }
 
     with SessionLocal() as db:
@@ -660,6 +723,17 @@ async def _run_analysis(payload: AnalysisRequest) -> dict:
     )
     if computed["value_data"].get("data_methodology"):
         response["data_methodology"] = computed["value_data"]["data_methodology"]
+    response["data_quality"] = computed["data_quality"]
+    response["provenance"] = {
+        "model_name": computed["ml_result"].get("model_name")
+        or computed["analysis"].get("model"),
+        "model_artifact_version": computed["ml_result"].get("artifact_version"),
+        "feature_schema_version": FeatureEngine.SCHEMA_VERSION,
+        "ensemble_version": (computed["analysis"].get("ensemble") or {}).get("version"),
+        "analyzed_at": db_record.analyzed_at,
+        "kickoff": db_record.kickoff,
+        "analysis_lead_minutes": db_record.analysis_lead_minutes,
+    }
     return response
 
 
@@ -776,8 +850,19 @@ def get_ml_labeling_queue(
     "/ml/status",
     dependencies=[Depends(require_permission("history:read"))],
 )
-def get_ml_status():
-    return ml_pipeline.status()
+def get_ml_status(db: Session = Depends(get_db)):
+    result = ml_pipeline.status()
+    labeled_predictions = MatchPredictionRepository(db).count_labeled()
+    historical_fixtures = db.query(func.count(HistoricalFixture.id)).scalar() or 0
+    result["training_data"] = {
+        "labeled_predictions": labeled_predictions,
+        "historical_fixtures": historical_fixtures,
+        "minimum_samples": settings.MIN_TRAINING_SAMPLES,
+        "historical_minimum_team_matches": (
+            settings.HISTORICAL_TRAINING_MIN_TEAM_MATCHES
+        ),
+    }
+    return result
 
 
 @router.post(
@@ -858,6 +943,11 @@ def run_backtest(body: BacktestRequest, db: Session = Depends(get_db)):
         flat_stake_amount=body.flat_stake_amount,
         kelly_fraction=body.kelly_fraction,
         min_edge_pct=body.min_edge_pct,
+        commission_pct=body.commission_pct,
+        max_stake_pct=body.max_stake_pct,
+        max_daily_exposure_pct=body.max_daily_exposure_pct,
+        require_closing_odds=body.require_closing_odds,
+        exclude_post_kickoff=body.exclude_post_kickoff,
     )
 
 
@@ -865,3 +955,11 @@ def run_backtest(body: BacktestRequest, db: Session = Depends(get_db)):
 def run_audit(db: Session = Depends(get_db)):
     repo = MatchPredictionRepository(db)
     return PredictionAuditor.audit_predictions(repo.get_all())
+
+
+@router.get(
+    "/operations/data-quality",
+    dependencies=[Depends(require_permission("audit:read"))],
+)
+def get_data_quality(db: Session = Depends(get_db)):
+    return DataQualityService(db).snapshot()

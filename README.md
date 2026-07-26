@@ -187,20 +187,32 @@ backend/app/
 
 ### Tarihsel fixture veri hattı
 
-Celery Beat, izin verilen liglerin mevcut sezon tamamlanmış maçlarını günlük olarak
-`historical_fixtures` tablosuna idempotent biçimde yazar. Analiz sırasında yalnızca
-maçın `kickoff` zamanından önceki kayıtlar okunur; böylece Elo ve H2H feature'larında
-gelecek bilgisi sızıntısı önlenir. Geçmiş sezon backfill'i API kotası dikkate alınarak
-manuel ve tekrar çalıştırılabilir biçimde başlatılabilir:
+Celery Beat, izin verilen liglerin mevcut sezon tamamlanmış maçlarını Football-Data
+CSV arşivinden günlük olarak `historical_fixtures` tablosuna idempotent biçimde
+yazar. 14 lig eşlemesi; şema doğrulama, yerel saatten UTC'ye dönüşüm ve kaynak
+provenance'ı ile içe alınır. Analiz sırasında yalnızca maçın `kickoff` zamanından
+önceki kayıtlar okunur; aynı anda başlayan maçlar tek batch olarak işlendiğinden Elo,
+form ve H2H feature'larında gelecek bilgisi sızıntısı oluşmaz.
+
+2025/26 sezonunu tekrar içe aktarmak için:
 
 ```powershell
 cd backend
-python -c "from app.tasks.jobs import sync_historical_fixtures_task; print(sync_historical_fixtures_task.run([2023, 2024, 2025]))"
+python -c "from app.tasks.jobs import sync_football_data_fixtures_task; print(sync_football_data_fixtures_task.run([2025]))"
 ```
 
-Demo API anahtarı tarihsel veri üretmez; gerçek backfill için geçerli API-Football
-anahtarı gerekir. Aynı `fixture_id` yeniden çekildiğinde skor ve durum güncellenir,
-yeni bir satır oluşturulmaz.
+API-Football'ın plan kapsamında erişilebilen eski sezonlarını backfill etmek için:
+
+```powershell
+cd backend
+python -c "from app.tasks.jobs import sync_historical_fixtures_task; print(sync_historical_fixtures_task.run([2023, 2024]))"
+```
+
+Football-Data içe aktarımı API anahtarı gerektirmez. API-Football backfill'i için
+geçerli anahtar ve sezon erişimi gerekir. Harici fixture ve takım kimlikleri negatif
+64-bit deterministik değerlerdir; API kimlikleriyle çakışmaz. Her kaydın
+`data_source` alanı kaynağı taşır. Aynı maç yeniden çekildiğinde skor ve durum
+güncellenir, yeni bir satır oluşturulmaz.
 
 Son maç formu, dinlenme günü, gol ortalaması, clean-sheet ve gol serisi feature'ları
 da aynı zaman kesitli tablodan üretilir. Yerel geçmişte varsayılan olarak en az 5 maç
@@ -213,6 +225,19 @@ rating farkının varsayılan `%25` bölümü lig ortalaması olan `1500` değer
 çekilir ve beklenen ev sahibi skoruna varsayılan `65` Elo puanı eklenir. Güncelleme
 hızı, ev avantajı ve sezon regresyonu sırasıyla `ELO_K_FACTOR`,
 `ELO_HOME_ADVANTAGE_POINTS` ve `ELO_SEASON_REGRESSION` ile kalibre edilebilir.
+
+Model eğitimi, doğrulanmış tahmin snapshot'larına ek olarak `historical_fixtures`
+kayıtlarından üretilen nokta-zamanlı örnekleri kullanır. Bir tarihsel maçın feature
+vektörü oluşturulurken yalnızca o maçın kickoff zamanından önce oynanmış karşılaşmalar
+görülür. Her iki takım için varsayılan en az üç geçmiş maç şartı
+`HISTORICAL_TRAINING_MIN_TEAM_MATCHES` ile değiştirilebilir.
+
+Adaylar walk-forward pencerelerinde Brier skoru ve log-loss ile karşılaştırılır.
+Regularized Logistic Regression, Gradient Boosting ve Random Forest arasından seçilen
+aday; naive sınıf dağılımı baseline'ını ve varsa aktif champion modeli geçmeden
+yayına alınmaz. Isotonic kalibrasyon ayrı fit/doğrulama pencerelerinde değerlendirilir
+ve en az `MIN_ISOTONIC_CALIBRATION_SAMPLES` örnek yoksa devre dışı kalır. Artifact
+diske atomik yazılmadan süreç içi model değiştirilmez.
 
 Ensemble ağırlıkları başlangıçta config'teki stats/ML/market değerlerini kullanır.
 Üç kaynağın bileşenleri ve gerçek sonucu bulunan en az 100 kronolojik örnek
@@ -239,6 +264,10 @@ fixture lineupları `historical_fixtures` tablosundaki JSON kolonlarında tutulu
 bu değişiklik `20260720_0007` Alembic revision'ını gerektirir. API lineupları çoğu
 desteklenen ligde maçtan 20–40 dakika önce geldiğinden erken analizlerde feature
 nötr kalabilir ve maç saatine yakın yeniden analiz daha zengin snapshot üretir.
+
+`ml_features_v4`, desteklenen ligleri one-hot feature olarak ekler. Böylece model
+ligler arasındaki ev sahibi/beraberlik/deplasman dağılımı farklarını öğrenebilir;
+eski snapshot'lar bu alanlarda sıfır varsayılanıyla geriye uyumlu kalır.
 
 ### Temel analiz algoritması
 
@@ -429,6 +458,7 @@ ADMIN_EMAIL=admin@example.com
 FRONTEND_URL=http://localhost:5173
 BACKEND_CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 LOG_LEVEL=INFO
+LOG_FORMAT=text
 ```
 
 `API_FOOTBALL_KEY=DEMO_KEY` uygulamanın gömülü demo verisini kullanmasını sağlar. Canlı fikstürler için değeri geçerli API-Football anahtarıyla değiştirin. Redis kapalıysa Memcached, Memcached de kapalıysa süreç içi TTL cache kullanılır.
@@ -501,6 +531,9 @@ Tüm işlev endpoint'leri `/api` prefix'i altındadır.
 | Metot | Endpoint | Açıklama |
 | --- | --- | --- |
 | `GET` | `/` | Servis, veri modu ve ML durumunu döndürür |
+| `GET` | `/health/live` | Sürecin liveness durumunu döndürür |
+| `GET` | `/health/ready` | Veritabanı ve cache readiness durumunu döndürür |
+| `GET` | `/metrics` | Prometheus uyumlu HTTP metriklerini döndürür |
 | `POST` | `/api/auth/login` | HttpOnly access ve refresh cookie oluşturur |
 | `POST` | `/api/auth/register` | `ALLOW_SELF_REGISTRATION=true` ise sınırlı rolle hesap ve cookie oturumu oluşturur |
 | `POST` | `/api/auth/refresh` | Refresh cookie ile cookie çiftini yeniler |
@@ -525,6 +558,7 @@ Tüm işlev endpoint'leri `/api` prefix'i altındadır.
 | `POST` | `/api/ml/rollback` | `users:manage` izniyle doğrulanmış önceki model artifact'ına döner |
 | `POST` | `/api/backtest` | Kayıtlı tahminlerde strateji simülasyonu yapar |
 | `GET` | `/api/audit` | Tahmin kalitesi ve performans metriklerini üretir |
+| `GET` | `/api/operations/data-quality` | Tarihsel veri, etiket, closing odds, provenance ve son senkronizasyon kalitesini döndürür |
 
 Analiz, geçmiş, backtest ve audit endpoint'leri geçerli access cookie gerektirir. Tarayıcı istekleri `credentials: "include"`, curl örnekleri cookie jar kullanmalıdır.
 

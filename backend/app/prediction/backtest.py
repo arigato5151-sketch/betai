@@ -1,6 +1,8 @@
 import math
 import logging
 import numpy as np
+from collections import Counter
+from datetime import UTC, date, datetime
 from typing import List, Dict, Any, Tuple
 from app.db.models import MatchPrediction
 from app.prediction.audit import PredictionAuditor
@@ -17,6 +19,11 @@ class BacktestEngine:
         flat_stake_amount: float = 10.0,
         kelly_fraction: float = 0.25,
         min_edge_pct: float = 3.0,
+        commission_pct: float = 0.0,
+        max_stake_pct: float = 100.0,
+        max_daily_exposure_pct: float = 100.0,
+        require_closing_odds: bool = False,
+        exclude_post_kickoff: bool = True,
     ) -> Dict[str, Any]:
         """
         Kronolojik tahmin simulasyonu: geçmiş tahminleri test et.
@@ -32,12 +39,18 @@ class BacktestEngine:
             raise ValueError("kelly_fraction must be between 0 and 1")
         if min_edge_pct < 0:
             raise ValueError("min_edge_pct cannot be negative")
+        if not 0 <= commission_pct <= 20:
+            raise ValueError("commission_pct must be between 0 and 20")
+        if not 0 < max_stake_pct <= 100:
+            raise ValueError("max_stake_pct must be between 0 and 100")
+        if not 0 < max_daily_exposure_pct <= 100:
+            raise ValueError("max_daily_exposure_pct must be between 0 and 100")
 
         # Chronologically sort resolved predictions
         resolved = sorted(
             [p for p in predictions if p.actual_result is not None],
-            key=lambda prediction: (
-                prediction.created_at.timestamp() if prediction.created_at else 0.0
+            key=lambda prediction: BacktestEngine._timestamp(
+                prediction.analyzed_at or prediction.created_at
             ),
         )
 
@@ -56,6 +69,11 @@ class BacktestEngine:
                 "sortino_ratio": 0.0,
                 "accuracy_pct": 0.0,
                 "calibration_score": 0.0,
+                "profit_factor": 0.0,
+                "risk_of_ruin_pct": 0.0,
+                "closing_odds_coverage_pct": 0.0,
+                "total_staked": 0.0,
+                "skipped_reasons": {},
                 "bankroll_history": [initial_bankroll],
             }
 
@@ -68,15 +86,45 @@ class BacktestEngine:
         max_drawdown = 0.0
         wins = 0
         losses = 0
+        total_staked = 0.0
+        gross_profit = 0.0
+        gross_loss = 0.0
+        skipped: Counter[str] = Counter()
+        current_day: date | None = None
+        day_start_bankroll = initial_bankroll
+        day_exposure = 0.0
 
         # For calibration: store predicted vs actual
         calibration_data = []
 
         for p in resolved:
+            analysis_time = p.analyzed_at or p.created_at
+            if (
+                exclude_post_kickoff
+                and analysis_time is not None
+                and p.kickoff is not None
+                and BacktestEngine._timestamp(analysis_time)
+                >= BacktestEngine._timestamp(p.kickoff)
+            ):
+                skipped["post_kickoff_analysis"] += 1
+                continue
+            bet_day = analysis_time.date() if analysis_time else date.min
+            if bet_day != current_day:
+                current_day = bet_day
+                day_start_bankroll = current_bankroll
+                day_exposure = 0.0
+
             # Check edge threshold
             if p.edge is None or p.edge < min_edge_pct:
+                skipped["below_edge"] += 1
                 continue
             if p.odd is None or p.odd <= 1.0:
+                skipped["invalid_odds"] += 1
+                continue
+            if require_closing_odds and (
+                p.closing_odds is None or p.closing_odds <= 1.0
+            ):
+                skipped["missing_closing_odds"] += 1
                 continue
 
             # Determine bet stake
@@ -91,10 +139,14 @@ class BacktestEngine:
                 stake_pct = full_kelly_pct * kelly_fraction
                 stake = current_bankroll * (stake_pct / 100.0)
 
-            # Bankroll guards
-            if stake > current_bankroll:
-                stake = current_bankroll
+            # Portfolio-level guards prevent a single signal or busy day from
+            # consuming more capital than configured.
+            stake = min(stake, current_bankroll * max_stake_pct / 100.0)
+            daily_budget = day_start_bankroll * max_daily_exposure_pct / 100.0
+            remaining_daily_budget = max(0.0, daily_budget - day_exposure)
+            stake = min(stake, current_bankroll, remaining_daily_budget)
             if stake <= 0:
+                skipped["daily_exposure_limit"] += 1
                 continue
 
             # Outcome check
@@ -102,10 +154,21 @@ class BacktestEngine:
             bet_roi = PredictionAuditor.calculate_bet_roi(
                 p.prediction, p.actual_result, p.odd
             )
-            net_return = stake * bet_roi
+            gross_return = stake * bet_roi
+            net_return = (
+                gross_return * (1.0 - commission_pct / 100.0)
+                if gross_return > 0
+                else gross_return
+            )
 
             current_bankroll += net_return
             bankroll_history.append(current_bankroll)
+            day_exposure += stake
+            total_staked += stake
+            if net_return > 0:
+                gross_profit += net_return
+            else:
+                gross_loss += abs(net_return)
 
             # Save fractional return
             returns.append(net_return / max(1.0, current_bankroll - net_return))
@@ -165,6 +228,16 @@ class BacktestEngine:
 
         # Calibration score: ECE (Expected Calibration Error)
         calibration_score = BacktestEngine._compute_calibration_error(calibration_data)
+        closing_count = sum(
+            1 for prediction in resolved if (prediction.closing_odds or 0.0) > 1.0
+        )
+        closing_coverage = closing_count / len(resolved) * 100.0
+        profit_factor = (
+            gross_profit / gross_loss
+            if gross_loss > 0
+            else gross_profit if gross_profit > 0 else 0.0
+        )
+        risk_of_ruin = BacktestEngine._bootstrap_risk_of_ruin(returns)
 
         logger.info(
             f"Backtest completed: {wins}W {losses}L, ROI {total_roi:.2f}%, "
@@ -184,8 +257,44 @@ class BacktestEngine:
             "sharpe_ratio": round(sharpe_ratio, 4),
             "sortino_ratio": round(sortino_ratio, 4),
             "calibration_score": round(calibration_score, 4),
+            "profit_factor": round(profit_factor, 4),
+            "risk_of_ruin_pct": round(risk_of_ruin, 2),
+            "closing_odds_coverage_pct": round(closing_coverage, 2),
+            "total_staked": round(total_staked, 2),
+            "commission_pct": commission_pct,
+            "max_stake_pct": max_stake_pct,
+            "max_daily_exposure_pct": max_daily_exposure_pct,
+            "exclude_post_kickoff": exclude_post_kickoff,
+            "skipped_reasons": dict(sorted(skipped.items())),
             "bankroll_history": [round(b, 2) for b in bankroll_history],
         }
+
+    @staticmethod
+    def _timestamp(value: datetime | None) -> float:
+        if value is None:
+            return 0.0
+        normalized = value.replace(tzinfo=UTC) if value.tzinfo is None else value
+        return normalized.timestamp()
+
+    @staticmethod
+    def _bootstrap_risk_of_ruin(
+        returns: List[float],
+        *,
+        simulations: int = 1000,
+        ruin_threshold: float = 0.2,
+    ) -> float:
+        """Estimate path risk by bootstrapping the observed fractional returns."""
+        if not returns:
+            return 0.0
+        rng = np.random.default_rng(42)
+        samples = rng.choice(
+            np.asarray(returns, dtype=float),
+            size=(simulations, len(returns)),
+            replace=True,
+        )
+        paths = np.cumprod(1.0 + samples, axis=1)
+        ruined = np.any(paths <= ruin_threshold, axis=1)
+        return float(np.mean(ruined) * 100.0)
 
     @staticmethod
     def _compute_calibration_error(
