@@ -34,3 +34,32 @@ def test_login_limiter_uses_redis_expiry_and_lock_keys(monkeypatch) -> None:
 
     client.expire.assert_called_once()
     client.setex.assert_called_once()
+
+
+def test_login_limiter_recovers_redis_after_temporary_outage(monkeypatch) -> None:
+    now = [100.0]
+    client = Mock()
+    client.ping.return_value = True
+    client.ttl.return_value = 0
+    client.incr.side_effect = [redis.ConnectionError("offline"), 1]
+    limiter = LoginRateLimiter(
+        redis_client=client,
+        clock=lambda: now[0],
+        redis_recovery_seconds=30,
+    )
+    monkeypatch.setattr(settings, "LOGIN_MAX_ATTEMPTS", 2)
+
+    limiter.record_failure("user", "127.0.0.1")
+    assert limiter._use_redis is False
+
+    now[0] += 29
+    assert limiter.retry_after("user", "127.0.0.1") == 0
+    client.ping.assert_not_called()
+
+    now[0] += 1
+    assert limiter.retry_after("user", "127.0.0.1") == 0
+    client.ping.assert_called_once_with()
+    assert limiter._use_redis is True
+
+    limiter.record_failure("user", "127.0.0.1")
+    client.expire.assert_called_once()

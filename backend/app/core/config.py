@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     LOGIN_MAX_ATTEMPTS: int = Field(default=5, ge=2, le=100)
     LOGIN_WINDOW_SECONDS: int = Field(default=300, ge=10, le=86400)
     LOGIN_LOCKOUT_SECONDS: int = Field(default=900, ge=10, le=86400)
+    LOGIN_REDIS_RECOVERY_SECONDS: float = Field(default=30.0, ge=1.0, le=300.0)
     CSRF_COOKIE_NAME: str = "bet_ai_csrf"
     CSRF_HEADER_NAME: str = "X-CSRF-Token"
     ADMIN_USERNAME: str = Field(default="admin", min_length=1)
