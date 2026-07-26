@@ -7,9 +7,10 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+import jwt
 from fastapi import Depends, HTTPException, Response, status
 from fastapi.security import APIKeyCookie
-from jose import JWTError, jwt
+from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -124,7 +125,7 @@ def decode_token_payload(
     )
     try:
         payload = jwt.decode(token, secret, algorithms=[settings.JWT_ALGORITHM])
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise _unauthorized() from exc
 
     if not payload.get("sub") or payload.get("type") != expected_type:

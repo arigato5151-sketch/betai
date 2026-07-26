@@ -1,4 +1,9 @@
+from datetime import UTC, datetime, timedelta
+
+import jwt
+import pytest
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -6,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.endpoints import router
 from app.core.config import settings
+from app.core.auth import decode_token_payload
 from app.core.passwords import hash_password
 from app.db.models import Base, Permission, Role
 from app.db.session import get_db
@@ -79,6 +85,25 @@ def _seed_users() -> None:
 
 
 _seed_users()
+
+
+def test_unsigned_jwt_is_rejected() -> None:
+    token = jwt.encode(
+        {
+            "sub": "user-id",
+            "type": "access",
+            "ver": 0,
+            "iat": datetime.now(UTC),
+            "exp": datetime.now(UTC) + timedelta(minutes=5),
+        },
+        key="",
+        algorithm="none",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        decode_token_payload(token, "access")
+
+    assert error.value.status_code == 401
 
 
 def _login(username: str, password: str, test_client: TestClient = client):

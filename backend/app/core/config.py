@@ -30,8 +30,8 @@ class Settings(BaseSettings):
     MEMCACHED_HOST: str | None = None
     MEMCACHED_PORT: int = Field(default=11211, ge=1, le=65535)
     MEMCACHED_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0, le=30)
-    JWT_SECRET_KEY: str = "change-this-secret"
-    JWT_REFRESH_SECRET_KEY: str = "change-this-refresh-secret"
+    JWT_SECRET_KEY: str = "development-access-secret-change-me"
+    JWT_REFRESH_SECRET_KEY: str = "development-refresh-secret-change-me"
     JWT_ALGORITHM: Literal["HS256", "HS384", "HS512"] = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, ge=1, le=1440)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, ge=1, le=90)
@@ -255,7 +255,12 @@ class Settings(BaseSettings):
         if self.ALLOW_DATABASE_FALLBACK:
             errors.append("ALLOW_DATABASE_FALLBACK must be false")
 
-        placeholder_values = {"change-this-secret", "change-this-refresh-secret"}
+        placeholder_values = {
+            "change-this-secret",
+            "change-this-refresh-secret",
+            "development-access-secret-change-me",
+            "development-refresh-secret-change-me",
+        }
         secrets = (self.JWT_SECRET_KEY, self.JWT_REFRESH_SECRET_KEY)
         if any(len(secret) < 32 or secret in placeholder_values for secret in secrets):
             errors.append(
