@@ -16,15 +16,20 @@ _TEAM_ALIASES = {
 }
 
 
-def normalize_team_name(value: str) -> str:
-    """Return a stable, accent-insensitive identity key for a team name."""
+def stable_team_name_key(value: str) -> str:
+    """Return an immutable source identity key without mutable alias rules."""
     decomposed = unicodedata.normalize("NFKD", value)
     ascii_value = "".join(
         character for character in decomposed if not unicodedata.combining(character)
     )
-    normalized = " ".join(
+    return " ".join(
         "".join(character if character.isalnum() else " " for character in ascii_value)
         .casefold()
         .split()
     )
+
+
+def normalize_team_name(value: str) -> str:
+    """Return an alias-aware key for matching names across providers."""
+    normalized = stable_team_name_key(value)
     return _TEAM_ALIASES.get(normalized, normalized)

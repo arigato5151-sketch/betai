@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.core.config import settings
-from app.core.team_identity import normalize_team_name
+from app.core.team_identity import stable_team_name_key
 
 
 class FootballDataError(RuntimeError):
@@ -247,8 +247,8 @@ class FootballDataCSVClient:
                     f"{league.division} feed has inconsistent scores at line {line_number}"
                 )
 
-            home_key = f"{league.country}:{normalize_team_name(home_team)}"
-            away_key = f"{league.country}:{normalize_team_name(away_team)}"
+            home_key = f"{league.country}:{stable_team_name_key(home_team)}"
+            away_key = f"{league.country}:{stable_team_name_key(away_team)}"
             natural_fixture_key = (
                 f"{league.division}:{season}:{kickoff.isoformat()}:"
                 f"{home_key}:{away_key}"

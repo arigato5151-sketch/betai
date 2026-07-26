@@ -3,11 +3,17 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
+from app.core.team_identity import normalize_team_name, stable_team_name_key
 from app.services.football_data_csv import (
     FootballDataCSVClient,
     FootballDataDownloadError,
     FootballDataFormatError,
 )
+
+
+def test_source_identity_is_stable_when_cross_provider_aliases_change() -> None:
+    assert normalize_team_name("Man City") == normalize_team_name("Manchester City")
+    assert stable_team_name_key("Man City") != stable_team_name_key("Manchester City")
 
 
 @pytest.mark.asyncio
