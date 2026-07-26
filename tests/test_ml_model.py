@@ -4,12 +4,17 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, clone
 
 from app.core.config import settings
 from app.prediction.ml.calibrate import MultiClassCalibrator
+from app.prediction.ml.categorical import NativeCategoricalBoostingClassifier
 from app.prediction.ml.features import FeatureEngine
-from app.prediction.ml.model import MLModelPipeline
+from app.prediction.ml.model import (
+    CATBOOST_AVAILABLE,
+    LGBM_AVAILABLE,
+    MLModelPipeline,
+)
 
 
 class ProbabilityModel:
@@ -134,6 +139,89 @@ def test_inference_rejects_non_finite_features() -> None:
     assert pipeline.runtime_stats["inference_failure"] == 1
 
 
+def test_candidate_pool_registers_enabled_native_boosters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.prediction.ml import model
+
+    monkeypatch.setattr(model, "CATBOOST_AVAILABLE", True)
+    monkeypatch.setattr(model, "LGBM_AVAILABLE", True)
+    monkeypatch.setattr(settings, "ENABLE_CATBOOST_CANDIDATE", True)
+    monkeypatch.setattr(settings, "ENABLE_LIGHTGBM_CANDIDATE", True)
+
+    candidates = dict(MLModelPipeline()._get_candidate_models())
+
+    assert isinstance(candidates["CatBoost"], NativeCategoricalBoostingClassifier)
+    assert candidates["CatBoost"].backend == "catboost"
+    assert isinstance(candidates["LightGBM"], NativeCategoricalBoostingClassifier)
+    assert candidates["LightGBM"].backend == "lightgbm"
+    assert candidates["CatBoost"].categorical_feature_names == (
+        "league_id",
+        "home_team_id",
+        "away_team_id",
+    )
+
+
+def test_candidate_pool_skips_unavailable_native_boosters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.prediction.ml import model
+
+    monkeypatch.setattr(model, "CATBOOST_AVAILABLE", False)
+    monkeypatch.setattr(model, "LGBM_AVAILABLE", False)
+
+    candidates = dict(MLModelPipeline()._get_candidate_models())
+
+    assert "CatBoost" not in candidates
+    assert "LightGBM" not in candidates
+    assert "Regularized Logistic Regression" in candidates
+    assert "Random Forest" in candidates
+
+
+@pytest.mark.parametrize(
+    "backend,available",
+    [
+        pytest.param("catboost", CATBOOST_AVAILABLE, id="catboost"),
+        pytest.param("lightgbm", LGBM_AVAILABLE, id="lightgbm"),
+    ],
+)
+def test_native_categorical_booster_clone_fit_and_predict(
+    backend: str, available: bool
+) -> None:
+    if not available:
+        pytest.skip(f"{backend} is not installed")
+    feature_names = ("numeric", "league_id", "home_team_id", "away_team_id")
+    estimator = NativeCategoricalBoostingClassifier(
+        backend=backend,
+        feature_names=feature_names,
+        categorical_feature_names=feature_names[1:],
+        n_estimators=8,
+        max_depth=3,
+        learning_rate=0.1,
+        n_jobs=1,
+    )
+    labels = np.asarray([0, 1, 2] * 8)
+    features = np.asarray(
+        [
+            [
+                float(index % 5),
+                float(203 if index % 2 else 39),
+                float(100 + index % 4),
+                float(200 + index % 5),
+            ]
+            for index in range(len(labels))
+        ]
+    )
+
+    fitted = clone(estimator).fit(features, labels)
+    probabilities = fitted.predict_proba(features[:3])
+
+    assert probabilities.shape == (3, 3)
+    assert np.all(np.isfinite(probabilities))
+    assert probabilities.sum(axis=1) == pytest.approx(np.ones(3))
+    assert fitted.classes_.tolist() == [0, 1, 2]
+
+
 def test_training_rejects_insufficient_or_unbalanced_classes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -252,6 +340,67 @@ def test_load_valid_signed_model_artifact(
     assert active_path.with_name("active_model.pkl.sig").is_file()
 
 
+@pytest.mark.parametrize(
+    "backend,available",
+    [
+        pytest.param("catboost", CATBOOST_AVAILABLE, id="catboost"),
+        pytest.param("lightgbm", LGBM_AVAILABLE, id="lightgbm"),
+    ],
+)
+def test_signed_native_booster_artifact_roundtrip(
+    backend: str,
+    available: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    if not available:
+        pytest.skip(f"{backend} is not installed")
+    artifacts_dir = tmp_path / backend
+    active_path = artifacts_dir / "active_model.pkl"
+    monkeypatch.setattr(settings, "MODEL_ARTIFACTS_DIR", str(artifacts_dir))
+    monkeypatch.setattr(settings, "ACTIVE_MODEL_PATH", str(active_path))
+    feature_names = ("numeric", "league_id", "home_team_id", "away_team_id")
+    labels = np.asarray([0, 1, 2] * 8)
+    features = np.asarray(
+        [
+            [
+                float(index % 5),
+                float(203 if index % 2 else 39),
+                float(100 + index % 4),
+                float(200 + index % 5),
+            ]
+            for index in range(len(labels))
+        ]
+    )
+    model = NativeCategoricalBoostingClassifier(
+        backend=backend,
+        feature_names=feature_names,
+        categorical_feature_names=feature_names[1:],
+        n_estimators=8,
+        max_depth=3,
+        learning_rate=0.1,
+        n_jobs=1,
+    ).fit(features, labels)
+    writer = MLModelPipeline()
+    writer.feature_names = list(feature_names)
+    writer._save_active_model(model, None, backend, {"brier_score": 0.2})
+
+    loaded = MLModelPipeline()
+
+    assert loaded.load_active_model() is True
+    result = loaded.predict_match(
+        {
+            "numeric": 2.0,
+            "league_id": 203.0,
+            "home_team_id": 101.0,
+            "away_team_id": 202.0,
+        }
+    )
+    assert result["ready"] is True
+    assert sum(result["all_probabilities"].values()) == pytest.approx(100.0, abs=0.02)
+    assert active_path.with_name("active_model.pkl.sig").is_file()
+
+
 def test_load_rejects_tampered_model_artifact(
     monkeypatch: pytest.MonkeyPatch, tmp_path, caplog
 ) -> None:
@@ -275,6 +424,35 @@ def test_load_rejects_tampered_model_artifact(
     assert pipeline.is_ready is False
     assert pipeline.model is None
     assert "signature verification failed" in caplog.text
+
+
+def test_failed_artifact_reload_preserves_in_memory_champion(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    artifacts_dir = tmp_path / "models"
+    active_path = artifacts_dir / "active_model.pkl"
+    monkeypatch.setattr(settings, "MODEL_ARTIFACTS_DIR", str(artifacts_dir))
+    monkeypatch.setattr(settings, "ACTIVE_MODEL_PATH", str(active_path))
+    writer = MLModelPipeline()
+    writer._save_active_model(
+        ProbabilityModel([0.2, 0.6, 0.2]),
+        None,
+        "Artifact Model",
+        {"brier_score": 0.12},
+    )
+    with active_path.open("ab") as artifact:
+        artifact.write(b"tampered")
+
+    champion = ProbabilityModel([0.7, 0.2, 0.1])
+    pipeline = MLModelPipeline()
+    pipeline.model = champion
+    pipeline.is_ready = True
+    pipeline.active_model_name = "In-memory champion"
+
+    assert pipeline.load_active_model() is False
+    assert pipeline.model is champion
+    assert pipeline.is_ready is True
+    assert pipeline.active_model_name == "In-memory champion"
 
 
 def test_calibrator_falls_back_to_base_probabilities_for_zero_rows() -> None:

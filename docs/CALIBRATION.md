@@ -122,3 +122,9 @@ Bu alanların TODO yorumları, nedenleriyle birlikte kodda korunmuştur.
 zaman ağırlıklı Poisson için eklenmiştir. Değer yaklaşık 69 günlük teorik yarı ömür
 sağlar; henüz bu rapordaki grid sonuçlarıyla kalibre edilmiş sayılmaz. Bir sonraki
 out-of-time çalışmada `0.0–0.03` aralığında ayrıca taranmalıdır.
+
+Lig bazlı BMA için eklenen `ENSEMBLE_BMA_*` prior, yarı ömür, kalite ve guard
+değerleri de bu 37 alanlık çalışmadan sonra eklenmiştir. Bunlar güvenli başlangıç
+değerleridir; lig başına yeterli çözülmüş tahmin birikmeden kalibre edilmiş kabul
+edilmemelidir. Ayrıntılı yöntem ve fallback zinciri için
+`docs/ML_ENSEMBLE.md` belgesine bakın.

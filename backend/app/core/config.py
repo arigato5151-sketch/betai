@@ -162,6 +162,21 @@ class Settings(BaseSettings):
     ENSEMBLE_HOLDOUT_FRACTION: float = Field(default=0.2, ge=0.1, le=0.4)
     ENSEMBLE_MIN_SOURCE_WEIGHT: float = Field(default=0.05, ge=0, le=0.3)
     ENSEMBLE_MIN_LOG_LOSS_IMPROVEMENT: float = Field(default=0.001, ge=0)
+    ENSEMBLE_BMA_MIN_LEAGUE_SAMPLES: int = Field(default=30, ge=6)
+    ENSEMBLE_BMA_PRIOR_STRENGTH: float = Field(default=50.0, gt=0, allow_inf_nan=False)
+    ENSEMBLE_BMA_HALF_LIFE_DAYS: float = Field(default=180.0, gt=0, allow_inf_nan=False)
+    ENSEMBLE_BMA_MIN_DATA_QUALITY_SCORE: float = Field(
+        default=0.0, ge=0, le=100, allow_inf_nan=False
+    )
+    ENSEMBLE_BMA_MAX_BRIER_REGRESSION: float = Field(
+        default=0.005, ge=0, le=1, allow_inf_nan=False
+    )
+    ENSEMBLE_BMA_STATS_LOW_DATA_BOOST: float = Field(
+        default=1.5, ge=1, le=5, allow_inf_nan=False
+    )
+    ENSEMBLE_BMA_ML_HIGH_QUALITY_BOOST: float = Field(
+        default=1.5, ge=1, le=5, allow_inf_nan=False
+    )
 
     # Son form feature'ları için beklenen tamamlanmış maç sayısı.
     RECENT_FORM_MATCH_COUNT: int = Field(default=5, ge=1, le=20)
@@ -176,6 +191,14 @@ class Settings(BaseSettings):
 
     MIN_TRAINING_SAMPLES: int = 200
     RETRAIN_EVERY_N_NEW: int = 25
+    ENABLE_CATBOOST_CANDIDATE: bool = True
+    ENABLE_LIGHTGBM_CANDIDATE: bool = True
+    ML_BOOSTER_TREES: int = Field(default=200, ge=50, le=2000)
+    ML_BOOSTER_MAX_DEPTH: int = Field(default=6, ge=2, le=12)
+    ML_BOOSTER_LEARNING_RATE: float = Field(
+        default=0.05, gt=0, le=1, allow_inf_nan=False
+    )
+    ML_BOOSTER_THREADS: int = Field(default=2, ge=1, le=32)
     HISTORICAL_TRAINING_MIN_TEAM_MATCHES: int = Field(default=3, ge=1, le=10)
     MIN_MODEL_BASELINE_BRIER_IMPROVEMENT: float = Field(default=0.005, ge=0, le=1)
     MAX_MODEL_BASELINE_LOG_LOSS_REGRESSION: float = Field(default=0.0, ge=0, le=1)
@@ -242,6 +265,14 @@ class Settings(BaseSettings):
         if value and any(character in value for character in ":/"):
             raise ValueError("COOKIE_DOMAIN must be a hostname, not a URL")
         return value
+
+    @model_validator(mode="after")
+    def validate_ensemble_policy(self) -> "Settings":
+        if len(("stats", "ml", "market")) * self.ENSEMBLE_MIN_SOURCE_WEIGHT >= 1:
+            raise ValueError(
+                "ENSEMBLE_MIN_SOURCE_WEIGHT must leave posterior mass to distribute"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_security_policy(self) -> "Settings":

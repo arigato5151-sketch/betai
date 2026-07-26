@@ -2,22 +2,28 @@ import hashlib
 import hmac
 import math
 import os
+import platform
 import shutil
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
+
 import joblib
 import numpy as np
-from typing import Dict, List, Optional, Tuple, Any
+import sklearn
+from typing import Any, Dict, List, Optional, Tuple, cast
 from sklearn.base import clone
+from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, log_loss
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.pipeline import make_pipeline
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+
 from app.core.config import settings
 from app.core.logging_config import logger
+from app.prediction.ml.categorical import NativeCategoricalBoostingClassifier
 from app.prediction.ml.features import FeatureEngine
 
 # Try imports with robust fallbacks
@@ -25,22 +31,26 @@ try:
     from xgboost import XGBClassifier
 
     XGB_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError):
     XGB_AVAILABLE = False
 
 try:
-    from lightgbm import LGBMClassifier
+    import lightgbm
 
     LGBM_AVAILABLE = True
-except ImportError:
+    LIGHTGBM_VERSION: str | None = lightgbm.__version__
+except (ImportError, OSError):
     LGBM_AVAILABLE = False
+    LIGHTGBM_VERSION = None
 
 try:
-    from catboost import CatBoostClassifier
+    import catboost
 
     CATBOOST_AVAILABLE = True
-except ImportError:
+    CATBOOST_VERSION: str | None = catboost.__version__
+except (ImportError, OSError):
     CATBOOST_AVAILABLE = False
+    CATBOOST_VERSION = None
 
 
 class MLModelPipeline:
@@ -149,11 +159,22 @@ class MLModelPipeline:
             self._artifact_mtime_ns = None
             return False
 
+        previous_state = (
+            self.model,
+            self.calibrator,
+            list(self.feature_names),
+            self.active_model_name,
+            dict(self.metrics),
+            self.artifact_version,
+            self.is_ready,
+            self._artifact_mtime_ns,
+        )
         try:
             active_path = Path(settings.ACTIVE_MODEL_PATH)
             if not self._verify_artifact(active_path):
                 raise ValueError("Model artifact integrity verification failed")
             payload = joblib.load(settings.ACTIVE_MODEL_PATH)
+            self._validate_loaded_payload(payload)
             self.model = payload["model"]
             self.calibrator = payload.get("calibrator")
             self.feature_names = payload.get("feature_names", self.feature_names)
@@ -171,15 +192,87 @@ class MLModelPipeline:
                 f"Loaded active model: {self.active_model_name} with validation Brier Score: {self.metrics.get('brier_score', 'N/A')}"
             )
             return True
-        except Exception as e:
-            logger.error(f"Failed to load ML model artifact from disk: {e}")
-            self.model = None
-            self.calibrator = None
-            self.is_ready = False
-            self.active_model_name = None
-            self.artifact_version = None
-            self._artifact_mtime_ns = None
+        except Exception as exc:
+            logger.error("Failed to load ML model artifact from disk: %s", exc)
+            if previous_state[6] and previous_state[0] is not None:
+                (
+                    self.model,
+                    self.calibrator,
+                    self.feature_names,
+                    self.active_model_name,
+                    self.metrics,
+                    self.artifact_version,
+                    self.is_ready,
+                    self._artifact_mtime_ns,
+                ) = previous_state
+            else:
+                self.model = None
+                self.calibrator = None
+                self.is_ready = False
+                self.active_model_name = None
+                self.artifact_version = None
+                self._artifact_mtime_ns = None
             return False
+
+    @classmethod
+    def _validate_loaded_payload(cls, payload: object) -> None:
+        if not isinstance(payload, dict):
+            raise ValueError("Model artifact payload must be a mapping")
+        if payload.get("schema_version", 1) not in {1, 2}:
+            raise ValueError("Unsupported model artifact schema")
+
+        feature_names = payload.get("feature_names")
+        if (
+            not isinstance(feature_names, list)
+            or not feature_names
+            or any(not isinstance(name, str) or not name for name in feature_names)
+            or len(feature_names) != len(set(feature_names))
+        ):
+            raise ValueError("Model artifact contains invalid feature names")
+
+        feature_schema = payload.get("feature_schema_version")
+        if (
+            feature_schema is not None
+            and feature_schema not in FeatureEngine.COMPATIBLE_SNAPSHOT_VERSIONS
+        ):
+            raise ValueError("Unsupported model feature schema")
+
+        model = payload.get("model")
+        predictor = payload.get("calibrator") or model
+        predict_proba = getattr(predictor, "predict_proba", None)
+        if model is None or predictor is None or not callable(predict_proba):
+            raise ValueError("Model artifact has no probability predictor")
+        classes = getattr(model, "classes_", None)
+        if classes is not None and list(classes) != list(cls.INV_LABEL_MAP):
+            raise ValueError("Model artifact class order is incompatible")
+
+        smoke_features = np.asarray(
+            [[FeatureEngine.FEATURE_DEFAULTS.get(name, 0.0) for name in feature_names]],
+            dtype=float,
+        )
+        probabilities: np.ndarray = np.asarray(
+            cast(Any, predict_proba)(smoke_features), dtype=np.float64
+        )
+        if (
+            probabilities.shape != (1, len(cls.LABEL_MAP))
+            or not np.all(np.isfinite(probabilities))
+            or np.any(probabilities < 0)
+            or float(probabilities.sum()) <= 0
+        ):
+            raise ValueError("Model artifact failed probability smoke validation")
+
+    @staticmethod
+    def _runtime_dependency_versions() -> dict[str, str]:
+        versions = {
+            "python": platform.python_version(),
+            "numpy": np.__version__,
+            "scikit-learn": sklearn.__version__,
+        }
+        if CATBOOST_VERSION:
+            versions["catboost"] = CATBOOST_VERSION
+        if LIGHTGBM_VERSION:
+            versions["lightgbm"] = LIGHTGBM_VERSION
+        return versions
 
     def _save_active_model(
         self, model: Any, calibrator: Any, model_name: str, metrics: Dict[str, object]
@@ -194,7 +287,7 @@ class MLModelPipeline:
         previous_signature_path = self._signature_path(previous_path)
         version = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "artifact_version": version,
             "trained_at": datetime.now(UTC).isoformat(),
             "model": model,
@@ -203,6 +296,7 @@ class MLModelPipeline:
             "feature_schema_version": FeatureEngine.SCHEMA_VERSION,
             "model_name": model_name,
             "metrics": metrics,
+            "runtime_dependencies": self._runtime_dependency_versions(),
         }
         temporary_path = active_path.with_suffix(".tmp")
         temporary_signature_path = self._signature_path(temporary_path)
@@ -270,18 +364,38 @@ class MLModelPipeline:
             logger.error("ML model rollback failed: %s", exc)
         return False
 
+    def _numeric_candidate(self, estimator: Any, *, scale: bool = False) -> Pipeline:
+        """Keep raw categorical IDs away from estimators that treat them as ordinal."""
+        numeric_indices = [
+            index
+            for index, name in enumerate(self.feature_names)
+            if name not in FeatureEngine.CATEGORICAL_FEATURE_NAMES
+        ]
+        transformer: Any = StandardScaler() if scale else "passthrough"
+        preprocessor = ColumnTransformer(
+            [("numeric", transformer, numeric_indices)],
+            remainder="drop",
+            verbose_feature_names_out=False,
+        )
+        return Pipeline(
+            [
+                ("preprocessor", preprocessor),
+                ("classifier", estimator),
+            ]
+        )
+
     def _get_candidate_models(self) -> List[Tuple[str, Any]]:
         candidates = [
             (
                 "Regularized Logistic Regression",
-                make_pipeline(
-                    StandardScaler(),
+                self._numeric_candidate(
                     LogisticRegression(
                         C=0.5,
                         class_weight="balanced",
                         max_iter=2000,
                         random_state=42,
                     ),
+                    scale=True,
                 ),
             )
         ]
@@ -290,12 +404,14 @@ class MLModelPipeline:
             candidates.append(
                 (
                     "XGBoost",
-                    XGBClassifier(
-                        n_estimators=150,
-                        max_depth=5,
-                        learning_rate=0.08,
-                        random_state=42,
-                        eval_metric="mlogloss",
+                    self._numeric_candidate(
+                        XGBClassifier(
+                            n_estimators=150,
+                            max_depth=5,
+                            learning_rate=0.08,
+                            random_state=42,
+                            eval_metric="mlogloss",
+                        )
                     ),
                 )
             )
@@ -304,47 +420,68 @@ class MLModelPipeline:
                 "XGBoost is not installed. Using Gradient Boosting fallback."
             )
             candidates.append(
-                ("Gradient Boosting", GradientBoostingClassifier(random_state=42))
+                (
+                    "Gradient Boosting",
+                    self._numeric_candidate(
+                        GradientBoostingClassifier(random_state=42)
+                    ),
+                )
             )
 
-        if LGBM_AVAILABLE:
+        if settings.ENABLE_LIGHTGBM_CANDIDATE and LGBM_AVAILABLE:
             candidates.append(
                 (
                     "LightGBM",
-                    LGBMClassifier(
-                        n_estimators=150,
-                        max_depth=5,
-                        learning_rate=0.08,
+                    NativeCategoricalBoostingClassifier(
+                        backend="lightgbm",
+                        feature_names=tuple(self.feature_names),
+                        categorical_feature_names=(
+                            FeatureEngine.CATEGORICAL_FEATURE_NAMES
+                        ),
+                        n_estimators=settings.ML_BOOSTER_TREES,
+                        max_depth=settings.ML_BOOSTER_MAX_DEPTH,
+                        learning_rate=settings.ML_BOOSTER_LEARNING_RATE,
                         random_state=42,
-                        verbosity=-1,
+                        n_jobs=settings.ML_BOOSTER_THREADS,
                     ),
                 )
             )
+        elif settings.ENABLE_LIGHTGBM_CANDIDATE:
+            logger.warning("LightGBM is unavailable; candidate skipped.")
 
-        if CATBOOST_AVAILABLE:
+        if settings.ENABLE_CATBOOST_CANDIDATE and CATBOOST_AVAILABLE:
             candidates.append(
                 (
                     "CatBoost",
-                    CatBoostClassifier(
-                        iterations=150,
-                        depth=5,
-                        learning_rate=0.08,
-                        random_seed=42,
-                        verbose=False,
+                    NativeCategoricalBoostingClassifier(
+                        backend="catboost",
+                        feature_names=tuple(self.feature_names),
+                        categorical_feature_names=(
+                            FeatureEngine.CATEGORICAL_FEATURE_NAMES
+                        ),
+                        n_estimators=settings.ML_BOOSTER_TREES,
+                        max_depth=settings.ML_BOOSTER_MAX_DEPTH,
+                        learning_rate=settings.ML_BOOSTER_LEARNING_RATE,
+                        random_state=42,
+                        n_jobs=settings.ML_BOOSTER_THREADS,
                     ),
                 )
             )
+        elif settings.ENABLE_CATBOOST_CANDIDATE:
+            logger.warning("CatBoost is unavailable; candidate skipped.")
 
         # Always add Random Forest as a standard robust baseline
         candidates.append(
             (
                 "Random Forest",
-                RandomForestClassifier(
-                    n_estimators=200,
-                    max_depth=8,
-                    min_samples_leaf=4,
-                    class_weight="balanced",
-                    random_state=42,
+                self._numeric_candidate(
+                    RandomForestClassifier(
+                        n_estimators=200,
+                        max_depth=8,
+                        min_samples_leaf=4,
+                        class_weight="balanced",
+                        random_state=42,
+                    )
                 ),
             )
         )
@@ -420,7 +557,18 @@ class MLModelPipeline:
     def _feature_importance_summary(
         self, model: Any, limit: int = 10
     ) -> list[dict[str, float | str]]:
-        estimator = model.steps[-1][1] if hasattr(model, "steps") else model
+        feature_names = list(self.feature_names)
+        estimator = model
+        if isinstance(model, Pipeline):
+            estimator = model.named_steps["classifier"]
+            preprocessor = model.named_steps["preprocessor"]
+            try:
+                numeric_indices = preprocessor.transformers_[0][2]
+                feature_names = [
+                    self.feature_names[int(index)] for index in numeric_indices
+                ]
+            except (AttributeError, IndexError, TypeError, ValueError):
+                return []
         raw_importance = getattr(estimator, "feature_importances_", None)
         if raw_importance is None:
             coefficients = getattr(estimator, "coef_", None)
@@ -429,7 +577,7 @@ class MLModelPipeline:
         if raw_importance is None:
             return []
         importance = np.asarray(raw_importance, dtype=float).reshape(-1)
-        if len(importance) != len(self.feature_names):
+        if len(importance) != len(feature_names):
             return []
         total = float(importance.sum())
         if not math.isfinite(total) or total <= 0:
@@ -438,7 +586,7 @@ class MLModelPipeline:
         indices = np.argsort(normalized)[::-1][:limit]
         return [
             {
-                "feature": self.feature_names[int(index)],
+                "feature": feature_names[int(index)],
                 "importance": round(float(normalized[index]), 6),
             }
             for index in indices

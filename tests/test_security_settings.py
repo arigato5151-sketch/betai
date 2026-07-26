@@ -89,6 +89,42 @@ def test_goal_time_decay_factor_rejects_invalid_values(value: float) -> None:
         Settings(_env_file=None, GOAL_TIME_DECAY_FACTOR=value)
 
 
+def test_booster_and_bma_settings_are_configurable() -> None:
+    settings = Settings(
+        _env_file=None,
+        ENSEMBLE_BMA_MIN_LEAGUE_SAMPLES=24,
+        ENSEMBLE_BMA_HALF_LIFE_DAYS=90,
+        ENSEMBLE_BMA_PRIOR_STRENGTH=25,
+        ML_BOOSTER_TREES=300,
+        ML_BOOSTER_THREADS=4,
+    )
+
+    assert settings.ENSEMBLE_BMA_MIN_LEAGUE_SAMPLES == 24
+    assert settings.ENSEMBLE_BMA_HALF_LIFE_DAYS == 90
+    assert settings.ENSEMBLE_BMA_PRIOR_STRENGTH == 25
+    assert settings.ML_BOOSTER_TREES == 300
+    assert settings.ML_BOOSTER_THREADS == 4
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("ENSEMBLE_BMA_HALF_LIFE_DAYS", 0),
+        ("ENSEMBLE_BMA_PRIOR_STRENGTH", float("nan")),
+        ("ENSEMBLE_BMA_MIN_DATA_QUALITY_SCORE", 101),
+        ("ENSEMBLE_BMA_STATS_LOW_DATA_BOOST", 0.9),
+        ("ML_BOOSTER_TREES", 49),
+        ("ML_BOOSTER_LEARNING_RATE", float("inf")),
+        ("ML_BOOSTER_THREADS", 0),
+    ],
+)
+def test_booster_and_bma_settings_reject_invalid_values(
+    field: str, value: object
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{field: value})
+
+
 def make_origin_client(require_origin_header: bool = True) -> TestClient:
     app = FastAPI()
     app.add_middleware(

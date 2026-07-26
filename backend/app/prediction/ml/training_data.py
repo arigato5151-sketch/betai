@@ -16,6 +16,8 @@ from app.prediction.stats_engine import build_team_profile
 class HistoricalTrainingRow:
     fixture_id: int
     league_id: int
+    home_team_id: int
+    away_team_id: int
     actual_result: str
     feature_snapshot: dict[str, float]
     feature_schema_version: str
@@ -187,11 +189,15 @@ class HistoricalTrainingDataBuilder:
                     },
                     fixture_date=fixture.kickoff,
                     league_id=fixture.league_id,
+                    home_team_id=fixture.home_team_id,
+                    away_team_id=fixture.away_team_id,
                 )
                 rows.append(
                     HistoricalTrainingRow(
                         fixture_id=fixture.fixture_id,
                         league_id=league_id,
+                        home_team_id=fixture.home_team_id,
+                        away_team_id=fixture.away_team_id,
                         actual_result=fixture.actual_result,
                         feature_snapshot=feature_snapshot,
                         feature_schema_version=FeatureEngine.SCHEMA_VERSION,

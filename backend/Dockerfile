@@ -15,6 +15,10 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV FRONTEND_DIST_DIR=/app/frontend_dist
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY backend/requirements.txt ./
 RUN python -m pip install --no-cache-dir --upgrade "pip==26.1.2" \
     && install_ok=0 \

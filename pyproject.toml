@@ -31,6 +31,8 @@ dependencies = [
   "pandas==2.2.1",
   "numpy==1.26.4",
   "scikit-learn==1.5.2",
+  "catboost==1.2.10",
+  "lightgbm==4.7.0",
   "shap==0.45.0",
   "pydantic-settings==2.14.2",
   "PyJWT[crypto]==2.13.0",

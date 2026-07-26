@@ -2,12 +2,13 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
+from app.core.config import settings
 from app.prediction.ensemble_weights import ensemble_weight_manager
 from app.prediction.stats_engine import StatsEngine
 
 
 class ProbabilityEnsembler:
-    VERSION = "weighted_probability_ensemble_v2"
+    VERSION = "league_bayesian_model_average_v3"
     OUTCOME_KEYS = ("HOME_WIN", "DRAW", "AWAY_WIN")
 
     @classmethod
@@ -51,27 +52,32 @@ class ProbabilityEnsembler:
         stats_analysis: dict[str, Any],
         ml_result: Mapping[str, Any] | None = None,
         market: Mapping[str, Any] | None = None,
+        *,
+        league_id: int | None = None,
     ) -> dict[str, Any]:
         stats_probabilities = cls._normalize(stats_analysis.get("all_probabilities"))
         if stats_probabilities is None:
             raise ValueError("Stats analysis must contain valid 1X2 probabilities")
 
         sources: dict[str, dict[str, float]] = {"stats": stats_probabilities}
-        configured_weights, weight_metadata = (
-            ensemble_weight_manager.get_active_weights()
-        )
 
         if ml_result and ml_result.get("ready"):
             ml_probabilities = cls._normalize(ml_result.get("all_probabilities"))
-            if ml_probabilities is not None and configured_weights["ml"] > 0:
+            if ml_probabilities is not None and settings.ENSEMBLE_ML_WEIGHT > 0:
                 sources["ml"] = ml_probabilities
 
         market_probabilities = cls._normalize(
             market.get("fair_probability") if market else None
         )
-        if market_probabilities is not None and configured_weights["market"] > 0:
+        if market_probabilities is not None and settings.ENSEMBLE_MARKET_WEIGHT > 0:
             sources["market"] = market_probabilities
 
+        configured_weights, weight_metadata = (
+            ensemble_weight_manager.get_active_weights(
+                league_id=league_id,
+                available_sources=tuple(sources),
+            )
+        )
         active_weight_total = sum(configured_weights[source] for source in sources)
         if active_weight_total <= 0:
             raise ValueError("At least one ensemble source must have a positive weight")

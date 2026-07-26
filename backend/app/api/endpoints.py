@@ -664,6 +664,8 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         lineup_context=lineup_context,
         fixture_date=payload.kickoff,
         league_id=payload.league_id,
+        home_team_id=payload.home_team_id,
+        away_team_id=payload.away_team_id,
         opening_odds=opening_odds,
         current_odds=current_odds,
     )
@@ -680,6 +682,7 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         stats_analysis,
         ml_result=ml_result,
         market=payload.market_1x2,
+        league_id=payload.league_id,
     )
     value_data = ValueCalc.calculate_professional(
         analysis, payload.market_1x2, fallback_odd=payload.odd

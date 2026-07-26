@@ -269,7 +269,13 @@ def test_training_uses_same_versioned_snapshot_schema_as_inference() -> None:
 
 @pytest.mark.parametrize(
     "schema_version",
-    ["ml_features_v1", "ml_features_v2", "ml_features_v3", "ml_features_v4"],
+    [
+        "ml_features_v1",
+        "ml_features_v2",
+        "ml_features_v3",
+        "ml_features_v4",
+        "ml_features_v5",
+    ],
 )
 def test_older_snapshots_are_forward_compatible_with_new_defaults(
     schema_version: str,
@@ -300,6 +306,9 @@ def test_older_snapshots_are_forward_compatible_with_new_defaults(
     assert features["odds_movement_home"] == 0.0
     assert features["odds_movement_draw"] == 0.0
     assert features["odds_movement_away"] == 0.0
+    assert features["league_id"] == 0.0
+    assert features["home_team_id"] == 0.0
+    assert features["away_team_id"] == 0.0
     assert list(features) == FeatureEngine.FEATURE_NAMES
 
 
@@ -349,3 +358,43 @@ def test_legacy_training_rows_receive_explicit_full_schema_defaults() -> None:
     assert features["home_elo"] == 1500.0
     assert features["h2h_avg_goals_away"] == 1.0
     assert features["odds_movement_home"] == 0.0
+
+
+def test_inference_preserves_raw_categorical_ids_for_native_boosters() -> None:
+    features = FeatureEngine.build_inference_features(
+        home_stats={},
+        away_stats={},
+        home_matches_df=pd.DataFrame(),
+        away_matches_df=pd.DataFrame(),
+        h2h_rates={},
+        fixture_date=NOW,
+        league_id=203,
+        home_team_id=101,
+        away_team_id=202,
+    )
+
+    assert features["league_id"] == 203.0
+    assert features["home_team_id"] == 101.0
+    assert features["away_team_id"] == 202.0
+    assert features["league_203"] == 1.0
+
+
+def test_training_backfills_categories_from_row_for_v5_snapshot() -> None:
+    snapshot = {
+        name: value
+        for name, value in FeatureEngine.FEATURE_DEFAULTS.items()
+        if name not in FeatureEngine.CATEGORICAL_FEATURE_NAMES
+    }
+    row = SimpleNamespace(
+        feature_snapshot=snapshot,
+        feature_schema_version="ml_features_v5",
+        league_id=203,
+        home_team_id=101,
+        away_team_id=202,
+    )
+
+    features = FeatureEngine.build_training_features(row)
+
+    assert features["league_id"] == 203.0
+    assert features["home_team_id"] == 101.0
+    assert features["away_team_id"] == 202.0

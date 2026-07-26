@@ -251,8 +251,9 @@ görülür. Her iki takım için varsayılan en az üç geçmiş maç şartı
 `HISTORICAL_TRAINING_MIN_TEAM_MATCHES` ile değiştirilebilir.
 
 Adaylar walk-forward pencerelerinde Brier skoru ve log-loss ile karşılaştırılır.
-Regularized Logistic Regression, Gradient Boosting ve Random Forest arasından seçilen
-aday; naive sınıf dağılımı baseline'ını ve varsa aktif champion modeli geçmeden
+Regularized Logistic Regression, Gradient Boosting/XGBoost, Random Forest,
+CatBoost ve LightGBM arasından seçilen aday; naive sınıf dağılımı baseline'ını
+ve varsa aktif champion modeli geçmeden
 yayına alınmaz. Isotonic kalibrasyon ayrı fit/doğrulama pencerelerinde değerlendirilir
 ve en az `MIN_ISOTONIC_CALIBRATION_SAMPLES` örnek yoksa devre dışı kalır. Artifact
 diske atomik yazılmadan süreç içi model değiştirilmez. Her model dosyası
@@ -261,14 +262,13 @@ birlikte saklanır. Aktif model yükleme ve rollback işlemleri imzayı `joblib.
 çağrısından önce doğrular; eksik veya uyuşmayan imza ERROR loglanır ve istatistik
 motoru güvenli fallback olarak kullanılmaya devam eder.
 
-Ensemble ağırlıkları başlangıçta config'teki stats/ML/market değerlerini kullanır.
-Üç kaynağın bileşenleri ve gerçek sonucu bulunan en az 100 kronolojik örnek
-oluştuğunda haftalık eğitim görevi ağırlıkları optimize eder. Aday ağırlıklar son
-`%20` holdout kümesinde mevcut ağırlıklardan en az `0.001` log-loss daha iyi değilse
-reddedilir. Kabul edilen atomik artifact `backend/artifacts/models/ensemble_weights.json`
-altında tutulur; her kaynağın çökmesini önlemek için minimum ağırlık varsayılan `%5`'tir.
-Eşikler `MIN_ENSEMBLE_CALIBRATION_SAMPLES`, `ENSEMBLE_HOLDOUT_FRACTION`,
-`ENSEMBLE_MIN_SOURCE_WEIGHT` ve `ENSEMBLE_MIN_LOG_LOSS_IMPROVEMENT` ile değiştirilebilir.
+Ensemble ağırlıkları kaynak setine ve `league_id` değerine göre prequential Bayesian
+Model Averaging ile güncellenir. Yüksek kaliteli ve düşük sürprizli liglerde ML,
+az verili liglerde Poisson/Dixon-Coles prior'ı güçlenir. Aday posterior son `%20`
+kronolojik holdout kümesinde log-loss ve Brier guard'larını geçmeden aktive edilmez.
+İmzalı schema-v2 artifact `backend/artifacts/models/ensemble_weights.json` altında
+tutulur. Algoritma ve tüm yapılandırma seçenekleri
+[docs/ML_ENSEMBLE.md](docs/ML_ENSEMBLE.md) içinde açıklanmıştır.
 
 Fixture kimliği bulunan analizlerde API-Football sakatlık raporu da paralel çekilir ve
 4 saat cache'lenir. `ml_features_v2`, ev/deplasman için `Missing Fixture` ile
@@ -497,6 +497,11 @@ API_FOOTBALL_KEY=DEMO_KEY
 DATABASE_URL=sqlite:///./matches.db
 ALLOW_DATABASE_FALLBACK=true
 GOAL_TIME_DECAY_FACTOR=0.01
+ENABLE_CATBOOST_CANDIDATE=true
+ENABLE_LIGHTGBM_CANDIDATE=true
+ML_BOOSTER_THREADS=2
+ENSEMBLE_BMA_MIN_LEAGUE_SAMPLES=30
+ENSEMBLE_BMA_HALF_LIFE_DAYS=180
 REDIS_URL=redis://localhost:6379/0
 MEMCACHED_HOST=localhost
 MEMCACHED_PORT=11211
@@ -546,6 +551,11 @@ API_FOOTBALL_KEY=live_api_key
 DATABASE_URL=postgresql://betai:strong_password@postgres:5432/bet_ai
 ALLOW_DATABASE_FALLBACK=false
 GOAL_TIME_DECAY_FACTOR=0.01
+ENABLE_CATBOOST_CANDIDATE=true
+ENABLE_LIGHTGBM_CANDIDATE=true
+ML_BOOSTER_THREADS=2
+ENSEMBLE_BMA_MIN_LEAGUE_SAMPLES=30
+ENSEMBLE_BMA_HALF_LIFE_DAYS=180
 JWT_SECRET_KEY=minimum_32_character_unique_access_secret
 JWT_REFRESH_SECRET_KEY=minimum_32_character_unique_refresh_secret
 MODEL_SIGNING_KEY=minimum_32_character_unique_model_signing_secret

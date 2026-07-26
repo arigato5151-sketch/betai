@@ -87,7 +87,7 @@ def test_learned_weight_metadata_is_applied_and_snapshotted(
     monkeypatch.setattr(
         ensemble.ensemble_weight_manager,
         "get_active_weights",
-        lambda: (
+        lambda **_: (
             {"stats": 0.1, "ml": 0.2, "market": 0.7},
             {"source": "learned", "artifact_version": "weights-1"},
         ),
@@ -126,6 +126,46 @@ def test_learned_weight_metadata_is_applied_and_snapshotted(
         "DRAW": 29.0,
         "AWAY_WIN": 45.0,
     }
+
+
+def test_league_and_exact_source_set_are_forwarded_to_weight_manager(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.prediction import ensemble
+
+    captured: dict[str, object] = {}
+
+    def resolve_weights(**kwargs):
+        captured.update(kwargs)
+        return (
+            {"stats": 0.7, "ml": 0.3},
+            {"source": "league_bma", "league_id": 203},
+        )
+
+    monkeypatch.setattr(
+        ensemble.ensemble_weight_manager,
+        "get_active_weights",
+        resolve_weights,
+    )
+
+    result = ProbabilityEnsembler.apply(
+        stats_analysis({"HOME_WIN": 60.0, "DRAW": 25.0, "AWAY_WIN": 15.0}),
+        ml_result={
+            "ready": True,
+            "all_probabilities": {
+                "HOME_WIN": 30.0,
+                "DRAW": 30.0,
+                "AWAY_WIN": 40.0,
+            },
+        },
+        league_id=203,
+    )
+
+    assert captured == {
+        "league_id": 203,
+        "available_sources": ("stats", "ml"),
+    }
+    assert result["ensemble"]["weight_metadata"]["source"] == "league_bma"
 
 
 @pytest.mark.parametrize(

@@ -13,14 +13,20 @@ LEAGUE_ONE_HOT_FEATURES = [
 
 
 class FeatureEngine:
-    SCHEMA_VERSION = "ml_features_v5"
+    SCHEMA_VERSION = "ml_features_v6"
     COMPATIBLE_SNAPSHOT_VERSIONS = {
         "ml_features_v1",
         "ml_features_v2",
         "ml_features_v3",
         "ml_features_v4",
+        "ml_features_v5",
         SCHEMA_VERSION,
     }
+    CATEGORICAL_FEATURE_NAMES = (
+        "league_id",
+        "home_team_id",
+        "away_team_id",
+    )
     LEAGUE_FEATURE_NAMES = list(LEAGUE_ONE_HOT_FEATURES)
     FEATURE_NAMES = [
         "home_form",
@@ -66,6 +72,7 @@ class FeatureEngine:
         "odds_movement_draw",
         "odds_movement_away",
         *LEAGUE_FEATURE_NAMES,
+        *CATEGORICAL_FEATURE_NAMES,
     ]
     FEATURE_DEFAULTS = {
         "home_form": 50.0,
@@ -110,6 +117,7 @@ class FeatureEngine:
         "odds_movement_draw": 0.0,
         "odds_movement_away": 0.0,
         **{name: 0.0 for name in LEAGUE_ONE_HOT_FEATURES},
+        **{name: 0.0 for name in CATEGORICAL_FEATURE_NAMES},
     }
 
     @classmethod
@@ -140,6 +148,8 @@ class FeatureEngine:
         features: Dict[str, float] = {}
         for name in cls.FEATURE_NAMES:
             value = source.get(name)
+            if value is None and name in cls.CATEGORICAL_FEATURE_NAMES:
+                value = getattr(row, name, None)
             if value is None:
                 value = cls.FEATURE_DEFAULTS[name]
             features[name] = float(value)
@@ -405,6 +415,8 @@ class FeatureEngine:
         lineup_context: Optional[Dict[str, Any]] = None,
         fixture_date: Optional[pd.Timestamp] = None,
         league_id: Optional[int] = None,
+        home_team_id: Optional[int] = None,
+        away_team_id: Optional[int] = None,
         opening_odds: Mapping[str, object] | None = None,
         current_odds: Mapping[str, object] | None = None,
     ) -> Dict[str, float]:
@@ -534,4 +546,7 @@ class FeatureEngine:
                 name: float(name == f"league_{league_id}")
                 for name in FeatureEngine.LEAGUE_FEATURE_NAMES
             },
+            "league_id": float(league_id or 0),
+            "home_team_id": float(home_team_id or 0),
+            "away_team_id": float(away_team_id or 0),
         }
