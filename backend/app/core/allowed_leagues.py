@@ -1,5 +1,26 @@
 ALLOWED_LEAGUES = [
     {
+        "id": 2,
+        "name": "UEFA Champions League",
+        "country": "Europe",
+        "tier": "Avrupa Kupası",
+        "dixon_coles_rho": -0.12,
+    },
+    {
+        "id": 3,
+        "name": "UEFA Europa League",
+        "country": "Europe",
+        "tier": "Avrupa Kupası",
+        "dixon_coles_rho": -0.12,
+    },
+    {
+        "id": 848,
+        "name": "UEFA Conference League",
+        "country": "Europe",
+        "tier": "Avrupa Kupası",
+        "dixon_coles_rho": -0.12,
+    },
+    {
         "id": 39,
         "name": "Premier League",
         "country": "England",

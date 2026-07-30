@@ -2,9 +2,19 @@ import { useMemo } from "react";
 import { ArcElement, Chart as ChartJS, Tooltip } from "chart.js";
 import { Doughnut } from "react-chartjs-2";
 
+import {
+  matchLabel,
+  mlSafetyLabel,
+  mlSafetyTone,
+  modelNameLabel,
+  predictionLabel,
+  resultLabel,
+} from "../localization.js";
+
 ChartJS.register(ArcElement, Tooltip);
 
 function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
+  const safetyTone = mlSafetyTone(match.ml_safety_trigger);
   const chartData = useMemo(
     () => ({
       labels: ["Ev Sahibi", "Deplasman", "Beraberlik"],
@@ -29,13 +39,16 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
         <span className="text-xs font-bold uppercase tracking-widest text-emerald-400">
           Aktif Analiz Raporu
         </span>
-        <h2 className="mb-4 mt-1 text-xl font-black text-white">{match.match}</h2>
+        <h2 className="mb-4 mt-1 text-xl font-black text-white">
+          {matchLabel(match.match)}
+        </h2>
 
         <div className="space-y-3">
           <div>
-            <span className="text-xs text-slate-400">Yapay Zeka Tahmini</span>
+            <span className="text-xs text-slate-400">Yapay Zekâ Tahmini</span>
             <p className="text-lg font-bold text-amber-400">
-              {match.analysis.prediction} (%{match.analysis.probability})
+              {predictionLabel(match.analysis.prediction)} (%
+              {match.analysis.probability})
             </p>
           </div>
           {match.data_quality && (
@@ -46,9 +59,9 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
               </strong>
               {match.provenance?.model_name && (
                 <p className="mt-2 text-slate-400">
-                  Model: {match.provenance.model_name}
+                  Model: {modelNameLabel(match.provenance.model_name)}
                   {match.provenance.model_artifact_version
-                    ? ` Â· ${match.provenance.model_artifact_version}`
+                    ? ` · ${match.provenance.model_artifact_version}`
                     : ""}
                 </p>
               )}
@@ -56,7 +69,7 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
           )}
           <div>
             <span className="text-xs text-slate-400">
-              Finansal Deger / Value Bet
+              Finansal Değer / Değerli Bahis
             </span>
             <p
               className={`text-sm font-bold ${
@@ -66,29 +79,29 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
               }`}
             >
               {match.value_assessment.value_bet
-                ? `VALUE FOUND (+%${match.value_assessment.edge})`
-                : `Degersiz Oran (%${match.value_assessment.edge})`}
+                ? `DEĞERLİ ORAN BULUNDU (+%${match.value_assessment.edge})`
+                : `Değerli Oran Bulunamadı (%${match.value_assessment.edge})`}
             </p>
           </div>
           <div>
             <span className="text-xs text-slate-400">
-              ML Model Guven Durumu
+              Makine Öğrenmesi Model Güveni
             </span>
             <p className="mt-1 text-xs">
               <span
                 className={`rounded px-2 py-1 font-bold ${
-                  match.ml_safety_trigger === "HIGH_CONFIDENCE"
+                  safetyTone === "positive"
                     ? "bg-emerald-950 text-emerald-400"
-                    : match.ml_safety_trigger === "YETERLI VERI YOK"
+                    : safetyTone === "neutral"
                       ? "bg-slate-800 text-slate-400"
                       : "bg-red-950 text-red-400"
                 }`}
               >
-                {match.ml_safety_trigger}
+                {mlSafetyLabel(match.ml_safety_trigger)}
               </span>
               {match.ml_samples !== undefined && (
                 <span className="ml-2 text-slate-500">
-                  ({match.ml_samples}/{match.ml_min_samples ?? 200} ornek)
+                  ({match.ml_samples}/{match.ml_min_samples ?? 200} örnek)
                 </span>
               )}
             </p>
@@ -96,7 +109,7 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
           {canUpdateResult && match.record_id && !match.actual_result && (
             <div className="flex flex-wrap gap-2 pt-2">
               <span className="w-full text-xs text-slate-500">
-                Gercek sonucu gir:
+                Gerçek sonucu girin:
               </span>
               {["HOME_WIN", "DRAW", "AWAY_WIN"].map((result) => (
                 <button
@@ -105,7 +118,7 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
                   onClick={() => onSubmitActualResult(match.record_id, result)}
                   className="rounded border border-slate-700 px-2 py-1 text-xs hover:border-emerald-500"
                 >
-                  {result}
+                  {resultLabel(result)}
                 </button>
               ))}
             </div>
@@ -127,7 +140,7 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
             <span className="h-2 w-2 rounded-full bg-amber-400" /> Ev
           </span>
           <span className="flex items-center gap-1">
-            <span className="h-2 w-2 rounded-full bg-red-400" /> Dep
+            <span className="h-2 w-2 rounded-full bg-red-400" /> Deplasman
           </span>
           <span className="flex items-center gap-1">
             <span className="h-2 w-2 rounded-full bg-gray-500" /> Beraberlik

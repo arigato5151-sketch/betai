@@ -13,6 +13,7 @@ Projenin kaynak koduna GitHub üzerinden ulaşabilirsiniz: [arigato5151-sketch/b
 - Zaman ağırlıklı gol ortalamaları, Poisson skor matrisi ve Dixon-Coles düzeltmesiyle 1X2 olasılıkları
 - Beklenen gol (xG), form, hücum ve savunma verilerinden manuel analiz
 - API-Football üzerinden fikstür, takım istatistiği, H2H ve oran verisi
+- UEFA Şampiyonlar Ligi, UEFA Avrupa Ligi ve UEFA Konferans Ligi desteği
 - Piyasa olasılığını marjdan arındıran (de-vig) value bet ve Kelly stake hesabı
 - Yeterli etiketli veri oluştuğunda devreye giren çok sınıflı ML pipeline'ı
 - HMAC-SHA256 ile imzalanan ve yükleme/rollback öncesinde bütünlüğü doğrulanan ML artifact'ları
@@ -23,6 +24,9 @@ Projenin kaynak koduna GitHub üzerinden ulaşabilirsiniz: [arigato5151-sketch/b
 - Redis erişilemediğinde Memcached, o da yoksa bellek içi TTL cache; PostgreSQL erişilemediğinde SQLite fallback
 - Redis kesintisinde process-local çalışan ve bağlantı geri geldiğinde otomatik olarak Redis'e dönen login rate limiter
 - React tabanlı analiz paneli, geçmiş filtreleme/sıralama, olasılık ve interaktif bankroll grafikleri
+- Backend kaynaklı lig seçimi; UEFA turnuvalarının Türkçe adlarla analize aktarılması
+- Türkiye saatine göre kronolojik sıralanan, yenilenebilir 7 günlük maç fikstürü; kart seçimiyle analiz formuna otomatik veri aktarımı
+- Tüm `ml_features_v8` girdilerini eksik/kısmi/hesaplandı durumlarıyla gösteren ve güvenli manuel override destekleyen gelişmiş analiz formu
 - API-Football demo verisi kullanıldığında giriş ve uygulama başlığında görünür `Demo Modu` etiketi
 - Admin rolü için kullanıcı oluşturma, rol atama ve hesap aktifliği yönetim paneli
 
@@ -63,6 +67,9 @@ Uygulamanın uçtan uca çalışma zinciri aşağıdaki gibidir:
 
 ```text
 frontend/src/App.jsx (auth, layout ve aktif görünüm)
+    ├── frontend/src/containers/UpcomingFixturesContainer.jsx
+    │       ├── GET /api/fixtures/upcoming?days=7&limit=100
+    │       └── kart seçimi → GET /api/fixtures/{fixture_id}/prefill
     └── frontend/src/containers/AnalysisContainer.jsx
             └── POST /api/analyze (cookie auth + CSRF)
                     └── backend/app/api/endpoints.py
@@ -192,7 +199,11 @@ backend/app/
 │       └── explain.py       # SHAP veya feature importance açıklaması
 ├── services/
 │   ├── api_football.py      # API-Football istemcisi, retry ve normalizasyon
+│   ├── external_features.py # Kaynak önceliği, eşleme ve snapshot yönetimi
 │   └── cache.py             # Redis + Memcached + bellek içi TTL cache
+├── providers/
+│   ├── base.py              # Sağlayıcıdan bağımsız değer/provenance sözleşmesi
+│   └── clubelo.py           # Doğrulamalı ClubElo fallback adaptörü
 └── tasks/
     ├── celery_app.py        # Celery broker/backend ve periyodik görev ayarları
     ├── jobs.py              # Sonuç/tarihsel fixture senkronizasyonu ve model eğitimi
@@ -203,10 +214,24 @@ backend/app/
 
 Celery Beat, izin verilen liglerin mevcut sezon tamamlanmış maçlarını Football-Data
 CSV arşivinden günlük olarak `historical_fixtures` tablosuna idempotent biçimde
-yazar. 14 lig eşlemesi; şema doğrulama, yerel saatten UTC'ye dönüşüm ve kaynak
+yazar. Football-Data'nın 14 yerel lig eşlemesi; şema doğrulama, yerel saatten
+UTC'ye dönüşüm ve kaynak
 provenance'ı ile içe alınır. Analiz sırasında yalnızca maçın `kickoff` zamanından
 önceki kayıtlar okunur; aynı anda başlayan maçlar tek batch olarak işlendiğinden Elo,
 form ve H2H feature'larında gelecek bilgisi sızıntısı oluşmaz.
+
+Yeni sezon yayını her lig için ayrı denetlenir. Örneğin Rusya rolling feed'i
+yayımlanmışken Premier League dosyası henüz yoksa Rusya'nın güncel sezonu alınır,
+yalnız yayımlanmayan lig bir önceki sezona düşer. API-Football ve CSV takım adları
+ülke/lige bağlı geçmiş içinde muhafazakâr alias kurallarıyla eşleştirilir
+(`FC/FK`, `Moskva/Moscow` gibi); eşsiz eşleşme bulunamazsa yanlış takıma veri
+bağlamak yerine alan eksik bırakılır.
+
+Uygulama toplam 17 organizasyonu destekler. Yerel liglere ek olarak API-Football
+kimlikleri `2`, `3` ve `848` olan UEFA Şampiyonlar Ligi, UEFA Avrupa Ligi ve UEFA
+Konferans Ligi yaklaşan fikstür, manuel analiz ve tarihsel backfill kapsamındadır.
+UEFA turnuvaları Football-Data CSV kaynağında bulunmadığından yalnız API-Football
+üzerinden alınır.
 
 2025/26 sezonunu tekrar içe aktarmak için:
 
@@ -222,11 +247,23 @@ cd backend
 python -c "from app.tasks.jobs import sync_historical_fixtures_task; print(sync_historical_fixtures_task.run([2023, 2024]))"
 ```
 
+Yalnız UEFA turnuvalarını kota kontrollü biçimde backfill etmek için:
+
+```powershell
+cd backend
+python -c "from app.tasks.jobs import sync_historical_fixtures_task; print(sync_historical_fixtures_task.run([2023, 2024], [2, 3, 848]))"
+```
+
 Football-Data içe aktarımı API anahtarı gerektirmez. API-Football backfill'i için
 geçerli anahtar ve sezon erişimi gerekir. Harici fixture ve takım kimlikleri negatif
 64-bit deterministik değerlerdir; API kimlikleriyle çakışmaz. Her kaydın
 `data_source` alanı kaynağı taşır. Aynı maç yeniden çekildiğinde skor ve durum
 güncellenir, yeni bir satır oluşturulmaz.
+
+Kupa maçlarında ML hedefi 1X2 pazarıyla aynı sözleşmeyi kullanır: uzatma ve penaltı
+skorları sonuç etiketine dahil edilmez, API-Football `score.fulltime` alanındaki
+90 dakika skoru saklanır. Üç UEFA turnuvası için lig-özel Dixon-Coles kalibrasyonu
+henüz bulunmadığından doğrulanmış global `rho=-0.12` güvenli varsayılanı kullanılır.
 
 Son maç formu, dinlenme günü, gol ortalaması, clean-sheet ve gol serisi feature'ları
 da aynı zaman kesitli tablodan üretilir. Yerel geçmişte varsayılan olarak en az 5 maç
@@ -245,6 +282,41 @@ rating farkının varsayılan `%25` bölümü lig ortalaması olan `1500` değer
 çekilir ve beklenen ev sahibi skoruna varsayılan `65` Elo puanı eklenir. Güncelleme
 hızı, ev avantajı ve sezon regresyonu sırasıyla `ELO_K_FACTOR`,
 `ELO_HOME_ADVANTAGE_POINTS` ve `ELO_SEASON_REGRESSION` ile kalibre edilebilir.
+
+Yerel geçmişte takım için Elo üretilemediğinde isteğe bağlı ClubElo fallback'i
+devreye girer. Entegrasyon yalnızca aksan/noktalama duyarsız **birebir** takım adı
+eşleşmesini kabul eder; belirsiz veya bulunamayan isimlerde tahmine değer enjekte
+etmez. Eşlemeler `provider_team_mappings`, gözlemler
+`external_feature_snapshots` tablosunda kaynak, yakalanma zamanı, güven skoru,
+geçerlilik süresi ve fallback bayrağıyla saklanır. Analiz formu aynı bilgileri her
+feature'ın altında gösterir. ClubElo'nun yayımlanan CSV uç noktası HTTP kullandığı
+için veri düşük öncelikli (`CLUBELO_CONFIDENCE=0.80`) kabul edilir, şema/boyut/değer
+aralığı sıkı doğrulanır ve yerel tarihsel veri bulunduğunda hiçbir zaman onu ezmez.
+
+Fikstür ön-doldurma sırasında alınan API-Football 1X2 piyasası ayrıca
+`fixture_odds_snapshots` tablosuna zaman damgalı olarak yazılır. İlk gözlem açılış
+snapshot'ı olarak saklanır; `ODDS_SNAPSHOT_MIN_INTERVAL_SECONDS` süresi geçmeden
+ikinci gözlem varmış gibi hareket feature'ı üretilmez. En az iki geçerli gözlem
+oluştuğunda `odds_movement_home`, `odds_movement_draw` ve
+`odds_movement_away` otomatik hesaplanır. Kaynak güveni
+`ODDS_SNAPSHOT_CONFIDENCE` ile yönetilir. Formda oranlar manuel değiştirilirse eski
+otomatik snapshot çifti temizlenir ve yanlış provenance kullanılmaz.
+
+Celery Beat aynı akışı kullanıcı fikstürü açmadan da besler. Varsayılan üç saatte
+bir çalışan `collect_upcoming_odds_task`, yedi günlük penceredeki en fazla 20 maçı
+inceler. Her maç için ilk gözlemi alır; sonraki API çağrılarını kickoff'a son 24 saat
+kalana kadar erteler ve bu pencere içinde de üç saatten sık sorgulamaz. Böylece
+açılış/güncel oran çifti otomatik oluşurken API kotası sınırlı tutulur. Davranış
+`ODDS_COLLECTOR_*` ortam değişkenleriyle ayarlanabilir veya
+`ODDS_COLLECTOR_ENABLED=false` ile kapatılabilir. Demo verisi hiçbir zaman kalıcı
+oran snapshot'ı üretmez.
+
+Celery Beat ayrıca `collect_upcoming_lineups_task` ile yaklaşan maçların resmi ilk
+11'lerini maçtan önceki varsayılan 120 dakikalık pencerede saatte bir kontrol eder.
+İki takımın da 11 oyunculuk kadrosu doğrulanınca sonuç altı saat cache'lenir; eksik
+yanıtlar 15 dakika sonra yeniden denenebilir. Tarama yalnızca iki günlük penceredeki
+en fazla 30 gerçek maçı kapsar, demo fikstürlerini atlar ve
+`LINEUP_COLLECTOR_*` ortam değişkenleriyle ayarlanabilir.
 
 Model eğitimi, doğrulanmış tahmin snapshot'larına ek olarak `historical_fixtures`
 kayıtlarından üretilen nokta-zamanlı örnekleri kullanır. Bir tarihsel maçın feature
@@ -288,6 +360,15 @@ bu değişiklik `20260720_0007` Alembic revision'ını gerektirir. API lineuplar
 desteklenen ligde maçtan 20–40 dakika önce geldiğinden erken analizlerde feature
 nötr kalabilir ve maç saatine yakın yeniden analiz daha zengin snapshot üretir.
 
+Birincil sağlayıcı en az 11 oyunculuk rating havuzu üretemezse isteğe bağlı
+Sportmonks fallback'i takım adını aksan/noktalama duyarsız **birebir** eşleştirir
+ve son 120 gündeki en fazla 10 maçın lineup rating'lerini dakika ağırlıklı toplar.
+Oyuncu kimlikleri API-Football kimlikleriyle yanlışlıkla birleşmemesi için ayrı bir
+sayısal namespace'te tutulur; eksik veya belirsiz eşleşme tahmine veri enjekte
+etmez. Entegrasyon `SPORTMONKS_ENABLED=true` ve yalnızca backend ortamında tutulan
+`SPORTMONKS_API_TOKEN` ile açılır. Takım eşlemeleri mevcut
+`provider_team_mappings` tablosunda denetlenebilir şekilde saklanır.
+
 `ml_features_v4`, desteklenen ligleri one-hot feature olarak ekler. Böylece model
 ligler arasındaki ev sahibi/beraberlik/deplasman dağılımı farklarını öğrenebilir;
 eski snapshot'lar bu alanlarda sıfır varsayılanıyla geriye uyumlu kalır.
@@ -313,7 +394,12 @@ Yorgunluk skoru son 14 gündeki maç sayısını, son maçtan beri dinlenme gün
 deplasman seyahat mesafesini birleştirir. `fatigue_index = away_load - home_load`
 olduğundan pozitif değer deplasman takımının daha yorgun olduğunu ifade eder. Eksik
 veya geçersiz tarih/mesafe verisi ceza üretmez; güvenli varsayılan `0.0`'dır.
-`ml_features_v1-v6` snapshot'ları bu nötr değerlerle eğitimde kullanılmaya devam
+`ml_features_v8`, üç UEFA turnuvası için `league_2`, `league_3` ve `league_848`
+one-hot alanlarını ekler. Eski imzalı `ml_features_v7` artifact'ları kendi
+`feature_names` sözleşmeleriyle yüklenmeye ve rollback edilmeye devam eder; yeni
+alanların öğrenilebilmesi için UEFA backfill'inden sonra model yeniden eğitilmelidir.
+
+`ml_features_v1-v7` snapshot'ları nötr varsayılanlarla eğitimde kullanılmaya devam
 eder. Formüller, tablolar ve tüm ayarlar
 [`docs/PLAYER_IMPACT_FATIGUE.md`](docs/PLAYER_IMPACT_FATIGUE.md) belgesindedir.
 
@@ -409,14 +495,25 @@ Oyuncu etkisi ve seyahat bağlamı iki normalize tabloda tutulur:
 
 Doğrulanmış takım koordinatları admin tarafından `PUT /api/admin/team-locations`
 ile toplu yüklenir ve `GET /api/admin/team-locations` ile denetlenir. Provider
-koordinat sunmadığında sistem konum uydurmaz; kayıt yoksa travel bileşeni `0.0`
-kalır. Nötr saha için analiz isteğindeki `away_travel_distance_km` kullanılabilir.
+doğrudan koordinat sunmadığında ve `AUTO_TEAM_LOCATION_ENABLED=true` olduğunda
+API-Football takım/tesis şehri alınır; şehir merkezi koordinatı ağ çağrısı yapmayan
+GeoNames veri setinden ülke kısıtlı birebir eşleşmeyle çözülür. Otomatik kayıtlar
+`location_source=geonames_city`, güven skoru, tesis metadatası ve
+`approximation=city_centre` bilgisiyle saklanır. Admin tarafından girilmiş veya
+koordinatsız bırakılmış mevcut kayıtlar otomatik süreçte ezilmez. Veri hâlâ
+çözülemiyorsa travel bileşeni `0.0` kalır; nötr saha için analiz isteğindeki
+`away_travel_distance_km` kullanılabilir.
 
-Bu tablolar `20260726_0010` Alembic revision'ıyla oluşturulur. Oyuncu performansı
+Bu tablolar `20260726_0010` Alembic revision'ıyla oluşturulur; takım konumu
+provenance alanları `20260730_0013` revision'ıyla eklenir. Oyuncu performansı
 yalnız daha sonraki fixture'larda kullanılır; sorgular tahmin kickoff'u için katı
 `performance.kickoff < prediction.kickoff` sınırı uygular. API-Football
 `fixtures/players` backfill'i her senkronizasyonda varsayılan olarak en fazla 20
 eksik fixture'ı, 3 eşzamanlı istekle kademeli biçimde tamamlar.
+
+Şehir verisi [GeoNames](https://www.geonames.org/) tarafından CC BY 4.0 lisansıyla
+sağlanır. Şehir merkezi yaklaşık konumdur; kesin stadyum koordinatı olarak
+yorumlanmamalıdır.
 
 ### Auth ve istemci davranışı
 
@@ -531,6 +628,18 @@ Yerel ve harici servis gerektirmeyen başlangıç için `backend/.env` dosyasın
 ENVIRONMENT=development
 DEBUG=true
 API_FOOTBALL_KEY=DEMO_KEY
+CLUBELO_ENABLED=true
+CLUBELO_BASE_URL=http://api.clubelo.com
+CLUBELO_TIMEOUT_SECONDS=15
+CLUBELO_CACHE_HOURS=24
+CLUBELO_CONFIDENCE=0.80
+SPORTMONKS_ENABLED=false
+SPORTMONKS_API_TOKEN=
+SPORTMONKS_BASE_URL=https://api.sportmonks.com/v3/football
+SPORTMONKS_PLAYER_LOOKBACK_DAYS=120
+SPORTMONKS_PLAYER_LOOKBACK_MATCHES=10
+ODDS_SNAPSHOT_MIN_INTERVAL_SECONDS=300
+ODDS_SNAPSHOT_CONFIDENCE=0.90
 DATABASE_URL=sqlite:///./matches.db
 ALLOW_DATABASE_FALLBACK=true
 GOAL_TIME_DECAY_FACTOR=0.01
@@ -674,8 +783,9 @@ Tüm işlev endpoint'leri `/api` prefix'i altındadır.
 | `PATCH` | `/api/admin/users/{user_id}` | Rolleri/aktifliği günceller ve mevcut oturumları iptal eder |
 | `GET` | `/api/admin/roles` | `roles:manage` izniyle rol ve permission kataloğunu döndürür |
 | `GET` | `/api/leagues` | Desteklenen ligleri listeler |
-| `GET` | `/api/fixtures/upcoming` | Yaklaşan fikstürleri getirir |
+| `GET` | `/api/fixtures/upcoming?days=7&limit=100` | Belirtilen ufuktaki fikstürü kronolojik getirir |
 | `GET` | `/api/fixtures/{fixture_id}/prefill` | Fikstür analiz girdisini hazırlar |
+| `POST` | `/api/analyze/preview` | Tahmini kaydetmeden hesaplanan model girdilerini ve eksik veri durumlarını döndürür |
 | `POST` | `/api/analyze` | Manuel verilerle analiz yapar ve kaydeder |
 | `POST` | `/api/analyze/fixture/{fixture_id}` | API-Football fikstürünü analiz eder |
 | `GET` | `/api/history` | Varsayılan olarak son tahminleri; `paginated=true` ile sunucu tarafı arama, filtreleme, sıralama ve sayfalama sonucu döndürür |

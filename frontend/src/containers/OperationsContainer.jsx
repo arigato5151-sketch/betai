@@ -17,11 +17,11 @@ function OperationsContainer({ actions, request }) {
     setDataQualityError("");
     try {
       const response = await request("/operations/data-quality");
-      if (!response.ok) throw new Error("Veri kalitesi durumu alÄ±namadÄ±.");
+      if (!response.ok) throw new Error("Veri kalitesi durumu alınamadı.");
       setDataQuality(await response.json());
     } catch (error) {
       setDataQualityError(
-        error.message || "Veri kalitesi durumu alÄ±namadÄ±.",
+        error.message || "Veri kalitesi durumu alınamadı.",
       );
     } finally {
       setDataQualityLoading(false);
@@ -34,10 +34,14 @@ function OperationsContainer({ actions, request }) {
     setModelStatusError("");
     try {
       const response = await request("/ml/status");
-      if (!response.ok) throw new Error("ML model durumu alÄ±namadÄ±.");
+      if (!response.ok) {
+        throw new Error("Makine öğrenmesi modeli durumu alınamadı.");
+      }
       setModelStatus(await response.json());
     } catch (error) {
-      setModelStatusError(error.message || "ML model durumu alÄ±namadÄ±.");
+      setModelStatusError(
+        error.message || "Makine öğrenmesi modeli durumu alınamadı.",
+      );
     } finally {
       setModelStatusLoading(false);
     }

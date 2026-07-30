@@ -1,3 +1,5 @@
+import { modelNameLabel } from "../localization.js";
+
 function Value({ label, children }) {
   return (
     <div className="rounded bg-slate-950 p-3">
@@ -19,10 +21,10 @@ function ModelStatusCard({ status, error, loading, onRefresh }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 id="model-status-title" className="text-sm font-bold uppercase tracking-wider text-slate-300">
-            ML Model Durumu
+            Makine Öğrenmesi Model Durumu
           </h2>
           <p className="mt-1 text-xs text-slate-500">
-            Walk-forward test, kalibrasyon ve champion karşılaştırması
+            Zaman ilerlemeli doğrulama, kalibrasyon ve birincil model karşılaştırması
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -46,14 +48,14 @@ function ModelStatusCard({ status, error, loading, onRefresh }) {
       {error && <p className="mt-3 rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">{error}</p>}
       {status && (
         <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-8">
-          <Value label="Model">{status.model_name}</Value>
+          <Value label="Model">{modelNameLabel(status.model_name)}</Value>
           <Value label="Eğitim Örneği">{metrics.samples ?? 0}</Value>
-          <Value label="Tarihsel Fixture">{trainingData.historical_fixtures ?? 0}</Value>
+          <Value label="Tarihsel Maç">{trainingData.historical_fixtures ?? 0}</Value>
           <Value label="Etiketli Tahmin">{trainingData.labeled_predictions ?? 0}</Value>
           <Value label="Brier">{metrics.brier_score?.toFixed?.(4)}</Value>
-          <Value label="Baseline Brier">{metrics.baseline_brier_score?.toFixed?.(4)}</Value>
+          <Value label="Referans Brier">{metrics.baseline_brier_score?.toFixed?.(4)}</Value>
           <Value label="Kalibrasyon">{metrics.calibration_error?.toFixed?.(4)}</Value>
-          <Value label="Accuracy">{metrics.accuracy !== undefined ? `%${(metrics.accuracy * 100).toFixed(1)}` : "-"}</Value>
+          <Value label="Doğruluk">{metrics.accuracy !== undefined ? `%${(metrics.accuracy * 100).toFixed(1)}` : "-"}</Value>
           <Value label="Lig">{metrics.league_count ?? 0}</Value>
         </div>
       )}

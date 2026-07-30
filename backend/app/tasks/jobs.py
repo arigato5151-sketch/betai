@@ -1,6 +1,8 @@
 import asyncio
 import logging
-from datetime import date
+from collections import Counter
+from collections.abc import Mapping
+from datetime import UTC, date, datetime
 from typing import Any, cast
 from celery import shared_task
 from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS
@@ -17,8 +19,8 @@ from app.services.api_football import APIFootballClient
 from app.services.football_data_csv import (
     FootballDataCSVClient,
     FootballDataDownloadError,
-    FootballDataImport,
 )
+from app.services.odds_history import OddsHistoryService, odds_history_service
 from app.prediction.ml.model import ml_pipeline
 from app.prediction.ml.training_data import HistoricalTrainingDataBuilder
 from app.prediction.ensemble_weights import ensemble_weight_manager
@@ -36,6 +38,207 @@ def _run_async(coro):
 def _current_football_season(today: date | None = None) -> int:
     current = today or date.today()
     return current.year if current.month >= 7 else current.year - 1
+
+
+def _fixture_kickoff(value: object) -> datetime | None:
+    if not isinstance(value, (str, datetime)):
+        return None
+    try:
+        parsed = (
+            value
+            if isinstance(value, datetime)
+            else datetime.fromisoformat(value.replace("Z", "+00:00"))
+        )
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+async def _collect_upcoming_odds(
+    client: APIFootballClient,
+    service: OddsHistoryService,
+    *,
+    observed_at: datetime | None = None,
+) -> dict[str, object]:
+    """Collect bounded opening/near-kickoff snapshots without quota-heavy polling."""
+    captured_at = (observed_at or datetime.now(UTC)).astimezone(UTC)
+    fixtures = await client.get_upcoming_fixtures(
+        days=settings.ODDS_COLLECTOR_HORIZON_DAYS,
+        limit=settings.ODDS_COLLECTOR_MAX_FIXTURES,
+    )
+    semaphore = asyncio.Semaphore(settings.ODDS_COLLECTOR_CONCURRENCY)
+    invalid_fixtures = 0
+    candidates: list[tuple[int, datetime]] = []
+    for fixture in fixtures:
+        fixture_id = fixture.get("fixture_id")
+        kickoff = _fixture_kickoff(fixture.get("kickoff"))
+        if (
+            isinstance(fixture_id, bool)
+            or not isinstance(fixture_id, int)
+            or fixture_id <= 0
+            or kickoff is None
+            or fixture.get("is_demo") is True
+        ):
+            invalid_fixtures += 1
+            continue
+        candidates.append((fixture_id, kickoff))
+
+    async def collect(fixture_id: int, kickoff: datetime) -> str:
+        if not service.should_collect(
+            fixture_id=fixture_id,
+            kickoff=kickoff,
+            observed_at=captured_at,
+            refresh_interval_seconds=settings.ODDS_COLLECTOR_RUN_INTERVAL_SECONDS,
+            closing_window_hours=settings.ODDS_COLLECTOR_CLOSING_WINDOW_HOURS,
+        ):
+            return "not_due"
+        async with semaphore:
+            market = await client.get_fixture_market(fixture_id)
+        if not isinstance(market, Mapping):
+            return "market_unavailable"
+        enriched = service.enrich_prefill(
+            {
+                "fixture": {
+                    "fixture_id": fixture_id,
+                    "kickoff": kickoff.isoformat(),
+                },
+                "market_1x2": dict(market),
+            },
+            captured_at=captured_at,
+        )
+        return "recorded" if "odds_history" in enriched else "rejected"
+
+    outcomes = await asyncio.gather(
+        *(collect(fixture_id, kickoff) for fixture_id, kickoff in candidates)
+    )
+    counts = Counter(outcomes)
+    return {
+        "status": "succeeded",
+        "fixtures_seen": len(fixtures),
+        "eligible_fixtures": len(candidates),
+        "snapshots_recorded": counts["recorded"],
+        "not_due": counts["not_due"],
+        "market_unavailable": counts["market_unavailable"],
+        "rejected": counts["rejected"],
+        "invalid_fixtures": invalid_fixtures,
+        "captured_at": captured_at.isoformat(),
+    }
+
+
+@shared_task(name="app.tasks.jobs.collect_upcoming_odds_task")
+def collect_upcoming_odds_task() -> dict[str, object]:
+    """Periodically build opening/current 1X2 pairs for upcoming fixtures."""
+    if not settings.ODDS_COLLECTOR_ENABLED:
+        return {"status": "disabled"}
+    api_client = APIFootballClient()
+    if api_client._is_demo_key():
+        return {"status": "demo_disabled"}
+    result = _run_async(_collect_upcoming_odds(api_client, odds_history_service))
+    logger.info("Upcoming odds collection completed: %s", result)
+    return cast(dict[str, object], result)
+
+
+async def _collect_upcoming_lineups(
+    client: APIFootballClient,
+    *,
+    observed_at: datetime | None = None,
+) -> dict[str, object]:
+    """Warm confirmed lineup cache only inside the configured pre-kickoff window."""
+    captured_at = (observed_at or datetime.now(UTC)).astimezone(UTC)
+    fixtures = await client.get_upcoming_fixtures(
+        days=settings.LINEUP_COLLECTOR_HORIZON_DAYS,
+        limit=settings.LINEUP_COLLECTOR_MAX_FIXTURES,
+    )
+    semaphore = asyncio.Semaphore(settings.LINEUP_COLLECTOR_CONCURRENCY)
+    invalid_fixtures = 0
+    outside_window = 0
+    candidates: list[tuple[int, int, int]] = []
+    window_seconds = settings.LINEUP_COLLECTOR_WINDOW_MINUTES * 60
+    for fixture in fixtures:
+        fixture_id = fixture.get("fixture_id")
+        home_team_id = fixture.get("home_team_id")
+        away_team_id = fixture.get("away_team_id")
+        kickoff = _fixture_kickoff(fixture.get("kickoff"))
+        identifiers = (fixture_id, home_team_id, away_team_id)
+        if (
+            any(
+                isinstance(identifier, bool)
+                or not isinstance(identifier, int)
+                or identifier <= 0
+                for identifier in identifiers
+            )
+            or kickoff is None
+            or fixture.get("is_demo") is True
+        ):
+            invalid_fixtures += 1
+            continue
+        seconds_to_kickoff = (kickoff - captured_at).total_seconds()
+        if not 0 < seconds_to_kickoff <= window_seconds:
+            outside_window += 1
+            continue
+        candidates.append(
+            (
+                cast(int, fixture_id),
+                cast(int, home_team_id),
+                cast(int, away_team_id),
+            )
+        )
+
+    async def collect(
+        fixture_id: int,
+        home_team_id: int,
+        away_team_id: int,
+    ) -> str:
+        async with semaphore:
+            lineups = await client.get_fixture_lineups(
+                fixture_id,
+                home_team_id,
+                away_team_id,
+            )
+        if not isinstance(lineups, Mapping):
+            return "unavailable"
+        home_starting_xi = lineups.get("home_starting_xi")
+        away_starting_xi = lineups.get("away_starting_xi")
+        confirmed = (
+            isinstance(home_starting_xi, list)
+            and len(home_starting_xi) == 11
+            and isinstance(away_starting_xi, list)
+            and len(away_starting_xi) == 11
+        )
+        return "confirmed" if confirmed else "unavailable"
+
+    outcomes = await asyncio.gather(
+        *(
+            collect(fixture_id, home_team_id, away_team_id)
+            for fixture_id, home_team_id, away_team_id in candidates
+        )
+    )
+    counts = Counter(outcomes)
+    return {
+        "status": "succeeded",
+        "fixtures_seen": len(fixtures),
+        "eligible_fixtures": len(candidates),
+        "lineups_confirmed": counts["confirmed"],
+        "lineups_unavailable": counts["unavailable"],
+        "outside_window": outside_window,
+        "invalid_fixtures": invalid_fixtures,
+        "captured_at": captured_at.isoformat(),
+    }
+
+
+@shared_task(name="app.tasks.jobs.collect_upcoming_lineups_task")
+def collect_upcoming_lineups_task() -> dict[str, object]:
+    """Periodically cache official lineups shortly before kickoff."""
+    if not settings.LINEUP_COLLECTOR_ENABLED:
+        return {"status": "disabled"}
+    api_client = APIFootballClient()
+    if api_client._is_demo_key():
+        return {"status": "demo_disabled"}
+    result = _run_async(_collect_upcoming_lineups(api_client))
+    logger.info("Upcoming lineup collection completed: %s", result)
+    return cast(dict[str, object], result)
 
 
 async def _enrich_historical_player_context(
@@ -131,24 +334,38 @@ async def _enrich_historical_player_context(
 
 
 @shared_task(name="app.tasks.jobs.sync_historical_fixtures_task")
-def sync_historical_fixtures_task(seasons: list[int] | None = None) -> dict:
-    """Ingest completed fixtures; pass seasons explicitly for a repeatable backfill."""
+def sync_historical_fixtures_task(
+    seasons: list[int] | None = None,
+    league_ids: list[int] | None = None,
+) -> dict:
+    """Ingest a validated league scope; pass seasons for a repeatable backfill."""
     target_seasons: list[int] = sorted(
         set(seasons if seasons is not None else [_current_football_season()])
     )
+    allowed_ids = cast(set[int], ALLOWED_LEAGUE_IDS)
+    requested_ids = league_ids if league_ids is not None else list(allowed_ids)
+    if not requested_ids or any(
+        not isinstance(league_id, int) or isinstance(league_id, bool)
+        for league_id in requested_ids
+    ):
+        raise ValueError("league_ids must contain at least one integer league ID")
+    unsupported_ids = set(requested_ids) - allowed_ids
+    if unsupported_ids:
+        raise ValueError(f"Unsupported league_ids: {sorted(unsupported_ids)}")
+    target_league_ids = sorted(set(requested_ids))
+
     with SessionLocal() as db:
         sync_run_id = (
             DataQualityService(db).start_sync("historical_fixtures", target_seasons).id
         )
 
-    league_ids: list[int] = sorted(cast(set[int], ALLOWED_LEAGUE_IDS))
     api_client = APIFootballClient()
     fixture_rows: list[dict] = []
     failures: list[dict[str, int | str]] = []
 
     # Bulk fixture network work completes before opening a database transaction.
     for season in target_seasons:
-        for league_id in league_ids:
+        for league_id in target_league_ids:
             try:
                 fixture_rows.extend(
                     _run_async(api_client.get_completed_fixtures(league_id, season))
@@ -231,29 +448,11 @@ def sync_historical_fixtures_task(seasons: list[int] | None = None) -> dict:
 @shared_task(name="app.tasks.jobs.sync_football_data_fixtures_task")
 def sync_football_data_fixtures_task(seasons: list[int] | None = None) -> dict:
     """Import completed league fixtures from the public Football-Data CSV feeds."""
+    automatic_season = seasons is None
     target_seasons = sorted(
         set(seasons if seasons is not None else [_current_football_season()])
     )
     client = FootballDataCSVClient()
-    prefetched: dict[tuple[int, int], FootballDataImport] = {}
-    fallback_from_season: int | None = None
-
-    if seasons is None:
-        current_season = target_seasons[0]
-        probe_league_id = min(client.supported_league_ids)
-        try:
-            prefetched[(probe_league_id, current_season)] = _run_async(
-                client.get_completed_fixtures(probe_league_id, current_season)
-            )
-        except FootballDataDownloadError as exc:
-            if exc.status_code == 404:
-                fallback_from_season = current_season
-                target_seasons = [current_season - 1]
-                logger.info(
-                    "Football-Data season=%s is not published; falling back to %s.",
-                    current_season,
-                    target_seasons[0],
-                )
 
     with SessionLocal() as db:
         sync_run_id = (
@@ -263,27 +462,51 @@ def sync_football_data_fixtures_task(seasons: list[int] | None = None) -> dict:
     fixture_rows: list[dict] = []
     skipped_rows = 0
     failures: list[dict[str, int | str]] = []
+    imported_seasons: set[int] = set()
+    league_season_fallbacks: list[dict[str, int]] = []
 
-    for season in target_seasons:
-        for league_id in sorted(client.supported_league_ids):
+    for league_id in sorted(client.supported_league_ids):
+        for requested_season in target_seasons:
+            effective_season = requested_season
             try:
-                imported = prefetched.pop((league_id, season), None)
-                if imported is None:
+                try:
                     imported = _run_async(
-                        client.get_completed_fixtures(league_id, season)
+                        client.get_completed_fixtures(league_id, requested_season)
+                    )
+                except FootballDataDownloadError as exc:
+                    if not automatic_season or exc.status_code != 404:
+                        raise
+                    effective_season = requested_season - 1
+                    imported = _run_async(
+                        client.get_completed_fixtures(league_id, effective_season)
+                    )
+                    league_season_fallbacks.append(
+                        {
+                            "league_id": league_id,
+                            "from_season": requested_season,
+                            "to_season": effective_season,
+                        }
+                    )
+                    logger.info(
+                        "Football-Data league=%s season=%s is not published; "
+                        "falling back to %s for this league only.",
+                        league_id,
+                        requested_season,
+                        effective_season,
                     )
                 fixture_rows.extend(imported.fixtures)
                 skipped_rows += imported.skipped_rows
+                imported_seasons.add(effective_season)
             except Exception as exc:
                 logger.exception(
                     "Football-Data fetch failed for league=%s season=%s",
                     league_id,
-                    season,
+                    requested_season,
                 )
                 failures.append(
                     {
                         "league_id": league_id,
-                        "season": season,
+                        "season": requested_season,
                         "error": type(exc).__name__,
                     }
                 )
@@ -307,13 +530,13 @@ def sync_football_data_fixtures_task(seasons: list[int] | None = None) -> dict:
         raise
 
     result: dict[str, object] = {
-        "seasons": target_seasons,
+        "seasons": sorted(imported_seasons),
         "fixtures_processed": processed,
         "skipped_incomplete_rows": skipped_rows,
         "failed_league_seasons": failures,
     }
-    if fallback_from_season is not None:
-        result["fallback_from_season"] = fallback_from_season
+    if league_season_fallbacks:
+        result["league_season_fallbacks"] = league_season_fallbacks
     logger.info("Football-Data fixture synchronization completed: %s", result)
     return result
 

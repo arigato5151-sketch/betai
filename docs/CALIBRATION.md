@@ -22,6 +22,9 @@ kârlılık veya production üstünlüğü iddiası değildir.
 ## Veri ve yöntem
 
 - Sonuç verisi: 8.333 tamamlanmış maç, 14 lig, 2 sezon.
+- UEFA turnuvaları (`2`, `3`, `848`) bu tarihsel örneklemde yer almadı. Yeterli
+  out-of-time veri oluşana kadar bu organizasyonlar lig-özel rho yerine doğrulanmış
+  `DEFAULT_DIXON_COLES_RHO=-0.12` değerini kullanır.
 - Kaynak dağılımı: 3.569 API-Football (2024), 4.764 Football-Data CSV (2025).
 - Tarih aralığı: 2 Ağustos 2024 – 24 Mayıs 2026.
 - Nokta-zaman 1X2 örneği: 7.622. Her maç için yalnız daha eski maçlar

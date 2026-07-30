@@ -14,6 +14,8 @@ from app.services.football_data_csv import (
 def test_source_identity_is_stable_when_cross_provider_aliases_change() -> None:
     assert normalize_team_name("Man City") == normalize_team_name("Manchester City")
     assert stable_team_name_key("Man City") != stable_team_name_key("Manchester City")
+    assert normalize_team_name("FC Rostov") == normalize_team_name("FK Rostov")
+    assert normalize_team_name("Rodina Moskva") == normalize_team_name("Rodina Moscow")
 
 
 @pytest.mark.asyncio

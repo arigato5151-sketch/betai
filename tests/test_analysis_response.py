@@ -7,7 +7,9 @@ from pydantic import ValidationError
 
 from app.api.endpoints import (
     AnalysisRequest,
+    _apply_external_travel_fallback,
     _build_analysis_response,
+    _apply_external_elo_fallback,
     _compute_analysis,
     _derive_reference_lineup,
     _fetch_ml_match_data,
@@ -18,6 +20,113 @@ from app.core.config import settings
 from app.prediction.ml.features import FeatureEngine
 from app.prediction.ml.historical import HistoricalFeatureContext
 from app.prediction.value_calc import ValueCalc
+from app.providers.base import ExternalDataPoint
+
+
+@pytest.mark.asyncio
+async def test_external_elo_fallback_updates_missing_historical_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    captured_at = datetime(2026, 7, 30, 10, tzinfo=UTC)
+
+    async def external_elo(**kwargs: object) -> ExternalDataPoint:
+        value = 1742.0 if kwargs["canonical_team_id"] == 611 else 1710.0
+        return ExternalDataPoint(
+            value=value,
+            source="clubelo",
+            captured_at=captured_at,
+            expires_at=captured_at + timedelta(hours=24),
+            confidence=0.8,
+        )
+
+    monkeypatch.setattr(
+        endpoints.external_feature_service,
+        "get_team_elo",
+        external_elo,
+    )
+    payload = AnalysisRequest(
+        home_team="Fenerbahçe",
+        away_team="Galatasaray",
+        home_team_id=611,
+        away_team_id=645,
+        league_id=203,
+        kickoff=datetime(2026, 7, 30, 18, tzinfo=UTC),
+        home_stats={"form": 70, "attack": 70, "defense": 70, "xg": 1.5},
+        away_stats={"form": 70, "attack": 70, "defense": 70, "xg": 1.5},
+        odd=2.0,
+    )
+
+    context = await _apply_external_elo_fallback(
+        payload,
+        HistoricalFeatureContext(),
+    )
+
+    assert context.home_elo == 1742.0
+    assert context.away_elo == 1710.0
+    assert context.home_elo_available is True
+    assert context.feature_provenance["home_elo"] == {
+        "source": "clubelo",
+        "captured_at": captured_at.isoformat(),
+        "confidence": 0.8,
+        "is_fallback": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_external_travel_fallback_updates_missing_historical_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    captured_at = datetime(2026, 7, 30, 10, tzinfo=UTC)
+    get_distance = AsyncMock(
+        return_value=ExternalDataPoint(
+            value=1346.74,
+            source="geonames_city",
+            captured_at=captured_at,
+            confidence=0.75,
+            is_fallback=True,
+        )
+    )
+    monkeypatch.setattr(
+        endpoints.travel_context_service,
+        "get_away_travel_distance",
+        get_distance,
+    )
+    payload = AnalysisRequest(
+        home_team="Ajax",
+        away_team="Vojvodina",
+        home_team_id=194,
+        away_team_id=702,
+        league_id=2,
+        kickoff=datetime(2026, 7, 30, 18, tzinfo=UTC),
+        home_stats={"form": 70, "attack": 70, "defense": 70, "xg": 1.5},
+        away_stats={"form": 70, "attack": 70, "defense": 70, "xg": 1.5},
+        odd=2.0,
+    )
+
+    context = await _apply_external_travel_fallback(
+        payload,
+        HistoricalFeatureContext(),
+    )
+
+    assert context.away_travel_distance_km == pytest.approx(1346.74)
+    assert context.travel_context_available is True
+    assert context.travel_provenance == {
+        "source": "geonames_city",
+        "captured_at": captured_at.isoformat(),
+        "confidence": 0.75,
+        "is_fallback": True,
+    }
+    get_distance.assert_awaited_once_with(
+        home_team_id=194,
+        away_team_id=702,
+        home_team_name="Ajax",
+        away_team_name="Vojvodina",
+        client=endpoints.football_api,
+    )
 
 
 def test_insufficient_ml_response_reports_sample_gap() -> None:
@@ -40,12 +149,51 @@ def test_insufficient_ml_response_reports_sample_gap() -> None:
         insights=[],
         labeled_samples_count=labeled_samples,
     )
-
     assert response["ml_safety_trigger"] == "INSUFFICIENT_DATA"
     assert response["labeled_samples_count"] == labeled_samples
     assert response["remaining_to_threshold"] == (
         settings.MIN_TRAINING_SAMPLES - labeled_samples
     )
+
+
+def test_prefill_payload_carries_automatic_odds_snapshots() -> None:
+    from app.api.endpoints import _build_payload_from_prefill
+
+    prefill = {
+        "fixture": {
+            "fixture_id": 10,
+            "home_team_id": 101,
+            "away_team_id": 202,
+            "league_id": 203,
+            "season": 2030,
+            "kickoff": "2030-07-30T18:00:00+00:00",
+        },
+        "home_team": "Home",
+        "away_team": "Away",
+        "home_stats": {"form": 70, "attack": 70, "defense": 70, "xg": 1.5},
+        "away_stats": {"form": 65, "attack": 65, "defense": 65, "xg": 1.2},
+        "odd": 2.2,
+        "market_1x2": {"raw_odds": {"HOME_WIN": 2.2}},
+        "opening_odds_1x2": {
+            "HOME_WIN": 2.4,
+            "DRAW": 3.3,
+            "AWAY_WIN": 3.1,
+        },
+        "current_odds_1x2": {
+            "HOME_WIN": 2.2,
+            "DRAW": 3.4,
+            "AWAY_WIN": 3.3,
+        },
+        "opening_odds_at": "2030-07-29T10:00:00+00:00",
+        "current_odds_at": "2030-07-30T10:00:00+00:00",
+    }
+
+    payload = _build_payload_from_prefill(prefill)
+
+    assert payload.opening_odds_1x2 is not None
+    assert payload.current_odds_1x2 is not None
+    assert payload.opening_odds_1x2.home_win == 2.4
+    assert payload.current_odds_1x2.home_win == 2.2
 
 
 @pytest.mark.asyncio
@@ -124,6 +272,37 @@ async def test_analysis_collects_feature_snapshot_before_first_model(
 
 
 @pytest.mark.asyncio
+async def test_analysis_applies_validated_manual_feature_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    monkeypatch.setattr(endpoints.ml_pipeline, "is_ready", False)
+    payload = AnalysisRequest(
+        home_team="Home",
+        away_team="Away",
+        home_stats={"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
+        away_stats={"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        odd=2.0,
+        feature_overrides={
+            "fatigue_index": 0.4,
+            "home_elo": 1625,
+        },
+    )
+
+    computed = await _compute_analysis(payload)
+
+    assert computed["calculated_feature_vector"]["fatigue_index"] == 0.0
+    assert computed["feature_vector"]["fatigue_index"] == 0.4
+    assert computed["feature_vector"]["home_elo"] == 1625.0
+    assert computed["data_quality"]["manual_feature_overrides"] == [
+        "fatigue_index",
+        "home_elo",
+    ]
+    assert computed["data_quality"]["manual_feature_override_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_analysis_maps_validated_odds_snapshots_to_ml_features(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -161,6 +340,12 @@ async def test_analysis_maps_validated_odds_snapshots_to_ml_features(
         "movement_features_used": True,
         "opening_captured_at": (kickoff - timedelta(days=3)).isoformat(),
         "current_captured_at": (kickoff - timedelta(hours=1)).isoformat(),
+    }
+    assert computed["data_quality"]["feature_provenance"]["odds_movement_home"] == {
+        "source": "api_football_odds",
+        "captured_at": (kickoff - timedelta(hours=1)).isoformat(),
+        "confidence": settings.ODDS_SNAPSHOT_CONFIDENCE,
+        "is_fallback": False,
     }
 
 
@@ -514,9 +699,13 @@ async def test_stale_point_in_time_form_uses_api_fallback(
         odd=2.1,
     )
 
-    home_matches, away_matches, h2h_rates, availability, lineups = (
-        await _fetch_ml_match_data(payload, context)
-    )
+    (
+        home_matches,
+        away_matches,
+        h2h_rates,
+        availability,
+        lineups,
+    ) = await _fetch_ml_match_data(payload, context)
 
     assert home_matches is api_frame
     assert away_matches is api_frame

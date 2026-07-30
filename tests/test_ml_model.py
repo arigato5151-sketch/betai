@@ -340,6 +340,18 @@ def test_load_valid_signed_model_artifact(
     assert active_path.with_name("active_model.pkl.sig").is_file()
 
 
+def test_v7_model_artifact_contract_remains_compatible_with_v8() -> None:
+    MLModelPipeline._validate_loaded_payload(
+        {
+            "schema_version": 2,
+            "feature_names": ["home_form"],
+            "feature_schema_version": "ml_features_v7",
+            "model": ProbabilityModel([0.2, 0.6, 0.2]),
+            "calibrator": None,
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "backend,available",
     [

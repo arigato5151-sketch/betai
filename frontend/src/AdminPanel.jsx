@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { responseErrorMessage, toggleRoleSelection } from "./admin.js";
+import { permissionLabel, roleLabel } from "./localization.js";
 
 const emptyForm = {
   username: "",
@@ -129,7 +130,7 @@ function AdminPanel({ request, currentUserId, onClose }) {
           {roles.map((role) => (
             <label key={role.id} className="flex items-center gap-2 text-sm text-slate-300">
               <input type="checkbox" checked={form.roles.includes(role.name)} onChange={(event) => setForm({ ...form, roles: toggleRoleSelection(form.roles, role.name, event.target.checked) })} />
-              {role.name}
+              {roleLabel(role.name)}
             </label>
           ))}
         </fieldset>
@@ -151,14 +152,18 @@ function AdminPanel({ request, currentUserId, onClose }) {
                   {roles.map((role) => {
                     const checked = user.roles.includes(role.name);
                     return (
-                      <label key={role.id} className="flex items-center gap-2 text-sm text-slate-300" title={role.permissions.join(", ")}>
+                      <label
+                        key={role.id}
+                        className="flex items-center gap-2 text-sm text-slate-300"
+                        title={role.permissions.map(permissionLabel).join(", ")}
+                      >
                         <input
                           type="checkbox"
                           checked={checked}
                           disabled={savingUserId === user.id || isCurrentUser || (checked && user.roles.length === 1)}
                           onChange={(event) => updateUser(user, { roles: toggleRoleSelection(user.roles, role.name, event.target.checked) })}
                         />
-                        {role.name}
+                        {roleLabel(role.name)}
                       </label>
                     );
                   })}

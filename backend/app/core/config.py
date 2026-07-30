@@ -65,6 +65,46 @@ class Settings(BaseSettings):
     LOG_FORMAT: Literal["text", "json"] = "text"
     FOOTBALL_DATA_BASE_URL: str = "https://www.football-data.co.uk"
     FOOTBALL_DATA_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
+    CLUBELO_ENABLED: bool = False
+    CLUBELO_BASE_URL: str = "http://api.clubelo.com"
+    CLUBELO_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=120)
+    CLUBELO_CACHE_HOURS: int = Field(default=24, ge=1, le=168)
+    CLUBELO_CONFIDENCE: float = Field(default=0.80, gt=0, le=1, allow_inf_nan=False)
+    SPORTMONKS_ENABLED: bool = False
+    SPORTMONKS_API_TOKEN: str = ""
+    SPORTMONKS_BASE_URL: str = "https://api.sportmonks.com/v3/football"
+    SPORTMONKS_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=120)
+    SPORTMONKS_PLAYER_LOOKBACK_DAYS: int = Field(default=120, ge=30, le=365)
+    SPORTMONKS_PLAYER_LOOKBACK_MATCHES: int = Field(default=10, ge=3, le=30)
+    ODDS_SNAPSHOT_MIN_INTERVAL_SECONDS: int = Field(default=300, ge=60, le=86400)
+    ODDS_SNAPSHOT_CONFIDENCE: float = Field(
+        default=0.90, gt=0, le=1, allow_inf_nan=False
+    )
+    ODDS_COLLECTOR_ENABLED: bool = True
+    ODDS_COLLECTOR_RUN_INTERVAL_SECONDS: int = Field(
+        default=10800,
+        ge=900,
+        le=86400,
+    )
+    ODDS_COLLECTOR_HORIZON_DAYS: int = Field(default=7, ge=1, le=14)
+    ODDS_COLLECTOR_MAX_FIXTURES: int = Field(default=20, ge=1, le=200)
+    ODDS_COLLECTOR_CLOSING_WINDOW_HOURS: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+    )
+    ODDS_COLLECTOR_CONCURRENCY: int = Field(default=2, ge=1, le=10)
+    LINEUP_COLLECTOR_ENABLED: bool = True
+    LINEUP_COLLECTOR_RUN_INTERVAL_SECONDS: int = Field(
+        default=3600,
+        ge=900,
+        le=21600,
+    )
+    LINEUP_COLLECTOR_HORIZON_DAYS: int = Field(default=2, ge=1, le=3)
+    LINEUP_COLLECTOR_MAX_FIXTURES: int = Field(default=30, ge=1, le=100)
+    LINEUP_COLLECTOR_WINDOW_MINUTES: int = Field(default=120, ge=30, le=360)
+    LINEUP_COLLECTOR_CONCURRENCY: int = Field(default=2, ge=1, le=10)
+    AUTO_TEAM_LOCATION_ENABLED: bool = True
 
     # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEAGUE_BASELINE_GOALS: float = Field(default=1.32, gt=0)
@@ -131,7 +171,7 @@ class Settings(BaseSettings):
     DOUBLE_CHANCE_HOME_DIFFERENCE_WEIGHT: float = Field(default=12.0, ge=0)
     # Kalibre edildi: bkz. docs/CALIBRATION.md
     DOUBLE_CHANCE_AWAY_DIFFERENCE_WEIGHT: float = Field(default=14.0, ge=0)
-    # Kalibre edildi: bkz. docs/CALIBRATION.md
+    # Kalibre edildi; verisiz UEFA kupaları global fallback kullanır: bkz. docs/CALIBRATION.md
     DEFAULT_DIXON_COLES_RHO: float = Field(default=-0.12)
     # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEAGUE_DIXON_COLES_RHO: dict[int, float] = Field(
@@ -305,6 +345,45 @@ class Settings(BaseSettings):
         if value and any(character in value for character in ":/"):
             raise ValueError("COOKIE_DOMAIN must be a hostname, not a URL")
         return value
+
+    @field_validator("CLUBELO_BASE_URL")
+    @classmethod
+    def validate_clubelo_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.hostname != "api.clubelo.com"
+            or parsed.username
+            or parsed.password
+            or parsed.port
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("CLUBELO_BASE_URL must point to api.clubelo.com")
+        return normalized
+
+    @field_validator("SPORTMONKS_BASE_URL")
+    @classmethod
+    def validate_sportmonks_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "api.sportmonks.com"
+            or parsed.username
+            or parsed.password
+            or parsed.port
+            or parsed.path != "/v3/football"
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "SPORTMONKS_BASE_URL must point to "
+                "https://api.sportmonks.com/v3/football"
+            )
+        return normalized
 
     @model_validator(mode="after")
     def validate_ensemble_policy(self) -> "Settings":

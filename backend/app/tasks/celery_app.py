@@ -33,6 +33,14 @@ celery_app.conf.update(
             "task": "app.tasks.jobs.sync_completed_matches_task",
             "schedule": 86400.0,  # 24 hours
         },
+        "collect-upcoming-odds": {
+            "task": "app.tasks.jobs.collect_upcoming_odds_task",
+            "schedule": float(settings.ODDS_COLLECTOR_RUN_INTERVAL_SECONDS),
+        },
+        "collect-upcoming-lineups": {
+            "task": "app.tasks.jobs.collect_upcoming_lineups_task",
+            "schedule": float(settings.LINEUP_COLLECTOR_RUN_INTERVAL_SECONDS),
+        },
         "retrain-ml-model-weekly": {
             "task": "app.tasks.jobs.retrain_ml_model_task",
             "schedule": 604800.0,  # Weekly

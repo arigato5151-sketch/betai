@@ -1,4 +1,6 @@
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, call
+from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
@@ -127,11 +129,180 @@ async def test_demo_upcoming_and_prefill_never_require_network() -> None:
 
     assert len(fixtures) == 2
     assert all(fixture["is_demo"] for fixture in fixtures)
+    kickoff_dates = [
+        datetime.fromisoformat(fixture["kickoff"]).date() for fixture in fixtures
+    ]
+    today = datetime.now(ZoneInfo("Europe/Istanbul")).date()
+    assert kickoff_dates == sorted(kickoff_dates)
+    assert all(
+        today <= kickoff <= today + timedelta(days=6) for kickoff in kickoff_dates
+    )
     assert prefill is not None
     assert prefill["data_quality"] == "demo"
     assert prefill["auto_filled"] is True
     assert prefill["market_1x2"]["overround_pct"] > 0
     client._request_with_retry.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_venue_context_is_validated_and_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(
+        return_value={
+            "response": [
+                {
+                    "team": {
+                        "id": 194,
+                        "name": "Ajax",
+                        "country": "Netherlands",
+                    },
+                    "venue": {
+                        "id": 111,
+                        "name": "Johan Cruijff Arena",
+                        "city": "Amsterdam",
+                    },
+                }
+            ]
+        }
+    )
+    cache_get = AsyncMock(return_value=None)
+    cache_set = AsyncMock()
+    monkeypatch.setattr("app.services.api_football.cache.get", cache_get)
+    monkeypatch.setattr("app.services.api_football.cache.set", cache_set)
+
+    result = await client.get_team_venue_context(194)
+
+    assert result == {
+        "team_id": 194,
+        "team_name": "Ajax",
+        "country": "Netherlands",
+        "city": "Amsterdam",
+        "venue_id": 111,
+        "venue_name": "Johan Cruijff Arena",
+        "source": "api_football_teams",
+    }
+    client._request_with_retry.assert_awaited_once_with("teams", {"id": "194"})
+    cache_get.assert_awaited_once_with("teams", "venue-context:194")
+    cache_set.assert_awaited_once_with(
+        "teams",
+        "venue-context:194",
+        result,
+        30 * 86400,
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_venue_context_rejects_incomplete_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(
+        return_value={
+            "response": [
+                {
+                    "team": {"id": 194, "name": "Ajax", "country": "Netherlands"},
+                    "venue": {"id": 111, "name": "Johan Cruijff Arena", "city": ""},
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        "app.services.api_football.cache.get",
+        AsyncMock(return_value=None),
+    )
+    cache_set = AsyncMock()
+    monkeypatch.setattr("app.services.api_football.cache.set", cache_set)
+
+    assert await client.get_team_venue_context(194) is None
+    cache_set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_lineups_use_long_lived_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(
+        return_value={
+            "response": [
+                {
+                    "team": {"id": 10},
+                    "startXI": [
+                        {"player": {"id": player_id}} for player_id in range(1, 12)
+                    ],
+                },
+                {
+                    "team": {"id": 20},
+                    "startXI": [
+                        {"player": {"id": player_id}} for player_id in range(20, 31)
+                    ],
+                },
+            ]
+        }
+    )
+    cache_get = AsyncMock(return_value=None)
+    cache_set = AsyncMock()
+    monkeypatch.setattr("app.services.api_football.cache.get", cache_get)
+    monkeypatch.setattr("app.services.api_football.cache.set", cache_set)
+
+    result = await client.get_fixture_lineups(500, 10, 20)
+
+    assert result == {
+        "home_starting_xi": list(range(1, 12)),
+        "away_starting_xi": list(range(20, 31)),
+        "source": "api_football_lineups",
+    }
+    cache_get.assert_awaited_once_with("match_data", "lineups:500:10:20")
+    cache_set.assert_awaited_once_with(
+        "match_data",
+        "lineups:500:10:20",
+        result,
+        21600,
+    )
+
+
+def test_upcoming_fixtures_are_sorted_by_kickoff_before_league_priority() -> None:
+    fixtures = [
+        {
+            "fixture_id": 2,
+            "league_id": 2,
+            "kickoff": "2030-07-30T21:00:00+03:00",
+        },
+        {
+            "fixture_id": 1,
+            "league_id": 62,
+            "kickoff": "2030-07-30T19:00:00+03:00",
+        },
+        {
+            "fixture_id": 3,
+            "league_id": 3,
+            "kickoff": "invalid",
+        },
+    ]
+
+    result = APIFootballClient._sort_upcoming_fixtures(fixtures)
+
+    assert [fixture["fixture_id"] for fixture in result] == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_upcoming_endpoint_forwards_week_and_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(endpoints.football_api, "get_upcoming_fixtures", fetch)
+
+    result = await endpoints.list_upcoming_fixtures(days=7, limit=80)
+
+    assert result == []
+    fetch.assert_awaited_once_with(days=7, limit=80)
 
 
 @pytest.mark.asyncio
@@ -186,6 +357,19 @@ def test_fixture_normalization_handles_live_score_and_invalid_date() -> None:
     assert normalized["is_live"] is True
     assert normalized["is_demo"] is False
     assert normalized["kickoff_label"] == "invalid-date-val"
+
+
+def test_allowed_league_filter_keeps_all_uefa_competitions() -> None:
+    fixtures = [
+        {"fixture_id": 1, "league_id": 2},
+        {"fixture_id": 2, "league_id": 3},
+        {"fixture_id": 3, "league_id": 848},
+        {"fixture_id": 4, "league_id": 999999},
+    ]
+
+    filtered = APIFootballClient._filter_allowed_leagues(fixtures)
+
+    assert [fixture["league_id"] for fixture in filtered] == [2, 3, 848]
 
 
 @pytest.mark.parametrize(
@@ -353,6 +537,54 @@ async def test_completed_fixtures_are_normalized_and_invalid_rows_are_skipped() 
             "timezone": "UTC",
         },
     )
+
+
+@pytest.mark.parametrize(
+    ("status", "goals", "fulltime", "expected_result"),
+    [
+        pytest.param(
+            "AET",
+            {"home": 4, "away": 3},
+            {"home": 3, "away": 3},
+            "DRAW",
+            id="extra-time-does-not-change-1x2-result",
+        ),
+        pytest.param(
+            "PEN",
+            {"home": 1, "away": 1},
+            {"home": 0, "away": 0},
+            "DRAW",
+            id="penalties-do-not-change-1x2-result",
+        ),
+    ],
+)
+def test_completed_cup_fixture_uses_regulation_score_for_1x2(
+    status: str,
+    goals: dict[str, int],
+    fulltime: dict[str, int],
+    expected_result: str,
+) -> None:
+    normalized = APIFootballClient._normalize_completed_fixture(
+        {
+            "fixture": {
+                "id": 500,
+                "date": "2026-07-18T18:00:00Z",
+                "status": {"short": status},
+            },
+            "league": {"id": 2, "season": 2026},
+            "teams": {
+                "home": {"id": 1, "name": "Home"},
+                "away": {"id": 2, "name": "Away"},
+            },
+            "goals": goals,
+            "score": {"fulltime": fulltime},
+        }
+    )
+
+    assert normalized is not None
+    assert normalized["home_goals"] == fulltime["home"]
+    assert normalized["away_goals"] == fulltime["away"]
+    assert normalized["actual_result"] == expected_result
 
 
 @pytest.mark.asyncio

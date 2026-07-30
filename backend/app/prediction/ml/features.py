@@ -15,7 +15,7 @@ LEAGUE_ONE_HOT_FEATURES = [
 
 
 class FeatureEngine:
-    SCHEMA_VERSION = "ml_features_v7"
+    SCHEMA_VERSION = "ml_features_v8"
     COMPATIBLE_SNAPSHOT_VERSIONS = {
         "ml_features_v1",
         "ml_features_v2",
@@ -23,6 +23,7 @@ class FeatureEngine:
         "ml_features_v4",
         "ml_features_v5",
         "ml_features_v6",
+        "ml_features_v7",
         SCHEMA_VERSION,
     }
     CATEGORICAL_FEATURE_NAMES = (

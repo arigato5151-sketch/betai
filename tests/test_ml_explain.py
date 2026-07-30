@@ -29,6 +29,27 @@ def test_unknown_feature_uses_raw_name(monkeypatch):
     assert result == ["Tahmin sebebi: weather_index (+%100)"]
 
 
+def test_enhanced_features_use_turkish_labels(monkeypatch):
+    monkeypatch.setattr(explain, "SHAP_AVAILABLE", False)
+    model = SimpleNamespace(feature_importances_=[0.5, 0.3, 0.2])
+
+    result = ExplainabilityService.generate_explanation(
+        model,
+        {},
+        [
+            "home_team_strength_ratio",
+            "fatigue_index",
+            "odds_movement_away",
+        ],
+    )
+
+    assert result == [
+        "Tahmin sebebi: Ev Sahibi Kadro Kalite Oranı (+%50), "
+        "Yorgunluk ve Seyahat Endeksi (+%30), "
+        "Deplasman Oran Değişimi (+%20)"
+    ]
+
+
 def test_missing_importances_use_uniform_weights(monkeypatch):
     monkeypatch.setattr(explain, "SHAP_AVAILABLE", False)
 

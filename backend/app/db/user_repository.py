@@ -41,7 +41,7 @@ class UserRepository:
         found = {role.name for role in roles}
         missing = set(normalized_roles) - found
         if missing:
-            raise ValueError(f"Unknown roles: {', '.join(sorted(missing))}")
+            raise ValueError(f"Bilinmeyen roller: {', '.join(sorted(missing))}")
 
         user = User(
             username=username.strip().lower(),
@@ -83,7 +83,7 @@ class UserRepository:
             found = {role.name for role in roles}
             missing = set(normalized_roles) - found
             if missing:
-                raise ValueError(f"Unknown roles: {', '.join(sorted(missing))}")
+                raise ValueError(f"Bilinmeyen roller: {', '.join(sorted(missing))}")
             user.roles = roles
 
         if is_active is not None:

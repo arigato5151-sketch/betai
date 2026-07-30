@@ -23,7 +23,7 @@ function LoginForm({
     <main className="flex min-h-screen items-center justify-center bg-slate-950 p-4 text-slate-100">
       <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4 rounded-lg border border-slate-800 bg-slate-900 p-6 shadow-xl">
         <div className="flex items-center justify-between gap-3">
-          <h1 className="text-xl font-black text-emerald-400">BET AI PLATFORM PRO</h1>
+          <h1 className="text-xl font-black text-emerald-400">BET AI TAHMİN PLATFORMU</h1>
           <DemoModeBadge apiMode={apiMode} />
         </div>
         <input

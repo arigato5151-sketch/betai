@@ -6,7 +6,7 @@ import { buildBankrollSeries } from "./bankroll.js";
 test("builds labeled bankroll series and summary", () => {
   const result = buildBankrollSeries([1000, 1015.25, 990, 1042.75]);
 
-  assert.deepEqual(result.labels, ["Baslangic", "Bahis 1", "Bahis 2", "Bahis 3"]);
+  assert.deepEqual(result.labels, ["Başlangıç", "Bahis 1", "Bahis 2", "Bahis 3"]);
   assert.deepEqual(result.values, [1000, 1015.25, 990, 1042.75]);
   assert.equal(result.change, 42.75);
   assert.equal(result.min, 990);

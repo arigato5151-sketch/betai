@@ -11,7 +11,7 @@ export function historyItemToSelectedMatch(rawDbItem) {
     rawDbItem.ml_cluster === null || rawDbItem.ml_cluster === undefined;
 
   return {
-    match: `${rawDbItem.home_team} vs ${rawDbItem.away_team}`,
+    match: `${rawDbItem.home_team} – ${rawDbItem.away_team}`,
     odd: rawDbItem.odd,
     home_stats: {
       form: rawDbItem.home_form,
@@ -39,7 +39,7 @@ export function historyItemToSelectedMatch(rawDbItem) {
       edge: rawDbItem.edge,
     },
     ml_safety_trigger: mlInsufficient
-      ? "YETERLI VERI YOK"
+      ? "INSUFFICIENT_DATA"
       : rawDbItem.ml_cluster === 1
         ? "HIGH_CONFIDENCE"
         : "RISKY_UNDERDOG",
@@ -83,7 +83,7 @@ function HistoryContainer({
     setError("");
     request(`/history${buildHistoryQuery(filters, requestedPage)}`)
       .then((response) => {
-        if (!response.ok) throw new Error("Tahmin geÃ§miÅŸi alÄ±namadÄ±.");
+        if (!response.ok) throw new Error("Tahmin geçmişi alınamadı.");
         return response.json();
       })
       .then((data) => {
@@ -106,7 +106,7 @@ function HistoryContainer({
         if (currentRequestId !== requestId.current) return;
         setHistory([]);
         setMeta({ total: 0, pages: 1 });
-        setError(requestError.message || "Tahmin gecmisi alinamadi.");
+        setError(requestError.message || "Tahmin geçmişi alınamadı.");
       })
       .finally(() => {
         if (currentRequestId === requestId.current) setLoading(false);

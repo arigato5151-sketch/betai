@@ -16,6 +16,8 @@ from sqlalchemy import (
     Table,
     UniqueConstraint,
     Index,
+    false,
+    true,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -338,11 +340,137 @@ class TeamLocation(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    location_source: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="manual",
+        server_default="manual",
+    )
+    confidence: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=1.0,
+        server_default="1.0",
+    )
+    details: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     ingested_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class ProviderTeamMapping(Base):
+    __tablename__ = "provider_team_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "canonical_source",
+            "canonical_team_id",
+            "provider",
+            name="uq_provider_team_mappings_canonical_provider",
+        ),
+        UniqueConstraint(
+            "provider",
+            "provider_team_key",
+            name="uq_provider_team_mappings_provider_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    canonical_source: Mapped[str] = mapped_column(String(50), nullable=False)
+    canonical_team_id: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, index=True
+    )
+    canonical_team_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    provider_team_key: Mapped[str] = mapped_column(String(150), nullable=False)
+    provider_team_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(
+        String(150), nullable=False, index=True
+    )
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class ExternalFeatureSnapshot(Base):
+    __tablename__ = "external_feature_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "canonical_source",
+            "canonical_team_id",
+            "provider",
+            "feature_name",
+            "captured_at",
+            name="uq_external_feature_snapshots_observation",
+        ),
+        Index(
+            "ix_external_feature_snapshots_lookup",
+            "canonical_source",
+            "canonical_team_id",
+            "feature_name",
+            "captured_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    canonical_source: Mapped[str] = mapped_column(String(50), nullable=False)
+    canonical_team_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    feature_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    numeric_value: Mapped[float] = mapped_column(Float, nullable=False)
+    captured_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    is_fallback: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
+    details: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class FixtureOddsSnapshot(Base):
+    __tablename__ = "fixture_odds_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "fixture_id",
+            "captured_at",
+            name="uq_fixture_odds_snapshots_fixture_captured",
+        ),
+        Index(
+            "ix_fixture_odds_snapshots_fixture_captured",
+            "fixture_id",
+            "captured_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fixture_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    home_odd: Mapped[float] = mapped_column(Float, nullable=False)
+    draw_odd: Mapped[float] = mapped_column(Float, nullable=False)
+    away_odd: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    bookmaker: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    captured_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    details: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
     )
 
 

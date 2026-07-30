@@ -14,6 +14,10 @@ _TEAM_ALIASES = {
     "wolves": "wolverhampton wanderers",
 }
 
+_TEAM_TOKEN_ALIASES = {
+    "moskva": "moscow",
+}
+
 
 def stable_team_name_key(value: str) -> str:
     """Return an immutable source identity key without mutable alias rules."""
@@ -31,4 +35,9 @@ def stable_team_name_key(value: str) -> str:
 def normalize_team_name(value: str) -> str:
     """Return an alias-aware key for matching names across providers."""
     normalized = stable_team_name_key(value)
-    return _TEAM_ALIASES.get(normalized, normalized)
+    normalized = _TEAM_ALIASES.get(normalized, normalized)
+    tokens = normalized.split()
+    if tokens and tokens[0] in {"fc", "fk"}:
+        # API-Football and CSV feeds use FC/FK interchangeably for some clubs.
+        tokens[0] = "fc"
+    return " ".join(_TEAM_TOKEN_ALIASES.get(token, token) for token in tokens)

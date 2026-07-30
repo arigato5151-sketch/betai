@@ -39,11 +39,11 @@ class OriginValidationMiddleware(BaseHTTPMiddleware):
         normalized_origin = origin.rstrip("/") if origin else None
         if normalized_origin and normalized_origin not in self.allowed_origins:
             return JSONResponse(
-                status_code=403, content={"detail": "Untrusted request origin"}
+                status_code=403, content={"detail": "İstek kaynağına güvenilmiyor."}
             )
         if not normalized_origin and self.require_origin_header:
             return JSONResponse(
-                status_code=403, content={"detail": "Origin header is required"}
+                status_code=403, content={"detail": "Origin başlığı gereklidir."}
             )
 
         auth_cookie_present = any(
@@ -61,6 +61,6 @@ class OriginValidationMiddleware(BaseHTTPMiddleware):
             ):
                 return JSONResponse(
                     status_code=403,
-                    content={"detail": "CSRF token is missing or invalid"},
+                    content={"detail": "CSRF belirteci eksik veya geçersiz."},
                 )
         return await call_next(request)

@@ -55,6 +55,8 @@ def test_celery_connection_recovery_and_delivery_guards_are_enabled() -> None:
     assert celery_app.conf.task_reject_on_worker_lost is True
     assert celery_app.conf.worker_cancel_long_running_tasks_on_connection_loss is True
     assert set(celery_app.conf.beat_schedule) == {
+        "collect-upcoming-lineups",
+        "collect-upcoming-odds",
         "sync-football-data-fixtures-daily",
         "sync-completed-matches-daily",
         "retrain-ml-model-weekly",

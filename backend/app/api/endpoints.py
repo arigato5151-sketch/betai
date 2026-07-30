@@ -1,5 +1,7 @@
 import asyncio
+import math
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -33,6 +35,10 @@ from app.db.player_context_repository import PlayerContextRepository
 from app.db.models import HistoricalFixture
 from app.services.api_football import APIFootballClient
 from app.services.data_quality import DataQualityService
+from app.services.external_features import external_feature_service
+from app.services.odds_history import odds_history_service
+from app.services.sportmonks_players import sportmonks_player_service
+from app.services.travel_context import travel_context_service
 from app.prediction.stats_engine import StatsEngine
 from app.prediction.ensemble import ProbabilityEnsembler
 from app.prediction.value_calc import ValueCalc
@@ -44,6 +50,7 @@ from app.prediction.ml.historical import (
     PlayerRatingValue,
 )
 from app.prediction.player_impact import PlayerImpactCalculator
+from app.prediction.input_catalog import AnalysisInputCatalog
 from app.prediction.ml.explain import ExplainabilityService
 from app.prediction.ml.active_learning import ActiveLearningSelector
 from app.prediction.audit import PredictionAuditor
@@ -331,6 +338,7 @@ class AnalysisRequest(BaseModel):
             "are used when omitted."
         ),
     )
+    feature_overrides: Dict[str, float] = Field(default_factory=dict)
 
     @field_validator("home_team", "away_team")
     @classmethod
@@ -345,6 +353,11 @@ class AnalysisRequest(BaseModel):
         if not isinstance(v, (int, float)) or v <= 1.0:
             raise ValueError("Odd must be numeric and > 1.0")
         return round(float(v), 3)
+
+    @field_validator("feature_overrides", mode="before")
+    @classmethod
+    def validate_feature_overrides(cls, value: object) -> Dict[str, float]:
+        return AnalysisInputCatalog.validate_overrides(value)
 
     @model_validator(mode="after")
     def validate_odds_snapshot_timeline(self) -> "AnalysisRequest":
@@ -462,6 +475,10 @@ def _build_payload_from_prefill(prefill: Dict[str, Any]) -> AnalysisRequest:
         away_stats=TeamStatsInput(**prefill["away_stats"]),
         odd=prefill["odd"],
         market_1x2=market or None,
+        opening_odds_1x2=prefill.get("opening_odds_1x2"),
+        current_odds_1x2=prefill.get("current_odds_1x2"),
+        opening_odds_at=prefill.get("opening_odds_at"),
+        current_odds_at=prefill.get("current_odds_at"),
         fixture_id=fixture.get("fixture_id"),
         home_team_id=fixture.get("home_team_id"),
         away_team_id=fixture.get("away_team_id"),
@@ -587,14 +604,18 @@ async def _fetch_ml_match_data(
             payload.fixture_id, home_team_id, away_team_id
         )
 
-    home_matches_df, away_matches_df, h2h_rates, availability_data, lineup_data = (
-        await asyncio.gather(
-            recent_matches(historical.home_matches_df, home_team_id),
-            recent_matches(historical.away_matches_df, away_team_id),
-            h2h(),
-            availability(),
-            lineups(),
-        )
+    (
+        home_matches_df,
+        away_matches_df,
+        h2h_rates,
+        availability_data,
+        lineup_data,
+    ) = await asyncio.gather(
+        recent_matches(historical.home_matches_df, home_team_id),
+        recent_matches(historical.away_matches_df, away_team_id),
+        h2h(),
+        availability(),
+        lineups(),
     )
     return (
         home_matches_df,
@@ -695,6 +716,7 @@ async def _fetch_player_rating_data(
 
     async def merged_ratings(
         team_id: int,
+        team_name: str,
         local: dict[int, PlayerRatingValue],
         reference_lineup: list[int] | None,
     ) -> dict[int, PlayerRatingValue]:
@@ -706,9 +728,20 @@ async def _fetch_player_rating_data(
             league_id=payload.league_id,
         )
         if _derive_reference_lineup(live) is None:
-            # Never manufacture an XI by mixing an incomplete current roster with
-            # stale local-only players. The downstream neutral fallback is safer.
-            return local
+            alternative_raw = await sportmonks_player_service.get_team_player_ratings(
+                canonical_team_id=team_id,
+                canonical_team_name=team_name,
+                as_of=payload.kickoff or datetime.now(timezone.utc),
+            )
+            alternative: dict[int, PlayerRatingValue] = {
+                player_id: rating for player_id, rating in alternative_raw.items()
+            }
+            if _derive_reference_lineup(alternative) is None:
+                # Never manufacture an XI by mixing incomplete provider rosters.
+                return local
+            # Sportmonks IDs use a dedicated numeric namespace; do not mix them
+            # with API-Football IDs or stale local rows.
+            return alternative
 
         # The season feed defines current roster membership. Local rolling ratings
         # remain the fresher signal, but only for players present in that roster.
@@ -720,11 +753,13 @@ async def _fetch_player_rating_data(
     home_ratings, away_ratings = await asyncio.gather(
         merged_ratings(
             payload.home_team_id,
+            payload.home_team,
             home_local,
             historical.home_previous_starting_xi,
         ),
         merged_ratings(
             payload.away_team_id,
+            payload.away_team,
             away_local,
             historical.away_previous_starting_xi,
         ),
@@ -762,6 +797,101 @@ def _get_historical_feature_context(
         )
 
 
+async def _apply_external_elo_fallback(
+    payload: AnalysisRequest,
+    historical: HistoricalFeatureContext,
+) -> HistoricalFeatureContext:
+    if payload.kickoff is None:
+        return historical
+
+    home_result = away_result = None
+    requests = []
+    request_sides: list[str] = []
+    if (
+        not historical.home_elo_available
+        and payload.home_team_id is not None
+        and payload.home_team.strip()
+    ):
+        request_sides.append("home")
+        requests.append(
+            external_feature_service.get_team_elo(
+                canonical_team_id=payload.home_team_id,
+                canonical_team_name=payload.home_team,
+                as_of=payload.kickoff,
+            )
+        )
+    if (
+        not historical.away_elo_available
+        and payload.away_team_id is not None
+        and payload.away_team.strip()
+    ):
+        request_sides.append("away")
+        requests.append(
+            external_feature_service.get_team_elo(
+                canonical_team_id=payload.away_team_id,
+                canonical_team_name=payload.away_team,
+                as_of=payload.kickoff,
+            )
+        )
+    if requests:
+        results = await asyncio.gather(*requests)
+        for side, result in zip(request_sides, results, strict=True):
+            if side == "home":
+                home_result = result
+            else:
+                away_result = result
+
+    provenance = dict(historical.feature_provenance)
+    if home_result is not None:
+        provenance["home_elo"] = home_result.provenance()
+    if away_result is not None:
+        provenance["away_elo"] = away_result.provenance()
+    if home_result is None and away_result is None:
+        return historical
+    return replace(
+        historical,
+        home_elo=(
+            home_result.value if home_result is not None else historical.home_elo
+        ),
+        away_elo=(
+            away_result.value if away_result is not None else historical.away_elo
+        ),
+        home_elo_available=historical.home_elo_available or home_result is not None,
+        away_elo_available=historical.away_elo_available or away_result is not None,
+        feature_provenance=provenance,
+    )
+
+
+async def _apply_external_travel_fallback(
+    payload: AnalysisRequest,
+    historical: HistoricalFeatureContext,
+) -> HistoricalFeatureContext:
+    if (
+        not settings.AUTO_TEAM_LOCATION_ENABLED
+        or payload.away_travel_distance_km is not None
+        or historical.travel_context_available
+        or historical.away_travel_distance_km > 0
+        or payload.home_team_id is None
+        or payload.away_team_id is None
+    ):
+        return historical
+    point = await travel_context_service.get_away_travel_distance(
+        home_team_id=payload.home_team_id,
+        away_team_id=payload.away_team_id,
+        home_team_name=payload.home_team,
+        away_team_name=payload.away_team,
+        client=football_api,
+    )
+    if point is None:
+        return historical
+    return replace(
+        historical,
+        away_travel_distance_km=point.value,
+        travel_context_available=True,
+        travel_provenance=point.provenance(),
+    )
+
+
 async def _compute_analysis(payload: AnalysisRequest) -> dict:
     """Run analysis with external inputs and a short point-in-time history read."""
     home_stats = payload.home_stats.model_dump()
@@ -770,10 +900,18 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     ml_result: dict = {"ready": False}
     ml_explanations: List[str] = []
 
-    historical = _get_historical_feature_context(payload)
-    home_matches_df, away_matches_df, h2h_rates, availability, lineups = (
-        await _fetch_ml_match_data(payload, historical)
+    historical = await _apply_external_elo_fallback(
+        payload,
+        _get_historical_feature_context(payload),
     )
+    historical = await _apply_external_travel_fallback(payload, historical)
+    (
+        home_matches_df,
+        away_matches_df,
+        h2h_rates,
+        availability,
+        lineups,
+    ) = await _fetch_ml_match_data(payload, historical)
     home_player_ratings, away_player_ratings = await _fetch_player_rating_data(
         payload,
         historical,
@@ -825,7 +963,7 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         if payload.current_odds_1x2 is not None
         else None
     )
-    feature_vector = FeatureEngine.build_inference_features(
+    calculated_feature_vector = FeatureEngine.build_inference_features(
         home_stats=payload.home_stats.model_dump(),
         away_stats=payload.away_stats.model_dump(),
         home_matches_df=home_matches_df,
@@ -852,6 +990,14 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         home_player_impact=home_player_impact,
         away_player_impact=away_player_impact,
     )
+    feature_vector = {
+        name: float(
+            payload.feature_overrides.get(name, calculated_feature_vector[name])
+        )
+        for name in FeatureEngine.FEATURE_NAMES
+    }
+    if any(not math.isfinite(value) for value in feature_vector.values()):
+        raise ValueError("Feature vector contains non-finite values")
     if ml_pipeline.is_ready:
         ml_result = ml_pipeline.predict_match(feature_vector)
         if ml_result.get("ready"):
@@ -881,21 +1027,91 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     history_home_count = len(home_matches_df) if home_matches_df is not None else 0
     history_away_count = len(away_matches_df) if away_matches_df is not None else 0
     required_history = settings.RECENT_FORM_MATCH_COUNT
+    h2h_source = h2h_rates.get("source") if isinstance(h2h_rates, dict) else None
+    home_lineup = lineups.get("home_starting_xi") if isinstance(lineups, dict) else None
+    away_lineup = lineups.get("away_starting_xi") if isinstance(lineups, dict) else None
     quality_checks = {
         "fixture_identified": payload.fixture_id is not None,
+        "league_identified": payload.league_id is not None,
         "kickoff_known": payload.kickoff is not None,
         "market_available": payload.market_1x2 is not None,
+        "h2h_available": bool(
+            historical.h2h_matches
+            or (h2h_rates and h2h_source not in {"fallback", "demo_default"})
+        ),
+        "home_history_available": history_home_count > 0,
+        "away_history_available": history_away_count > 0,
         "home_history_sufficient": history_home_count >= required_history,
         "away_history_sufficient": history_away_count >= required_history,
-        "availability_available": availability is not None,
-        "lineups_available": lineups is not None,
+        "home_elo_available": historical.home_elo_available,
+        "away_elo_available": historical.away_elo_available,
+        "availability_available": bool(
+            isinstance(availability, dict)
+            and availability.get("availability_report_present")
+        ),
+        "lineups_available": bool(
+            isinstance(home_lineup, list)
+            and len(home_lineup) == 11
+            and isinstance(away_lineup, list)
+            and len(away_lineup) == 11
+        ),
         "home_player_impact_available": home_player_impact.data_available,
         "away_player_impact_available": away_player_impact.data_available,
         "travel_context_available": (
             payload.away_travel_distance_km is not None
+            or historical.travel_context_available
             or historical.away_travel_distance_km > 0
         ),
+        "odds_movement_available": bool(opening_odds and current_odds),
     }
+    feature_provenance = dict(historical.feature_provenance)
+    active_travel_provenance: dict[str, object] | None = (
+        {
+            "source": "manual_override",
+            "captured_at": None,
+            "confidence": 1.0,
+            "is_fallback": False,
+        }
+        if payload.away_travel_distance_km is not None
+        else historical.travel_provenance
+        or (
+            {
+                "source": "curated_team_locations",
+                "captured_at": None,
+                "confidence": 1.0,
+                "is_fallback": False,
+            }
+            if historical.away_travel_distance_km > 0
+            else None
+        )
+    )
+    if (
+        active_travel_provenance is not None
+        and quality_checks["home_history_sufficient"]
+        and quality_checks["away_history_sufficient"]
+    ):
+        travel_source = str(active_travel_provenance.get("source") or "team_locations")
+        feature_provenance["fatigue_index"] = {
+            **active_travel_provenance,
+            "source": f"schedule_and_{travel_source}",
+        }
+    if opening_odds and current_odds:
+        odds_provenance: dict[str, object] = {
+            "source": "api_football_odds",
+            "captured_at": (
+                payload.current_odds_at.isoformat()
+                if payload.current_odds_at is not None
+                else None
+            ),
+            "confidence": settings.ODDS_SNAPSHOT_CONFIDENCE,
+            "is_fallback": False,
+        }
+        feature_provenance.update(
+            {
+                feature_name: odds_provenance
+                for feature_name in AnalysisInputCatalog.ODDS_MOVEMENT_INPUTS
+            }
+        )
     data_quality = {
         "score": round(
             100.0
@@ -924,6 +1140,7 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
             ),
             2,
         ),
+        "travel_provenance": active_travel_provenance,
         "odds_snapshot": {
             "movement_features_used": bool(opening_odds and current_odds),
             "opening_captured_at": (
@@ -937,6 +1154,9 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
                 else None
             ),
         },
+        "manual_feature_overrides": sorted(payload.feature_overrides),
+        "manual_feature_override_count": len(payload.feature_overrides),
+        "feature_provenance": feature_provenance,
     }
 
     return {
@@ -944,6 +1164,7 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         "value_data": value_data,
         "ml_result": ml_result,
         "feature_vector": feature_vector,
+        "calculated_feature_vector": calculated_feature_vector,
         "insights": insights,
         "data_quality": data_quality,
     }
@@ -1052,8 +1273,11 @@ def list_allowed_leagues():
 
 
 @router.get("/fixtures/upcoming")
-async def list_upcoming_fixtures():
-    return await football_api.get_upcoming_fixtures()
+async def list_upcoming_fixtures(
+    days: int = Query(default=7, ge=1, le=14),
+    limit: int = Query(default=100, ge=1, le=200),
+):
+    return await football_api.get_upcoming_fixtures(days=days, limit=limit)
 
 
 @router.get("/fixtures/{fixture_id}/prefill")
@@ -1061,7 +1285,7 @@ async def fixture_prefill(fixture_id: int):
     payload = await football_api.get_fixture_prefill(fixture_id)
     if not payload:
         raise HTTPException(status_code=404, detail="Maç bulunamadı.")
-    return payload
+    return odds_history_service.enrich_prefill(payload)
 
 
 @router.post("/analyze", dependencies=[Depends(require_permission("analysis:create"))])
@@ -1074,6 +1298,38 @@ async def analyze_manual(payload: AnalysisRequest):
 
 
 @router.post(
+    "/analyze/preview",
+    dependencies=[Depends(require_permission("analysis:create"))],
+)
+async def preview_analysis_inputs(payload: AnalysisRequest):
+    """Return every point-in-time model input without persisting a prediction."""
+    try:
+        computed = await _compute_analysis(payload)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {
+        "feature_schema_version": FeatureEngine.SCHEMA_VERSION,
+        "features": AnalysisInputCatalog.build(
+            computed["calculated_feature_vector"],
+            payload.feature_overrides,
+            computed["data_quality"],
+        ),
+        "derived": {
+            "expected_goals": computed["analysis"].get("expected_goals"),
+            "player_impact": computed["analysis"].get("player_impact"),
+            "statistics_probabilities": (
+                computed["analysis"]
+                .get("ensemble", {})
+                .get("components", {})
+                .get("stats", computed["analysis"].get("all_probabilities"))
+            ),
+        },
+        "data_quality": computed["data_quality"],
+    }
+
+
+@router.post(
     "/analyze/fixture/{fixture_id}",
     dependencies=[Depends(require_permission("analysis:create"))],
 )
@@ -1081,6 +1337,7 @@ async def analyze_fixture(fixture_id: int):
     prefill = await football_api.get_fixture_prefill(fixture_id)
     if not prefill:
         raise HTTPException(status_code=404, detail="Maç bulunamadı.")
+    prefill = odds_history_service.enrich_prefill(prefill)
 
     try:
         payload = _build_payload_from_prefill(prefill)

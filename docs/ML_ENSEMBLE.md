@@ -19,13 +19,13 @@ sırasında bilinmeyen değerleri missing olarak ele alan pandas kategorilerine
 çevirir. Logistic Regression, Gradient Boosting, XGBoost ve Random Forest ham
 ID kolonlarını görmez; mevcut lig one-hot feature'larını kullanmaya devam eder.
 
-Eski `ml_features_v1-v6` snapshot'ları desteklenir. Eksik kategorik ID'ler `0`
+Eski `ml_features_v1-v7` snapshot'ları desteklenir. Eksik kategorik ID'ler `0`
 unknown token'ına dönüşür.
 
-## Feature schema v7
+## Feature schema v8
 
-Aktif snapshot sürümü `ml_features_v7`'dir. Bu sürüm model matrisine üç sayısal
-alan ekler:
+Aktif snapshot sürümü `ml_features_v8`'dir. Bir önceki v7 sürümü model matrisine
+üç sayısal alan eklemiştir:
 
 - `home_team_strength_ratio`
 - `away_team_strength_ratio`
@@ -52,6 +52,18 @@ Bu alanlar mevcut kategorik preprocessing'i değiştirmez. CatBoost ve LightGBM 
 ve lig kimliklerini native kategorik olarak işlerken üç v7 alanını sayısal feature
 olarak tüketir. Diğer adaylar da Team Strength Ratio ve fatigue değerlerini görür,
 ancak ham takım/lig ID'lerini görmez.
+
+V8, desteklenen UEFA organizasyonları için üç ayrık one-hot alan ekler:
+
+- `league_2`: UEFA Champions League
+- `league_3`: UEFA Europa League
+- `league_848`: UEFA Conference League
+
+Yeni veya az verili bu turnuvalar yeterli örnek oluşana kadar lig bazlı BMA'nın
+`low_data_prior` yolunu kullanır; bu yol Poisson/Dixon-Coles payını otomatik
+yükseltir. V7 model artifact'ları kendi `feature_names` listelerini taşıdığı için
+HMAC doğrulama ve rollback sözleşmesi bozulmaz. Eski snapshot'larda yeni one-hot
+alanların güvenli varsayılanı `0.0`'dır.
 
 Oyuncu-etkisi formülü, Poisson xG bağlantısı, veri sızıntısı koruması ve fatigue
 bileşenleri [`PLAYER_IMPACT_FATIGUE.md`](PLAYER_IMPACT_FATIGUE.md) belgesinde

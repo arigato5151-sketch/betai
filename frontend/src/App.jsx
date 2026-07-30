@@ -6,7 +6,9 @@ import AdminContainer from "./containers/AdminContainer.jsx";
 import AnalysisContainer from "./containers/AnalysisContainer.jsx";
 import HistoryContainer from "./containers/HistoryContainer.jsx";
 import OperationsContainer from "./containers/OperationsContainer.jsx";
+import UpcomingFixturesContainer from "./containers/UpcomingFixturesContainer.jsx";
 import { apiFetch, useAuth } from "./hooks/useAuth.js";
+import { roleLabel } from "./localization.js";
 import { allowedActions } from "./permissions.js";
 
 function App() {
@@ -25,6 +27,10 @@ function App() {
   const [apiMode, setApiMode] = useState("unknown");
   const [registrationEnabled, setRegistrationEnabled] = useState(false);
   const [selectedMatch, setSelectedMatch] = useState(null);
+  const [fixtureSelection, setFixtureSelection] = useState({
+    fixture: null,
+    revision: 0,
+  });
   const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const actions = useMemo(() => allowedActions(sessionUser), [sessionUser]);
@@ -33,7 +39,7 @@ function App() {
   useEffect(() => {
     apiFetch("/status", {}, false)
       .then(async (response) => {
-        if (!response.ok) throw new Error("Platform durumu alinamadi.");
+        if (!response.ok) throw new Error("Platform durumu alınamadı.");
         const status = await response.json();
         setApiMode(normalizeApiMode(status));
         setRegistrationEnabled(Boolean(status.registration_enabled));
@@ -45,6 +51,21 @@ function App() {
     await logout();
     setSelectedMatch(null);
     setAdminPanelOpen(false);
+  };
+
+  const handleFixtureSelection = (fixture) => {
+    setSelectedMatch(null);
+    setFixtureSelection((current) => ({
+      fixture,
+      revision: current.revision + 1,
+    }));
+  };
+
+  const clearFixtureSelection = () => {
+    setFixtureSelection((current) => ({
+      fixture: null,
+      revision: current.revision,
+    }));
   };
 
   if (authenticated === null) {
@@ -73,12 +94,13 @@ function App() {
         <div>
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl font-black tracking-wider text-emerald-400">
-              BET AI PLATFORM PRO
+              BET AI TAHMİN PLATFORMU
             </h1>
             <DemoModeBadge apiMode={apiMode} />
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            {sessionUser?.username} Â· {(sessionUser?.roles ?? []).join(", ")}
+            {sessionUser?.username} ·{" "}
+            {(sessionUser?.roles ?? []).map(roleLabel).join(", ")}
           </p>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
@@ -88,7 +110,7 @@ function App() {
               onClick={() => setAdminPanelOpen((open) => !open)}
               className="rounded border border-emerald-800 px-3 py-1 text-sm text-emerald-400 hover:border-emerald-500"
             >
-              KullanÄ±cÄ± YÃ¶netimi
+              Kullanıcı Yönetimi
             </button>
           )}
           <button
@@ -96,7 +118,7 @@ function App() {
             onClick={handleLogout}
             className="rounded border border-slate-700 px-3 py-1 text-sm hover:border-emerald-500"
           >
-            Ã‡Ä±kÄ±ÅŸ
+            Çıkış
           </button>
         </div>
       </header>
@@ -109,11 +131,19 @@ function App() {
         request={apiFetch}
       />
 
+      <UpcomingFixturesContainer
+        onSelectFixture={actions.analyze ? handleFixtureSelection : undefined}
+        request={apiFetch}
+        selectedFixtureId={fixtureSelection.fixture?.fixture_id}
+      />
+
       <OperationsContainer actions={actions} request={apiFetch} />
 
       <main className="mx-auto grid max-w-7xl grid-cols-1 gap-8 lg:grid-cols-3">
         <AnalysisContainer
           actions={actions}
+          fixtureSelection={fixtureSelection}
+          onClearFixtureSelection={clearFixtureSelection}
           onHistoryChanged={() =>
             setHistoryRefreshToken((current) => current + 1)
           }

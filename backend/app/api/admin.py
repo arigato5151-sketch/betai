@@ -142,6 +142,9 @@ class AdminTeamLocationResponse(BaseModel):
     name: str
     latitude: float | None
     longitude: float | None
+    location_source: str
+    confidence: float
+    details: dict[str, object] | None
 
 
 class AdminTeamLocationUpsertResponse(BaseModel):
@@ -176,6 +179,9 @@ def _team_location_response(location: TeamLocation) -> AdminTeamLocationResponse
         name=location.name,
         latitude=location.latitude,
         longitude=location.longitude,
+        location_source=location.location_source,
+        confidence=location.confidence,
+        details=location.details,
     )
 
 

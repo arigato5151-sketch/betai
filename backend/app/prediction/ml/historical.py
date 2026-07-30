@@ -22,6 +22,9 @@ PlayerRatingValue = float | dict[str, float]
 class HistoricalFeatureContext:
     home_elo: float = 1500.0
     away_elo: float = 1500.0
+    home_elo_available: bool = False
+    away_elo_available: bool = False
+    feature_provenance: dict[str, dict[str, object]] = field(default_factory=dict)
     h2h_rates: dict[str, float | str] | None = None
     h2h_matches: list[dict[str, int]] | None = None
     home_matches_df: pd.DataFrame | None = None
@@ -33,6 +36,8 @@ class HistoricalFeatureContext:
     home_player_ratings: dict[int, PlayerRatingValue] = field(default_factory=dict)
     away_player_ratings: dict[int, PlayerRatingValue] = field(default_factory=dict)
     away_travel_distance_km: float = 0.0
+    travel_context_available: bool = False
+    travel_provenance: dict[str, object] | None = None
 
 
 class HistoricalFeatureService:
@@ -122,23 +127,76 @@ class HistoricalFeatureService:
         home_player_ratings: dict[int, PlayerRatingValue] = {}
         away_player_ratings: dict[int, PlayerRatingValue] = {}
         away_travel_distance_km = 0.0
+        travel_context_available = False
+        travel_provenance: dict[str, object] | None = None
         if self.player_context_repository is not None:
             home_player_ratings = self._player_rating_map(home_team_id, before)
             away_player_ratings = self._player_rating_map(away_team_id, before)
             try:
-                away_travel_distance_km = (
-                    self.player_context_repository.travel_distance_km(
-                        away_team_id,
-                        home_team_id,
-                    )
+                home_location = self.player_context_repository.get_team_location(
+                    home_team_id
                 )
+                away_location = self.player_context_repository.get_team_location(
+                    away_team_id
+                )
+                if (
+                    home_location is not None
+                    and away_location is not None
+                    and home_location.latitude is not None
+                    and home_location.longitude is not None
+                    and away_location.latitude is not None
+                    and away_location.longitude is not None
+                ):
+                    away_travel_distance_km = (
+                        self.player_context_repository.travel_distance_km(
+                            away_team_id,
+                            home_team_id,
+                        )
+                    )
+                    travel_context_available = True
+                    sources = sorted(
+                        {
+                            home_location.location_source,
+                            away_location.location_source,
+                        }
+                    )
+                    latest = max(
+                        home_location.updated_at,
+                        away_location.updated_at,
+                    )
+                    travel_provenance = {
+                        "source": (
+                            "geonames_city"
+                            if "geonames_city" in sources
+                            else "curated_team_locations"
+                        ),
+                        "captured_at": latest.isoformat(),
+                        "confidence": min(
+                            home_location.confidence,
+                            away_location.confidence,
+                        ),
+                        "is_fallback": "geonames_city" in sources,
+                    }
             except ValueError:
                 # Synthetic/legacy negative team IDs have no provider location mapping.
                 away_travel_distance_km = 0.0
 
+        feature_provenance: dict[str, dict[str, object]] = {}
+        if home_team_id in ratings:
+            feature_provenance["home_elo"] = self._elo_provenance(
+                home_matches, recent_match_count
+            )
+        if away_team_id in ratings:
+            feature_provenance["away_elo"] = self._elo_provenance(
+                away_matches, recent_match_count
+            )
+
         return HistoricalFeatureContext(
             home_elo=ratings.get(home_team_id, 1500.0),
             away_elo=ratings.get(away_team_id, 1500.0),
+            home_elo_available=home_team_id in ratings,
+            away_elo_available=away_team_id in ratings,
+            feature_provenance=feature_provenance,
             h2h_rates=h2h_rates,
             h2h_matches=h2h_matches,
             home_matches_df=self._team_matches_frame(home_matches, home_team_id),
@@ -160,7 +218,23 @@ class HistoricalFeatureService:
             home_player_ratings=home_player_ratings,
             away_player_ratings=away_player_ratings,
             away_travel_distance_km=away_travel_distance_km,
+            travel_context_available=travel_context_available,
+            travel_provenance=travel_provenance,
         )
+
+    @staticmethod
+    def _elo_provenance(
+        fixtures: list[HistoricalFixture],
+        expected_count: int,
+    ) -> dict[str, object]:
+        latest = max((fixture.kickoff for fixture in fixtures), default=None)
+        confidence = min(1.0, len(fixtures) / max(1, expected_count))
+        return {
+            "source": "historical_fixtures",
+            "captured_at": latest.isoformat() if latest is not None else None,
+            "confidence": round(confidence, 4),
+            "is_fallback": False,
+        }
 
     def _player_rating_map(
         self,
@@ -334,12 +408,13 @@ class HistoricalFeatureService:
             return requested_team_id
 
         target = normalize_team_name(requested_team_name)
-        for fixture in reversed(fixtures):
+        candidates: set[int] = set()
+        for fixture in fixtures:
             if normalize_team_name(fixture.home_team) == target:
-                return fixture.home_team_id
+                candidates.add(fixture.home_team_id)
             if normalize_team_name(fixture.away_team) == target:
-                return fixture.away_team_id
-        return requested_team_id
+                candidates.add(fixture.away_team_id)
+        return candidates.pop() if len(candidates) == 1 else requested_team_id
 
     @staticmethod
     def _elo_row(fixture: HistoricalFixture) -> dict:

@@ -24,3 +24,4 @@ pydantic-settings==2.14.2
 PyJWT[crypto]==2.13.0
 bcrypt==5.0.0
 scipy==1.11.3
+geonamescache==3.0.1

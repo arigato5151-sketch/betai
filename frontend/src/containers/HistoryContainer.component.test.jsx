@@ -24,7 +24,7 @@ describe("historyItemToSelectedMatch", () => {
       model_artifact_version: "v1",
     });
 
-    expect(selected.match).toBe("Home vs Away");
+    expect(selected.match).toBe("Home – Away");
     expect(selected.analysis.all_probabilities).toEqual({
       HOME_WIN: 55,
       AWAY_WIN: 20,
@@ -34,7 +34,7 @@ describe("historyItemToSelectedMatch", () => {
       value_bet: true,
       edge: 6.5,
     });
-    expect(selected.ml_safety_trigger).toBe("YETERLI VERI YOK");
+    expect(selected.ml_safety_trigger).toBe("INSUFFICIENT_DATA");
     expect(selected.provenance.model_artifact_version).toBe("v1");
   });
 

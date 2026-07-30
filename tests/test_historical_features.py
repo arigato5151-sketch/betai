@@ -375,6 +375,10 @@ def test_away_travel_distance_uses_team_locations(
     )
 
     assert context.away_travel_distance_km == pytest.approx(351.0, abs=2.0)
+    assert context.travel_context_available is True
+    assert context.travel_provenance is not None
+    assert context.travel_provenance["source"] == "curated_team_locations"
+    assert context.travel_provenance["confidence"] == pytest.approx(1.0)
 
 
 def test_optional_player_repository_and_missing_locations_are_neutral(
@@ -400,6 +404,8 @@ def test_optional_player_repository_and_missing_locations_are_neutral(
     )
 
     assert missing_location.away_travel_distance_km == 0.0
+    assert missing_location.travel_context_available is False
     assert no_player_repository.away_travel_distance_km == 0.0
+    assert no_player_repository.travel_context_available is False
     assert no_player_repository.home_player_ratings == {}
     assert no_player_repository.away_player_ratings == {}

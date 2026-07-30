@@ -8,7 +8,9 @@ export const buildBankrollSeries = (history = []) => {
   }
 
   return {
-    labels: values.map((_, index) => (index === 0 ? "Baslangic" : `Bahis ${index}`)),
+    labels: values.map((_, index) =>
+      index === 0 ? "Başlangıç" : `Bahis ${index}`,
+    ),
     values,
     change: Number((values.at(-1) - values[0]).toFixed(2)),
     min: Math.min(...values),

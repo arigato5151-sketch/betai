@@ -1,8 +1,9 @@
 import asyncio
 import logging
 import math
-from datetime import date, datetime, timedelta
-from typing import Dict, List, Optional
+from datetime import date, datetime, time, timedelta
+from typing import Any, Dict, List, Optional, cast
+from zoneinfo import ZoneInfo
 import pandas as pd
 import httpx
 
@@ -142,12 +143,16 @@ class APIFootballClient:
         return DEMO_LIVE_FIXTURES
 
     async def get_upcoming_fixtures(
-        self, days: int = 10, limit: int = 100
+        self, days: int = 7, limit: int = 100
     ) -> List[Dict]:
         if self._is_demo_key():
-            return self._filter_allowed_leagues(DEMO_UPCOMING_FIXTURES)[:limit]
+            return self._demo_upcoming_fixtures(days=days, limit=limit)
 
-        cache_key = f"upcoming:{days}:{limit}"
+        # Lig kapsamını anahtara katarak allowlist değişikliklerinde eski cache'i atla.
+        league_scope = ",".join(
+            str(league_id) for league_id in sorted(cast(set[int], ALLOWED_LEAGUE_IDS))
+        )
+        cache_key = f"upcoming:v2:{league_scope}:{days}:{limit}"
         cached = await cache.get("fixtures", cache_key)
         if cached:
             return cached
@@ -173,18 +178,12 @@ class APIFootballClient:
                     continue
                 fixtures.append(self._normalize_fixture(item, is_live=False))
 
-        fixtures = self._filter_allowed_leagues(fixtures)
-        fixtures.sort(
-            key=lambda f: (
-                LEAGUE_PRIORITY.get(f.get("league_id"), 99),
-                f.get("kickoff") or "",
-            )
-        )
+        fixtures = self._sort_upcoming_fixtures(self._filter_allowed_leagues(fixtures))
 
         result = (
             fixtures[:limit]
             if fixtures
-            else self._filter_allowed_leagues(DEMO_UPCOMING_FIXTURES)[:limit]
+            else self._demo_upcoming_fixtures(days=days, limit=limit)
         )
         await cache.set("fixtures", cache_key, result, 900)  # 15 min TTL
         return result
@@ -192,6 +191,54 @@ class APIFootballClient:
     @staticmethod
     def _filter_allowed_leagues(fixtures: List[Dict]) -> List[Dict]:
         return [f for f in fixtures if f.get("league_id") in ALLOWED_LEAGUE_IDS]
+
+    @staticmethod
+    def _upcoming_sort_key(fixture: Dict) -> tuple[float, int, int]:
+        raw_kickoff = fixture.get("kickoff")
+        timestamp = float("inf")
+        if isinstance(raw_kickoff, str):
+            try:
+                kickoff = datetime.fromisoformat(raw_kickoff.replace("Z", "+00:00"))
+                if kickoff.tzinfo is None:
+                    kickoff = kickoff.replace(tzinfo=ZoneInfo("Europe/Istanbul"))
+                timestamp = kickoff.timestamp()
+            except ValueError:
+                pass
+
+        fixture_id = fixture.get("fixture_id")
+        return (
+            timestamp,
+            LEAGUE_PRIORITY.get(fixture.get("league_id"), 99),
+            fixture_id if isinstance(fixture_id, int) else 0,
+        )
+
+    @classmethod
+    def _sort_upcoming_fixtures(cls, fixtures: List[Dict]) -> List[Dict]:
+        return sorted(fixtures, key=cls._upcoming_sort_key)
+
+    @classmethod
+    def _demo_upcoming_fixtures(cls, days: int, limit: int) -> List[Dict]:
+        """Project deterministic demo teams into the requested upcoming horizon."""
+        horizon_days = max(1, days)
+        istanbul = ZoneInfo("Europe/Istanbul")
+        today = datetime.now(istanbul).date()
+        kickoff_times = (time(19, 0), time(21, 45), time(18, 30), time(20, 0))
+        fixtures: List[Dict] = []
+
+        for index, source in enumerate(
+            cls._filter_allowed_leagues(DEMO_UPCOMING_FIXTURES)
+        ):
+            kickoff = datetime.combine(
+                today + timedelta(days=index % horizon_days),
+                kickoff_times[index % len(kickoff_times)],
+                tzinfo=istanbul,
+            )
+            fixture = dict(source)
+            fixture["kickoff"] = kickoff.isoformat()
+            fixture["kickoff_label"] = kickoff.strftime("%d.%m %H:%M")
+            fixtures.append(fixture)
+
+        return cls._sort_upcoming_fixtures(fixtures)[:limit]
 
     async def get_fixture_by_id(self, fixture_id: int) -> Optional[Dict]:
         if self._is_demo_key():
@@ -446,7 +493,16 @@ class APIFootballClient:
             "away_starting_xi": lineups.get(away_team_id),
             "source": "api_football_lineups",
         }
-        await cache.set("match_data", cache_key, result, 900)
+        home_starting_xi = result["home_starting_xi"]
+        away_starting_xi = result["away_starting_xi"]
+        confirmed = (
+            isinstance(home_starting_xi, list)
+            and len(home_starting_xi) == 11
+            and isinstance(away_starting_xi, list)
+            and len(away_starting_xi) == 11
+        )
+        # Official XI data is stable through kickoff; incomplete responses are retried.
+        await cache.set("match_data", cache_key, result, 21600 if confirmed else 900)
         return result
 
     @staticmethod
@@ -639,6 +695,20 @@ class APIFootballClient:
 
         fixtures: List[Dict] = []
         for item in data.get("response", []):
+            item_league = item.get("league", {})
+            if (
+                item_league.get("id") != league_id
+                or item_league.get("season") != season
+            ):
+                logger.warning(
+                    "Ignoring fixture outside requested league-season: "
+                    "requested=%s/%s received=%s/%s",
+                    league_id,
+                    season,
+                    item_league.get("id"),
+                    item_league.get("season"),
+                )
+                continue
             normalized = self._normalize_completed_fixture(item)
             if normalized is not None:
                 fixtures.append(normalized)
@@ -655,6 +725,14 @@ class APIFootballClient:
         away = teams.get("away", {})
         home_goals = goals.get("home")
         away_goals = goals.get("away")
+        fulltime = item.get("score", {}).get("fulltime", {})
+        if isinstance(fulltime, dict):
+            # 1X2 pazarı 90 dakika sonucudur; uzatma/penaltı golleri hedefe sızmamalı.
+            fulltime_home = fulltime.get("home")
+            fulltime_away = fulltime.get("away")
+            if fulltime_home is not None and fulltime_away is not None:
+                home_goals = fulltime_home
+                away_goals = fulltime_away
 
         required = (
             fixture.get("id"),
@@ -893,6 +971,49 @@ class APIFootballClient:
         await cache.set("stats", cache_key, profile, 21600)
         return profile
 
+    async def get_team_venue_context(self, team_id: int) -> Optional[Dict[str, Any]]:
+        """Return validated team and venue city metadata for offline geocoding."""
+        if isinstance(team_id, bool) or not isinstance(team_id, int) or team_id <= 0:
+            raise ValueError("team_id must be a positive integer")
+        if self._is_demo_key():
+            return None
+
+        cache_key = f"venue-context:{team_id}"
+        cached = await cache.get("teams", cache_key)
+        if isinstance(cached, dict):
+            return cached
+
+        data = await self._request_with_retry("teams", {"id": str(team_id)})
+        response = data.get("response", []) if isinstance(data, dict) else []
+        if not isinstance(response, list) or len(response) != 1:
+            return None
+        item = response[0]
+        if not isinstance(item, dict):
+            return None
+        team = item.get("team")
+        venue = item.get("venue")
+        if not isinstance(team, dict) or not isinstance(venue, dict):
+            return None
+        if team.get("id") != team_id:
+            return None
+
+        team_name = str(team.get("name") or "").strip()
+        country = str(team.get("country") or "").strip()
+        city = str(venue.get("city") or "").strip()
+        if not team_name or not country or not city:
+            return None
+        context: Dict[str, Any] = {
+            "team_id": team_id,
+            "team_name": team_name[:100],
+            "country": country[:100],
+            "city": city[:100],
+            "venue_id": venue.get("id"),
+            "venue_name": str(venue.get("name") or "").strip()[:150] or None,
+            "source": "api_football_teams",
+        }
+        await cache.set("teams", cache_key, context, 30 * 86400)
+        return context
+
     async def get_fixture_market(self, fixture_id: int) -> Optional[Dict]:
         if self._is_demo_key() and fixture_id in DEMO_FIXTURE_ODDS:
             # Fallback to devigged synthetic
@@ -957,9 +1078,9 @@ class APIFootballClient:
 
         return {
             "fixture_id": fixture.get("id"),
-            "league": league.get("name", "Unknown League"),
-            "home_team": home.get("name", "Home"),
-            "away_team": away.get("name", "Away"),
+            "league": league.get("name", "Bilinmeyen Lig"),
+            "home_team": home.get("name", "Ev Sahibi"),
+            "away_team": away.get("name", "Deplasman"),
             "home_team_id": home.get("id", 0),
             "away_team_id": away.get("id", 0),
             "league_id": league.get("id", 0),

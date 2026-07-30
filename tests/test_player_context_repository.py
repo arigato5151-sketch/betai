@@ -263,6 +263,9 @@ def test_sqlite_location_upsert_is_scoped_by_source_and_team() -> None:
         assert manual is not None
         assert updated.id == original_id
         assert updated.name == "Istanbul FC"
+        assert updated.location_source == "manual"
+        assert updated.confidence == pytest.approx(1.0)
+        assert updated.details is None
         assert len(repository.get_all_team_locations()) == 2
     finally:
         session.close()

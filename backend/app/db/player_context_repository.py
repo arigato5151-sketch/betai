@@ -348,6 +348,27 @@ class PlayerContextRepository:
                 if longitude is None
                 else _validated_coordinate(longitude, "longitude", -180.0, 180.0)
             )
+            location_source = str(row.get("location_source") or "manual").strip()
+            if not location_source:
+                raise ValueError("location_source cannot be blank")
+            confidence = row.get("confidence", 1.0)
+            if isinstance(confidence, bool):
+                raise ValueError("confidence must be between 0 and 1")
+            try:
+                numeric_confidence = float(str(confidence))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("confidence must be between 0 and 1") from exc
+            if (
+                not math.isfinite(numeric_confidence)
+                or not 0.0 <= numeric_confidence <= 1.0
+            ):
+                raise ValueError("confidence must be between 0 and 1")
+            details = row.get("details")
+            if details is not None and not isinstance(details, Mapping):
+                raise ValueError("details must be an object")
+            row["location_source"] = location_source[:50]
+            row["confidence"] = numeric_confidence
+            row["details"] = dict(details) if isinstance(details, Mapping) else None
             row["ingested_at"] = row.get("ingested_at") or timestamp
             row["updated_at"] = timestamp
             rows_by_key[(data_source[:50], team_id)] = row

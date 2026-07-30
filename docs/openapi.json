@@ -576,12 +576,48 @@
       "get": {
         "summary": "List Upcoming Fixtures",
         "operationId": "list_upcoming_fixtures_api_fixtures_upcoming_get",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 14,
+              "minimum": 1,
+              "default": 7,
+              "title": "Days"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -629,6 +665,48 @@
       "post": {
         "summary": "Analyze Manual",
         "operationId": "analyze_manual_api_analyze_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalysisRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ]
+      }
+    },
+    "/api/analyze/preview": {
+      "post": {
+        "summary": "Preview Analysis Inputs",
+        "description": "Return every point-in-time model input without persisting a prediction.",
+        "operationId": "preview_analysis_inputs_api_analyze_preview_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1224,6 +1302,26 @@
               }
             ],
             "title": "Longitude"
+          },
+          "location_source": {
+            "type": "string",
+            "title": "Location Source"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details"
           }
         },
         "type": "object",
@@ -1232,7 +1330,10 @@
           "team_id",
           "name",
           "latitude",
-          "longitude"
+          "longitude",
+          "location_source",
+          "confidence",
+          "details"
         ],
         "title": "AdminTeamLocationResponse"
       },
@@ -1605,6 +1706,13 @@
             ],
             "title": "Away Travel Distance Km",
             "description": "Optional away-team base-to-venue distance. Server-side team locations are used when omitted."
+          },
+          "feature_overrides": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Feature Overrides"
           }
         },
         "type": "object",

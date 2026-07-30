@@ -290,6 +290,7 @@ def test_training_uses_same_versioned_snapshot_schema_as_inference() -> None:
         "ml_features_v4",
         "ml_features_v5",
         "ml_features_v6",
+        "ml_features_v7",
     ],
 )
 def test_older_snapshots_are_forward_compatible_with_new_defaults(
@@ -622,6 +623,24 @@ def test_inference_preserves_raw_categorical_ids_for_native_boosters() -> None:
     assert features["home_team_id"] == 101.0
     assert features["away_team_id"] == 202.0
     assert features["league_203"] == 1.0
+
+
+@pytest.mark.parametrize("league_id", [2, 3, 848])
+def test_uefa_competitions_have_distinct_one_hot_features(league_id: int) -> None:
+    features = FeatureEngine.build_inference_features(
+        home_stats={},
+        away_stats={},
+        home_matches_df=pd.DataFrame(),
+        away_matches_df=pd.DataFrame(),
+        h2h_rates={},
+        fixture_date=NOW,
+        league_id=league_id,
+    )
+
+    assert FeatureEngine.SCHEMA_VERSION == "ml_features_v8"
+    assert features["league_id"] == float(league_id)
+    assert features[f"league_{league_id}"] == 1.0
+    assert sum(features[name] for name in FeatureEngine.LEAGUE_FEATURE_NAMES) == 1.0
 
 
 def test_training_backfills_categories_from_row_for_v5_snapshot() -> None:

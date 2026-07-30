@@ -767,10 +767,15 @@ class StatsEngine:
             prediction, prediction or "Tahmin"
         )
         probability = analysis.get("probability", 0)
-        confidence_tier = analysis.get("confidence_tier", "DUSUK")
+        confidence_tier = str(analysis.get("confidence_tier", "DUSUK")).upper()
+        confidence_label = {
+            "YUKSEK": "yüksek",
+            "ORTA": "orta",
+            "DUSUK": "düşük",
+        }.get(confidence_tier, "bilinmiyor")
         confidence_gap = analysis.get("confidence_gap", 0)
         insights.append(
-            f"{prediction_label} olasiligi %{probability}; guven seviyesi {confidence_tier} "
+            f"{prediction_label} olasılığı %{probability}; güven seviyesi {confidence_label} "
             f"(fark %{confidence_gap})."
         )
 
@@ -785,7 +790,7 @@ class StatsEngine:
         expected_score = analysis.get("expected_score") or {}
         if expected_score.get("label"):
             insights.append(
-                f"En olasi skor {expected_score['label']} "
+                f"En olası skor {expected_score['label']} "
                 f"(%{expected_score.get('probability', 0)})."
             )
 
@@ -796,12 +801,14 @@ class StatsEngine:
         best_pick = value_data.get("best_pick") if value_data else None
         if best_pick:
             insights.append(
-                f"Value sinyali: {best_pick.get('label')} icin edge %{best_pick.get('edge')} "
-                f"ve Kelly onerisi %{best_pick.get('kelly_stake_pct', 0)}."
+                f"Değer sinyali: {best_pick.get('label')} için avantaj "
+                f"%{best_pick.get('edge')} ve Kelly önerisi "
+                f"%{best_pick.get('kelly_stake_pct', 0)}."
             )
         elif value_data:
             insights.append(
-                f"Value sinyali zayif; ana edge %{value_data.get('edge', 0)} seviyesinde."
+                f"Değer sinyali zayıf; ana avantaj "
+                f"%{value_data.get('edge', 0)} seviyesinde."
             )
 
         return insights

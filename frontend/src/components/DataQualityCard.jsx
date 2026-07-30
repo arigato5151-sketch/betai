@@ -1,3 +1,8 @@
+import {
+  dataQualityStatusLabel,
+  syncStatusLabel,
+} from "../localization.js";
+
 function Metric({ label, value, suffix = "" }) {
   return (
     <div className="rounded bg-slate-950 p-3">
@@ -28,13 +33,14 @@ function DataQualityCard({ data, error, loading, onRefresh }) {
             Veri Kalitesi ve Operasyon Durumu
           </h2>
           <p className="mt-1 text-xs text-slate-500">
-            Tarihsel veri, etiket, closing odds ve provenance kapsaması
+            Tarihsel veri, etiket, kapanış oranı ve veri kökeni kapsamı
           </p>
         </div>
         <div className="flex items-center gap-2">
           {data && (
             <span className={`rounded border px-3 py-1 text-xs font-bold ${statusColors[data.status] ?? statusColors.warning}`}>
-              {data.status?.toUpperCase()} · {data.score}/100
+              {dataQualityStatusLabel(data.status).toLocaleUpperCase("tr-TR")} ·{" "}
+              {data.score}/100
             </span>
           )}
           <button
@@ -50,14 +56,14 @@ function DataQualityCard({ data, error, loading, onRefresh }) {
       {error && <p className="mt-3 rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">{error}</p>}
       {data && (
         <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-8">
-          <Metric label="Fixture" value={data.historical?.fixtures} />
+          <Metric label="Maç" value={data.historical?.fixtures} />
           <Metric label="Lig / Sezon" value={`${data.historical?.leagues ?? 0} / ${data.historical?.seasons ?? 0}`} />
           <Metric label="Güncellik" value={data.historical?.freshness_hours} suffix=" saat" />
           <Metric label="Kadro Kapsaması" value={data.historical?.lineup_coverage_pct} suffix="%" />
           <Metric label="Etiket Kapsaması" value={data.predictions?.labeled_coverage_pct} suffix="%" />
-          <Metric label="Closing Odds" value={data.predictions?.closing_odds_coverage_pct} suffix="%" />
-          <Metric label="Provenance" value={data.predictions?.provenance_coverage_pct} suffix="%" />
-          <Metric label="Son Senkron" value={data.latest_sync?.status ?? "Yok"} />
+          <Metric label="Kapanış Oranı" value={data.predictions?.closing_odds_coverage_pct} suffix="%" />
+          <Metric label="Veri Kökeni" value={data.predictions?.provenance_coverage_pct} suffix="%" />
+          <Metric label="Son Senkron" value={syncStatusLabel(data.latest_sync?.status)} />
         </div>
       )}
     </section>
