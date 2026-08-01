@@ -124,6 +124,13 @@ class Settings(BaseSettings):
     LINEUP_COLLECTOR_WINDOW_MINUTES: int = Field(default=120, ge=30, le=360)
     LINEUP_COLLECTOR_CONCURRENCY: int = Field(default=2, ge=1, le=10)
     AUTO_TEAM_LOCATION_ENABLED: bool = True
+    WIKIDATA_LOCATION_ENABLED: bool = True
+    WIKIDATA_API_URL: str = "https://www.wikidata.org/w/api.php"
+    WIKIDATA_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
+    WIKIDATA_LOCATION_MAX_TEAMS: int = Field(default=500, ge=1, le=2000)
+    WIKIDATA_LOCATION_CONCURRENCY: int = Field(default=1, ge=1, le=4)
+    WIKIDATA_REQUEST_INTERVAL_SECONDS: float = Field(default=0.25, ge=0.1, le=5)
+    FREE_TEAM_LOCATION_MAX_TEAMS: int = Field(default=70, ge=1, le=90)
 
     # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEAGUE_BASELINE_GOALS: float = Field(default=1.32, gt=0)
@@ -441,6 +448,26 @@ class Settings(BaseSettings):
             or parsed.fragment
         ):
             raise ValueError("UNDERSTAT_BASE_URL must point to https://understat.com")
+        return normalized
+
+    @field_validator("WIKIDATA_API_URL")
+    @classmethod
+    def validate_wikidata_api_url(cls, value: str) -> str:
+        normalized = value.strip()
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "www.wikidata.org"
+            or parsed.username
+            or parsed.password
+            or parsed.port
+            or parsed.path != "/w/api.php"
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "WIKIDATA_API_URL must point to https://www.wikidata.org/w/api.php"
+            )
         return normalized
 
     @model_validator(mode="after")

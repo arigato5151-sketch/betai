@@ -540,6 +540,14 @@ koordinatsız bırakılmış mevcut kayıtlar otomatik süreçte ezilmez. Veri h
 çözülemiyorsa travel bileşeni `0.0` kalır; nötr saha için analiz isteğindeki
 `away_travel_distance_km` kullanılabilir.
 
+Tarihsel açık veri kaynaklarının negatif/sabit takım kimlikleri de konum tablosunda
+desteklenir. Haftalık görevler önce Wikidata'daki doğrulanmış kulüp–stadyum veya
+kulüp–merkez koordinatlarını, ardından API-Football'ın ücretsiz takım dizinindeki
+şehir bilgisini offline GeoNames ile çözerek eksikleri kademeli tamamlar. Eşleşmeler
+kadın, genç ve rezerv takım adaylarını dışarıda bırakır; belirsiz sonuçlar yazılmaz.
+Ücretsiz API kotası için sorgu penceresi haftalık döndürülür ve çözülemeyen kısa
+takım adlarının sonraki kulüpleri engellemesi önlenir.
+
 Bu tablolar `20260726_0010` Alembic revision'ıyla oluşturulur; takım konumu
 provenance alanları `20260730_0013` revision'ıyla eklenir. Oyuncu performansı
 yalnız daha sonraki fixture'larda kullanılır; sorgular tahmin kickoff'u için katı

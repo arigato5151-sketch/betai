@@ -6,8 +6,9 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from typing import Any, cast
 from celery import shared_task
-from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS
+from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS, ALLOWED_LEAGUES
 from app.core.config import settings
+from app.core.team_identity import normalize_team_name
 from app.db.historical_repository import HistoricalFixtureRepository
 from app.db.player_context_repository import (
     PlayerContextRepository,
@@ -15,7 +16,7 @@ from app.db.player_context_repository import (
 )
 from app.db.session import SessionLocal
 from app.db.repository import MatchPredictionRepository
-from app.db.models import MatchPrediction
+from app.db.models import HistoricalFixture, MatchPrediction
 from app.services.api_football import APIFootballClient
 from app.services.football_data_csv import (
     FootballDataCSVClient,
@@ -23,6 +24,8 @@ from app.services.football_data_csv import (
 )
 from app.services.fixture_download import FixtureDownloadClient, UEFA_FEEDS
 from app.providers.understat import UnderstatClient
+from app.providers.wikidata import WikidataError, WikidataTeamLocationClient
+from app.providers.geonames_city import GeoNamesCityResolver
 from app.services.understat_xg import match_understat_xg
 from app.services.odds_history import OddsHistoryService, odds_history_service
 from app.prediction.ml.model import ml_pipeline
@@ -660,6 +663,268 @@ def derive_historical_xg_task() -> dict[str, object]:
     }
     logger.info("Derived xG synchronization completed: %s", response)
     return response
+
+
+async def _sync_wikidata_team_locations(
+    client: WikidataTeamLocationClient,
+    teams: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], int]:
+    semaphore = asyncio.Semaphore(settings.WIKIDATA_LOCATION_CONCURRENCY)
+
+    grouped: dict[tuple[str, str], list[dict[str, object]]] = {}
+    for team in teams:
+        key = (
+            normalize_team_name(str(team["name"])),
+            str(team.get("country") or ""),
+        )
+        grouped.setdefault(key, []).append(team)
+
+    async def resolve(
+        identity: tuple[str, str],
+        targets: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        async with semaphore:
+            try:
+                location = await client.resolve(
+                    team_name=identity[0],
+                    country=identity[1] or None,
+                )
+            except WikidataError:
+                logger.warning(
+                    "Wikidata team location lookup failed",
+                    extra={"team_name": identity[0]},
+                )
+                return []
+        if location is None:
+            return []
+        return [
+            {
+                "data_source": team["data_source"],
+                "team_id": team["team_id"],
+                "name": team["name"],
+                "latitude": location.latitude,
+                "longitude": location.longitude,
+                "location_source": "wikidata",
+                "confidence": location.confidence,
+                "details": {
+                    "club_qid": location.club_qid,
+                    "location_qid": location.location_qid,
+                    "location_name": location.location_name,
+                    "method": location.method,
+                    "approximation": "home_venue_or_club_location",
+                },
+            }
+            for team in targets
+        ]
+
+    resolved = await asyncio.gather(
+        *(resolve(identity, targets) for identity, targets in grouped.items())
+    )
+    rows = [row for group in resolved for row in group]
+    return rows, len(teams) - len(rows)
+
+
+@shared_task(name="app.tasks.jobs.sync_wikidata_team_locations_task")
+def sync_wikidata_team_locations_task(
+    seasons: list[int] | None = None,
+) -> dict[str, object]:
+    """Backfill signed open-feed team IDs with verified venue coordinates."""
+    if not settings.WIKIDATA_LOCATION_ENABLED:
+        return {"status": "disabled", "locations_processed": 0}
+    target_seasons = sorted(set(seasons or [2024, 2025]))
+    countries = {
+        cast(int, league["id"]): cast(str, league["country"])
+        for league in ALLOWED_LEAGUES
+    }
+    with SessionLocal() as db:
+        fixtures = (
+            db.query(HistoricalFixture)
+            .filter(HistoricalFixture.season.in_(target_seasons))
+            .order_by(HistoricalFixture.kickoff.desc())
+            .all()
+        )
+        repository = PlayerContextRepository(db)
+        existing = {
+            (row.data_source, row.team_id)
+            for row in repository.get_all_team_locations()
+            if row.latitude is not None and row.longitude is not None
+        }
+
+    teams_by_key: dict[tuple[str, int], dict[str, object]] = {}
+    for fixture in fixtures:
+        source = str(fixture.data_source or "api_football").strip().lower()
+        country = countries.get(fixture.league_id)
+        for team_id, name in (
+            (fixture.home_team_id, fixture.home_team),
+            (fixture.away_team_id, fixture.away_team),
+        ):
+            key = (source, team_id)
+            if key not in existing:
+                teams_by_key.setdefault(
+                    key,
+                    {
+                        "data_source": source,
+                        "team_id": team_id,
+                        "name": name,
+                        "country": None if country == "Europe" else country,
+                    },
+                )
+    candidates = list(teams_by_key.values())[: settings.WIKIDATA_LOCATION_MAX_TEAMS]
+    processed = 0
+    unresolved = 0
+    batch_size = 40
+    client = WikidataTeamLocationClient()
+    for start in range(0, len(candidates), batch_size):
+        rows, batch_unresolved = _run_async(
+            _sync_wikidata_team_locations(
+                client,
+                candidates[start : start + batch_size],
+            )
+        )
+        with SessionLocal() as db:
+            processed += PlayerContextRepository(db).upsert_team_locations(rows)
+        unresolved += batch_unresolved
+    result: dict[str, object] = {
+        "status": "completed",
+        "seasons": target_seasons,
+        "teams_considered": len(candidates),
+        "locations_processed": processed,
+        "unresolved_teams": unresolved,
+    }
+    logger.info("Wikidata team location synchronization completed: %s", result)
+    return result
+
+
+@shared_task(name="app.tasks.jobs.sync_free_team_locations_task")
+def sync_free_team_locations_task(
+    seasons: list[int] | None = None,
+    offset: int | None = None,
+) -> dict[str, object]:
+    """Use the free team directory plus offline GeoNames as a fallback."""
+    target_seasons = sorted(set(seasons or [2024, 2025]))
+    countries = {
+        cast(int, league["id"]): cast(str, league["country"])
+        for league in ALLOWED_LEAGUES
+    }
+    with SessionLocal() as db:
+        fixtures = (
+            db.query(HistoricalFixture)
+            .filter(HistoricalFixture.season.in_(target_seasons))
+            .order_by(HistoricalFixture.kickoff.desc())
+            .all()
+        )
+        existing = {
+            (row.data_source, row.team_id)
+            for row in PlayerContextRepository(db).get_all_team_locations()
+            if row.latitude is not None and row.longitude is not None
+        }
+
+    grouped: dict[tuple[str, str], list[dict[str, object]]] = {}
+    for fixture in fixtures:
+        source = str(fixture.data_source or "api_football").strip().lower()
+        country = countries.get(fixture.league_id)
+        for team_id, name in (
+            (fixture.home_team_id, fixture.home_team),
+            (fixture.away_team_id, fixture.away_team),
+        ):
+            if (source, team_id) in existing:
+                continue
+            identity = (
+                normalize_team_name(name),
+                "" if country == "Europe" else str(country or ""),
+            )
+            targets = grouped.setdefault(identity, [])
+            target = {"data_source": source, "team_id": team_id, "name": name}
+            if target not in targets:
+                targets.append(target)
+
+    async def collect() -> tuple[list[dict[str, object]], int]:
+        client = APIFootballClient()
+        resolver = GeoNamesCityResolver()
+        rows: list[dict[str, object]] = []
+        unresolved = 0
+        ordered = sorted(
+            grouped.items(),
+            key=lambda item: (not bool(item[0][1]), item[0][1], item[0][0]),
+        )
+        if not ordered:
+            return rows, unresolved
+        if offset is not None and (
+            isinstance(offset, bool) or not isinstance(offset, int) or offset < 0
+        ):
+            raise ValueError("offset must be a non-negative integer")
+        batch_limit = settings.FREE_TEAM_LOCATION_MAX_TEAMS
+        # Rotate the quota-safe window weekly so permanently unresolved aliases
+        # cannot starve later clubs indefinitely.
+        scan_offset = (
+            offset
+            if offset is not None
+            else (date.today().toordinal() // 7) * batch_limit
+        ) % len(ordered)
+        rotated = ordered[scan_offset:] + ordered[:scan_offset]
+        identities = rotated[:batch_limit]
+        for (team_name, country), targets in identities:
+            context = await client.search_team_venue_context(
+                team_name,
+                country=country or None,
+            )
+            if context is None:
+                unresolved += len(targets)
+                continue
+            resolved = resolver.resolve(
+                city=str(context["city"]),
+                country=str(context["country"]),
+            )
+            if resolved is None:
+                unresolved += len(targets)
+                continue
+            rows.extend(
+                {
+                    "data_source": target["data_source"],
+                    "team_id": target["team_id"],
+                    "name": target["name"],
+                    "latitude": resolved.latitude,
+                    "longitude": resolved.longitude,
+                    "location_source": "api_football_geonames",
+                    "confidence": resolved.confidence,
+                    "details": {
+                        "city": resolved.city,
+                        "country_code": resolved.country_code,
+                        "geoname_id": resolved.geoname_id,
+                        "provider_team_id": context.get("team_id"),
+                        "provider_team_name": context.get("team_name"),
+                        "venue_id": context.get("venue_id"),
+                        "venue_name": context.get("venue_name"),
+                        "approximation": "city_centre",
+                    },
+                }
+                for target in targets
+            )
+        return rows, unresolved
+
+    rows, unresolved = _run_async(collect())
+    with SessionLocal() as db:
+        processed = PlayerContextRepository(db).upsert_team_locations(rows)
+    result: dict[str, object] = {
+        "status": "completed",
+        "seasons": target_seasons,
+        "identities_considered": min(
+            len(grouped), settings.FREE_TEAM_LOCATION_MAX_TEAMS
+        ),
+        "locations_processed": processed,
+        "unresolved_team_ids": unresolved,
+        "scan_offset": (
+            (
+                offset
+                if offset is not None
+                else (date.today().toordinal() // 7)
+                * settings.FREE_TEAM_LOCATION_MAX_TEAMS
+            )
+            % max(1, len(grouped))
+        ),
+    }
+    logger.info("Free team location synchronization completed: %s", result)
+    return result
 
 
 @shared_task(name="app.tasks.jobs.sync_uefa_fixtures_task")

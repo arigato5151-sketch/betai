@@ -278,6 +278,74 @@ async def test_team_venue_context_rejects_incomplete_payload(
 
 
 @pytest.mark.asyncio
+async def test_team_search_venue_context_uses_exact_country_match() -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(
+        return_value={
+            "errors": [],
+            "response": [
+                {
+                    "team": {"id": 40, "name": "Liverpool", "country": "England"},
+                    "venue": {"id": 1, "name": "Anfield", "city": "Liverpool"},
+                },
+                {
+                    "team": {
+                        "id": 400,
+                        "name": "Liverpool",
+                        "country": "Uruguay",
+                    },
+                    "venue": {"id": 2, "name": "Belvedere", "city": "Montevideo"},
+                },
+                {
+                    "team": {
+                        "id": 401,
+                        "name": "Liverpool W",
+                        "country": "England",
+                    },
+                    "venue": {"id": 3, "name": "Other", "city": "St Helens"},
+                },
+            ],
+        }
+    )
+
+    result = await client.search_team_venue_context(
+        "Liverpool",
+        country="England",
+    )
+
+    assert result is not None
+    assert result["team_id"] == 40
+    assert result["venue_name"] == "Anfield"
+    client._request_with_retry.assert_awaited_once_with(
+        "teams", {"search": "Liverpool"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_search_venue_context_fails_closed_when_ambiguous() -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(
+        return_value={
+            "errors": [],
+            "response": [
+                {
+                    "team": {"id": 1, "name": "United", "country": "England"},
+                    "venue": {"id": 1, "name": "One", "city": "London"},
+                },
+                {
+                    "team": {"id": 2, "name": "United", "country": "England"},
+                    "venue": {"id": 2, "name": "Two", "city": "Leeds"},
+                },
+            ],
+        }
+    )
+
+    assert await client.search_team_venue_context("United", country="England") is None
+
+
+@pytest.mark.asyncio
 async def test_confirmed_lineups_use_long_lived_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

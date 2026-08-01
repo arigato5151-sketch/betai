@@ -47,6 +47,14 @@ celery_app.conf.update(
             "task": "app.tasks.jobs.sync_uefa_fixtures_task",
             "schedule": 86400.0,
         },
+        "sync-wikidata-team-locations-weekly": {
+            "task": "app.tasks.jobs.sync_wikidata_team_locations_task",
+            "schedule": 604800.0,
+        },
+        "sync-free-team-locations-weekly": {
+            "task": "app.tasks.jobs.sync_free_team_locations_task",
+            "schedule": 604800.0,
+        },
         "sync-completed-matches-daily": {
             "task": "app.tasks.jobs.sync_completed_matches_task",
             "schedule": 86400.0,  # 24 hours

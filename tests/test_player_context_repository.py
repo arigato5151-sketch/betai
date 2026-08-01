@@ -271,6 +271,42 @@ def test_sqlite_location_upsert_is_scoped_by_source_and_team() -> None:
         session.close()
 
 
+def test_open_feed_location_accepts_deterministic_negative_team_id() -> None:
+    session, repository = build_repository()
+    try:
+        team_id = -4_929_623_616_249_197_368
+        assert (
+            repository.upsert_team_locations(
+                [
+                    {
+                        "data_source": "football_data_csv",
+                        "team_id": team_id,
+                        "name": "AEK Athens",
+                        "latitude": 38.0361,
+                        "longitude": 23.7877,
+                        "location_source": "wikidata",
+                        "confidence": 0.9,
+                    }
+                ]
+            )
+            == 1
+        )
+
+        stored = repository.get_team_location(
+            team_id,
+            data_source="football_data_csv",
+        )
+        assert stored is not None
+        assert stored.location_source == "wikidata"
+        assert repository.travel_distance_km(
+            team_id,
+            team_id,
+            data_source="football_data_csv",
+        ) == pytest.approx(0.0)
+    finally:
+        session.close()
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

@@ -17,6 +17,7 @@ from app.core.demo_data import (
     DEMO_UPCOMING_FIXTURES,
 )
 from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS, LEAGUE_PRIORITY
+from app.core.team_identity import normalize_team_name, stable_team_name_key
 from app.core.exceptions import (
     APIFootballException,
     APIDataError,
@@ -1041,6 +1042,53 @@ class APIFootballClient:
         }
         await cache.set("teams", cache_key, context, 30 * 86400)
         return context
+
+    async def search_team_venue_context(
+        self,
+        team_name: str,
+        *,
+        country: str | None = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Resolve an open-feed club name to an unambiguous API venue city."""
+        query = team_name.strip()
+        if self._is_demo_key() or len(query) < 3:
+            return None
+        data = await self._request_with_retry("teams", {"search": query})
+        if not data or data.get("errors"):
+            return None
+        target = normalize_team_name(query)
+        country_key = stable_team_name_key(country or "")
+        candidates: list[Dict[str, Any]] = []
+        for item in data.get("response", []):
+            if not isinstance(item, dict):
+                continue
+            team = item.get("team")
+            venue = item.get("venue")
+            if not isinstance(team, dict) or not isinstance(venue, dict):
+                continue
+            if normalize_team_name(str(team.get("name") or "")) != target:
+                continue
+            provider_country = stable_team_name_key(str(team.get("country") or ""))
+            if country_key and provider_country != country_key:
+                continue
+            city = str(venue.get("city") or "").strip()
+            team_country = str(team.get("country") or "").strip()
+            if city and team_country:
+                candidates.append(item)
+        if len(candidates) != 1:
+            return None
+        item = candidates[0]
+        team = item["team"]
+        venue = item["venue"]
+        return {
+            "team_id": team.get("id"),
+            "team_name": str(team.get("name") or "")[:100],
+            "country": str(team.get("country") or "")[:100],
+            "city": str(venue.get("city") or "")[:100],
+            "venue_id": venue.get("id"),
+            "venue_name": str(venue.get("name") or "")[:150] or None,
+            "source": "api_football_team_search",
+        }
 
     async def get_fixture_market(self, fixture_id: int) -> Optional[Dict]:
         if self._is_demo_key() and fixture_id in DEMO_FIXTURE_ODDS:

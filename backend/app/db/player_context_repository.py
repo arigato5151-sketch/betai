@@ -130,6 +130,19 @@ def _positive_identifier(value: object, label: str) -> int:
     return numeric
 
 
+def _nonzero_identifier(value: object, label: str) -> int:
+    """Accept provider IDs and deterministic negative IDs used by open feeds."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ValueError(f"{label} must be a non-zero integer")
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a non-zero integer") from exc
+    if numeric == 0 or numeric != value:
+        raise ValueError(f"{label} must be a non-zero integer")
+    return numeric
+
+
 class PlayerContextRepository:
     def __init__(self, db: Session):
         self.db = db
@@ -329,7 +342,7 @@ class PlayerContextRepository:
             data_source = str(row.get("data_source") or "").strip().lower()
             if not data_source:
                 raise ValueError("data_source cannot be blank")
-            team_id = _positive_identifier(row.get("team_id"), "team_id")
+            team_id = _nonzero_identifier(row.get("team_id"), "team_id")
             name = str(row.get("name") or "").strip()
             if not name:
                 raise ValueError("name cannot be blank")
@@ -389,7 +402,7 @@ class PlayerContextRepository:
         *,
         data_source: str = "api_football",
     ) -> TeamLocation | None:
-        team_id = _positive_identifier(team_id, "team_id")
+        team_id = _nonzero_identifier(team_id, "team_id")
         normalized_source = data_source.strip().lower()
         if not normalized_source:
             raise ValueError("data_source cannot be blank")
