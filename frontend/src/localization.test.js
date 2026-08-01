@@ -30,10 +30,14 @@ test("API sonuç kodlarını bağlama uygun Türkçe etiketlere dönüştürür"
 
 test("model güveni ve operasyon durumlarını Türkçeleştirir", () => {
   assert.equal(mlSafetyLabel("HIGH_CONFIDENCE"), "Yüksek Güven");
+  assert.equal(mlSafetyLabel("MEDIUM_CONFIDENCE"), "Orta Güven");
+  assert.equal(mlSafetyLabel("UPSET_CANDIDATE"), "Sürpriz Adayı");
+  assert.equal(mlSafetyLabel("RISKY_UPSET"), "Riskli Sürpriz");
   assert.equal(mlSafetyLabel("INSUFFICIENT_DATA"), "Yetersiz Veri");
   assert.equal(mlSafetyLabel("YETERLI VERI YOK"), "Yetersiz Veri");
   assert.equal(mlSafetyTone("HIGH_CONFIDENCE"), "positive");
   assert.equal(mlSafetyTone("INSUFFICIENT_DATA"), "neutral");
+  assert.equal(mlSafetyTone("UPSET_CANDIDATE"), "warning");
   assert.equal(mlSafetyTone("RISKY_UNDERDOG"), "negative");
   assert.equal(dataQualityStatusLabel("CRITICAL"), "Kritik");
   assert.equal(syncStatusLabel("succeeded"), "Başarılı");

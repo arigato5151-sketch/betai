@@ -42,6 +42,7 @@ describe("AnalysisReport Türkçe gösterim katmanı", () => {
     expect(screen.getByText("Fenerbahçe – Galatasaray")).toBeInTheDocument();
     expect(screen.getByText(/Ev Sahibi Kazanır/)).toBeInTheDocument();
     expect(screen.getByText("Yetersiz Veri")).toBeInTheDocument();
+    expect(screen.getByText("(80/200 doğrulanmış sonuç)")).toBeInTheDocument();
     expect(screen.getByText(/DEĞERLİ ORAN BULUNDU/)).toBeInTheDocument();
     expect(screen.queryByText("HOME_WIN")).not.toBeInTheDocument();
     expect(screen.queryByText("INSUFFICIENT_DATA")).not.toBeInTheDocument();
@@ -50,5 +51,23 @@ describe("AnalysisReport Türkçe gösterim katmanı", () => {
       screen.getByRole("button", { name: "Ev Sahibi Kazandı" }),
     );
     expect(onSubmitActualResult).toHaveBeenCalledWith(42, "HOME_WIN");
+  });
+
+  it("ML güven yüzdesini ve olasılık farkını gösterir", () => {
+    render(
+      <AnalysisReport
+        match={{
+          ...match,
+          ml_safety_trigger: "UPSET_CANDIDATE",
+          ml_safety_details: {
+            ml_confidence: 55,
+            confidence_gap: 15,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Sürpriz Adayı")).toBeInTheDocument();
+    expect(screen.getByText(/ML %55 · olasılık farkı %15/)).toBeInTheDocument();
   });
 });

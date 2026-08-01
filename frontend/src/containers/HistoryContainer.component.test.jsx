@@ -57,4 +57,26 @@ describe("historyItemToSelectedMatch", () => {
     expect(selected.home_stats.attack).toBe(80);
     expect(selected.ml_safety_trigger).toBe("HIGH_CONFIDENCE");
   });
+
+  it("uses the persisted market-aware ML assessment", () => {
+    const assessment = {
+      trigger: "UPSET_CANDIDATE",
+      ml_confidence: 55,
+      confidence_gap: 15,
+    };
+    const selected = historyItemToSelectedMatch({
+      id: 2,
+      home_team: "Home",
+      away_team: "Away",
+      probability: 50,
+      prediction: "AWAY_WIN",
+      is_value_bet: 0,
+      ml_cluster: 0,
+      ml_confidence: 55,
+      data_quality: { ml_assessment: assessment },
+    });
+
+    expect(selected.ml_safety_trigger).toBe("UPSET_CANDIDATE");
+    expect(selected.ml_safety_details).toEqual(assessment);
+  });
 });

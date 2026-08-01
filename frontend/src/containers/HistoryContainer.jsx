@@ -9,6 +9,7 @@ export function historyItemToSelectedMatch(rawDbItem) {
   const probDraw = rawDbItem.prob_draw ?? 34;
   const mlInsufficient =
     rawDbItem.ml_cluster === null || rawDbItem.ml_cluster === undefined;
+  const storedAssessment = rawDbItem.data_quality?.ml_assessment;
 
   return {
     match: `${rawDbItem.home_team} – ${rawDbItem.away_team}`,
@@ -38,11 +39,15 @@ export function historyItemToSelectedMatch(rawDbItem) {
       value_bet: rawDbItem.is_value_bet === 1,
       edge: rawDbItem.edge,
     },
-    ml_safety_trigger: mlInsufficient
-      ? "INSUFFICIENT_DATA"
-      : rawDbItem.ml_cluster === 1
-        ? "HIGH_CONFIDENCE"
-        : "RISKY_UNDERDOG",
+    ml_safety_trigger:
+      storedAssessment?.trigger ??
+      (mlInsufficient
+        ? "INSUFFICIENT_DATA"
+        : rawDbItem.ml_cluster === 1
+          ? "HIGH_CONFIDENCE"
+          : "RISKY_UNDERDOG"),
+    ml_safety_details: storedAssessment ?? null,
+    ml_confidence: rawDbItem.ml_confidence,
     ml_ready: !mlInsufficient,
     record_id: rawDbItem.id,
     actual_result: rawDbItem.actual_result,

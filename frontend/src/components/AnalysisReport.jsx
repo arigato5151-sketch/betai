@@ -85,7 +85,7 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
           </div>
           <div>
             <span className="text-xs text-slate-400">
-              Makine Öğrenmesi Model Güveni
+              Makine Öğrenmesi Görüşü
             </span>
             <p className="mt-1 text-xs">
               <span
@@ -94,17 +94,25 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
                     ? "bg-emerald-950 text-emerald-400"
                     : safetyTone === "neutral"
                       ? "bg-slate-800 text-slate-400"
-                      : "bg-red-950 text-red-400"
+                      : safetyTone === "warning"
+                        ? "bg-amber-950 text-amber-400"
+                        : "bg-red-950 text-red-400"
                 }`}
               >
                 {mlSafetyLabel(match.ml_safety_trigger)}
               </span>
               {match.ml_samples !== undefined && (
                 <span className="ml-2 text-slate-500">
-                  ({match.ml_samples}/{match.ml_min_samples ?? 200} örnek)
+                  ({match.ml_samples}/{match.ml_min_samples ?? 200} doğrulanmış sonuç)
                 </span>
               )}
             </p>
+            {match.ml_safety_details?.ml_confidence !== undefined && (
+              <p className="mt-2 text-[11px] text-slate-500">
+                ML %{match.ml_safety_details.ml_confidence} · olasılık farkı %
+                {match.ml_safety_details.confidence_gap}
+              </p>
+            )}
           </div>
           {canUpdateResult && match.record_id && !match.actual_result && (
             <div className="flex flex-wrap gap-2 pt-2">

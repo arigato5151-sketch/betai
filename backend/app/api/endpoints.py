@@ -489,12 +489,82 @@ def _build_payload_from_prefill(prefill: Dict[str, Any]) -> AnalysisRequest:
     )
 
 
-def _ml_safety_label(ml_result: dict) -> str:
+def _probability_favorite(probabilities: object) -> str | None:
+    if not isinstance(probabilities, dict):
+        return None
+    outcomes = ("HOME_WIN", "DRAW", "AWAY_WIN")
+    try:
+        values = {outcome: float(probabilities[outcome]) for outcome in outcomes}
+    except (KeyError, TypeError, ValueError):
+        return None
+    if any(not math.isfinite(value) or value < 0 for value in values.values()):
+        return None
+    return max(outcomes, key=lambda outcome: values[outcome])
+
+
+def _assess_ml_safety(
+    ml_result: dict,
+    analysis: dict,
+    data_quality: dict,
+) -> dict[str, object]:
+    """Classify confidence using probability, source agreement and market context."""
     if not ml_result.get("ready"):
-        return "INSUFFICIENT_DATA"
-    if ml_result.get("prediction") == "HOME_WIN":
-        return "HIGH_CONFIDENCE"
-    return "RISKY_UNDERDOG"
+        return {"trigger": "INSUFFICIENT_DATA"}
+
+    raw_probabilities = ml_result.get("all_probabilities")
+    ml_prediction = _probability_favorite(raw_probabilities)
+    if ml_prediction is None or not isinstance(raw_probabilities, dict):
+        return {"trigger": "INSUFFICIENT_DATA"}
+
+    probabilities = sorted(
+        (
+            float(raw_probabilities[outcome])
+            for outcome in ("HOME_WIN", "DRAW", "AWAY_WIN")
+        ),
+        reverse=True,
+    )
+    confidence = probabilities[0]
+    confidence_gap = confidence - probabilities[1]
+    components = (analysis.get("ensemble") or {}).get("components") or {}
+    stats_favorite = _probability_favorite(components.get("stats"))
+    market_favorite = _probability_favorite(components.get("market"))
+    ensemble_favorite = _probability_favorite(analysis.get("all_probabilities"))
+    model_agreement = all(
+        favorite == ml_prediction
+        for favorite in (stats_favorite, ensemble_favorite)
+        if favorite is not None
+    )
+    quality_score = float(data_quality.get("score", 100.0))
+    market_disagreement = (
+        market_favorite is not None and market_favorite != ml_prediction
+    )
+    weak_signal = (
+        confidence < 45.0
+        or confidence_gap < 8.0
+        or quality_score < 50.0
+        or not model_agreement
+    )
+
+    if market_disagreement:
+        trigger = "RISKY_UPSET" if weak_signal else "UPSET_CANDIDATE"
+    elif weak_signal:
+        trigger = "LOW_CONFIDENCE"
+    elif confidence >= 60.0 and confidence_gap >= 15.0:
+        trigger = "HIGH_CONFIDENCE"
+    else:
+        trigger = "MEDIUM_CONFIDENCE"
+
+    return {
+        "trigger": trigger,
+        "ml_prediction": ml_prediction,
+        "ml_confidence": round(confidence, 2),
+        "confidence_gap": round(confidence_gap, 2),
+        "market_favorite": market_favorite,
+        "stats_favorite": stats_favorite,
+        "ensemble_favorite": ensemble_favorite,
+        "model_agreement": model_agreement,
+        "data_quality_score": round(quality_score, 2),
+    }
 
 
 def _ml_cluster_value(ml_result: dict) -> int:
@@ -510,6 +580,7 @@ def _build_analysis_response(
     ml_result: dict,
     insights: List[str],
     labeled_samples_count: int,
+    data_quality: dict,
 ) -> dict:
     prediction_labels = {
         "HOME_WIN": "Ev Sahibi Galibiyeti",
@@ -517,6 +588,7 @@ def _build_analysis_response(
         "DRAW": "Beraberlik",
     }
 
+    ml_assessment = _assess_ml_safety(ml_result, analysis, data_quality)
     return {
         "id": record_id,
         "match": f"{home_team} vs {away_team}",
@@ -527,7 +599,8 @@ def _build_analysis_response(
             ),
         },
         "value_assessment": value_data,
-        "ml_safety_trigger": _ml_safety_label(ml_result),
+        "ml_safety_trigger": ml_assessment["trigger"],
+        "ml_safety_details": ml_assessment,
         "ml_confidence": (
             ml_result.get("probability", 0.0) if ml_result.get("ready") else 0.0
         ),
@@ -1158,6 +1231,7 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         "manual_feature_override_count": len(payload.feature_overrides),
         "feature_provenance": feature_provenance,
     }
+    data_quality["ml_assessment"] = _assess_ml_safety(ml_result, analysis, data_quality)
 
     return {
         "analysis": analysis,
@@ -1250,6 +1324,7 @@ async def _run_analysis(payload: AnalysisRequest) -> dict:
         computed["ml_result"],
         computed["insights"],
         labeled_samples_count,
+        computed["data_quality"],
     )
     if computed["value_data"].get("data_methodology"):
         response["data_methodology"] = computed["value_data"]["data_methodology"]

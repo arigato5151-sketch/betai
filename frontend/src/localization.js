@@ -12,7 +12,11 @@ const OUTCOME_RESULT_LABELS = Object.freeze({
 
 const ML_SAFETY_LABELS = Object.freeze({
   HIGH_CONFIDENCE: "Yüksek Güven",
-  RISKY_UNDERDOG: "Riskli Sürpriz Adayı",
+  MEDIUM_CONFIDENCE: "Orta Güven",
+  LOW_CONFIDENCE: "Düşük Güven",
+  UPSET_CANDIDATE: "Sürpriz Adayı",
+  RISKY_UPSET: "Riskli Sürpriz",
+  RISKY_UNDERDOG: "Riskli Sürpriz",
   INSUFFICIENT_DATA: "Yetersiz Veri",
   "YETERLI VERI YOK": "Yetersiz Veri",
   "YETERLİ VERİ YOK": "Yetersiz Veri",
@@ -92,7 +96,9 @@ export const mlSafetyLabel = (value) =>
   lookupClosedSet(ML_SAFETY_LABELS, value, "Durum Bilinmiyor");
 
 export const mlSafetyTone = (value) => {
-  if (value === "HIGH_CONFIDENCE") return "positive";
+  if (value === "HIGH_CONFIDENCE" || value === "MEDIUM_CONFIDENCE") {
+    return "positive";
+  }
   if (
     value === "INSUFFICIENT_DATA" ||
     value === "YETERLI VERI YOK" ||
@@ -100,6 +106,7 @@ export const mlSafetyTone = (value) => {
   ) {
     return "neutral";
   }
+  if (value === "UPSET_CANDIDATE") return "warning";
   return "negative";
 };
 

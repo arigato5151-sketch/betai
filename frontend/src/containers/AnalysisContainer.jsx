@@ -333,6 +333,8 @@ function AnalysisContainer({
         analysis: data.analysis,
         value_assessment: data.value_assessment,
         ml_safety_trigger: data.ml_safety_trigger,
+        ml_safety_details: data.ml_safety_details,
+        ml_confidence: data.ml_confidence,
         ml_ready: data.ml_ready,
         ml_samples: data.ml_samples,
         ml_min_samples: data.ml_min_samples,

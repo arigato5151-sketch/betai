@@ -26,7 +26,7 @@ Projenin kaynak koduna GitHub üzerinden ulaşabilirsiniz: [arigato5151-sketch/b
 - React tabanlı analiz paneli, geçmiş filtreleme/sıralama, olasılık ve interaktif bankroll grafikleri
 - Backend kaynaklı lig seçimi; UEFA turnuvalarının Türkçe adlarla analize aktarılması
 - Türkiye saatine göre kronolojik sıralanan, yenilenebilir 7 günlük maç fikstürü; kart seçimiyle analiz formuna otomatik veri aktarımı
-- Tüm `ml_features_v8` girdilerini eksik/kısmi/hesaplandı durumlarıyla gösteren ve güvenli manuel override destekleyen gelişmiş analiz formu
+- Fikstür seçildiğinde `ml_features_v8` girdilerini arka planda otomatik dolduran sade analiz formu
 - API-Football demo verisi kullanıldığında giriş ve uygulama başlığında görünür `Demo Modu` etiketi
 - Admin rolü için kullanıcı oluşturma, rol atama ve hesap aktifliği yönetim paneli
 
@@ -59,7 +59,11 @@ SQLAlchemy repository --> PostgreSQL veya SQLite
      +--> Gerçek sonuç --> audit / backtest / yeniden eğitim görevi
 ```
 
-ML modeli varsayılan olarak en az `200` etiketli örnek bekler. Bu eşik sağlanana kadar istatistik motoru çalışmaya devam eder ve API yanıtı ML durumunu `INSUFFICIENT_DATA` olarak bildirir.
+ML modeli tarihsel fixture verisiyle eğitilir. Arayüzdeki `x/200 doğrulanmış sonuç`
+sayacı, aktif modelin eğitim örneği değil uygulama içi gerçek sonuç geri bildirimidir;
+bu eşik active-learning yeniden eğitimini başlatır. ML görüşü; olasılık marjı,
+istatistik/ensemble uyumu, piyasa favorisi ve veri kalitesini birlikte değerlendirir.
+Yalnız piyasa favorisinden farklı tahminler sürpriz olarak sınıflandırılır.
 
 ## Uygulamanın Genel Kod Akışı
 

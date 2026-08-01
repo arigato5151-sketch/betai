@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from app.api.endpoints import (
     AnalysisRequest,
     _apply_external_travel_fallback,
+    _assess_ml_safety,
     _build_analysis_response,
     _apply_external_elo_fallback,
     _compute_analysis,
@@ -148,12 +149,127 @@ def test_insufficient_ml_response_reports_sample_gap() -> None:
         ml_result={"ready": False},
         insights=[],
         labeled_samples_count=labeled_samples,
+        data_quality={"score": 70.0},
     )
     assert response["ml_safety_trigger"] == "INSUFFICIENT_DATA"
     assert response["labeled_samples_count"] == labeled_samples
     assert response["remaining_to_threshold"] == (
         settings.MIN_TRAINING_SAMPLES - labeled_samples
     )
+
+
+def test_ml_safety_uses_market_disagreement_for_upset_labels() -> None:
+    assessment = _assess_ml_safety(
+        ml_result={
+            "ready": True,
+            "all_probabilities": {
+                "HOME_WIN": 25.0,
+                "DRAW": 20.0,
+                "AWAY_WIN": 55.0,
+            },
+        },
+        analysis={
+            "all_probabilities": {
+                "HOME_WIN": 30.0,
+                "DRAW": 20.0,
+                "AWAY_WIN": 50.0,
+            },
+            "ensemble": {
+                "components": {
+                    "stats": {
+                        "HOME_WIN": 30.0,
+                        "DRAW": 20.0,
+                        "AWAY_WIN": 50.0,
+                    },
+                    "market": {
+                        "HOME_WIN": 60.0,
+                        "DRAW": 25.0,
+                        "AWAY_WIN": 15.0,
+                    },
+                }
+            },
+        },
+        data_quality={"score": 80.0},
+    )
+
+    assert assessment["trigger"] == "UPSET_CANDIDATE"
+    assert assessment["market_favorite"] == "HOME_WIN"
+    assert assessment["ml_prediction"] == "AWAY_WIN"
+
+
+def test_ml_safety_does_not_call_away_favorite_an_upset() -> None:
+    assessment = _assess_ml_safety(
+        ml_result={
+            "ready": True,
+            "all_probabilities": {
+                "HOME_WIN": 20.0,
+                "DRAW": 20.0,
+                "AWAY_WIN": 60.0,
+            },
+        },
+        analysis={
+            "all_probabilities": {
+                "HOME_WIN": 20.0,
+                "DRAW": 20.0,
+                "AWAY_WIN": 60.0,
+            },
+            "ensemble": {
+                "components": {
+                    "stats": {
+                        "HOME_WIN": 20.0,
+                        "DRAW": 20.0,
+                        "AWAY_WIN": 60.0,
+                    },
+                    "market": {
+                        "HOME_WIN": 25.0,
+                        "DRAW": 25.0,
+                        "AWAY_WIN": 50.0,
+                    },
+                }
+            },
+        },
+        data_quality={"score": 80.0},
+    )
+
+    assert assessment["trigger"] == "HIGH_CONFIDENCE"
+
+
+def test_ml_safety_marks_market_disagreement_risky_when_models_disagree() -> None:
+    assessment = _assess_ml_safety(
+        ml_result={
+            "ready": True,
+            "all_probabilities": {
+                "HOME_WIN": 30.0,
+                "DRAW": 22.0,
+                "AWAY_WIN": 48.0,
+            },
+        },
+        analysis={
+            "all_probabilities": {
+                "HOME_WIN": 46.0,
+                "DRAW": 24.0,
+                "AWAY_WIN": 30.0,
+            },
+            "ensemble": {
+                "components": {
+                    "stats": {
+                        "HOME_WIN": 50.0,
+                        "DRAW": 25.0,
+                        "AWAY_WIN": 25.0,
+                    },
+                    "market": {
+                        "HOME_WIN": 55.0,
+                        "DRAW": 25.0,
+                        "AWAY_WIN": 20.0,
+                    },
+                }
+            },
+        },
+        data_quality={"score": 75.0},
+    )
+
+    assert assessment["trigger"] == "RISKY_UPSET"
+    assert assessment["model_agreement"] is False
 
 
 def test_prefill_payload_carries_automatic_odds_snapshots() -> None:
