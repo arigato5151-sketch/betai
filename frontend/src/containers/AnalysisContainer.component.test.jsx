@@ -146,7 +146,7 @@ describe("AnalysisContainer lig entegrasyonu", () => {
     expect(await screen.findByDisplayValue("Erken Takım")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Rakip A")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Lig" })).toHaveValue("848");
-    expect(screen.getByLabelText("Bahis oranı")).toHaveValue(2.15);
+    expect(screen.queryByLabelText("Bahis oranı")).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(
       "Erken Takım – Rakip A analiz formuna yüklendi.",
     );

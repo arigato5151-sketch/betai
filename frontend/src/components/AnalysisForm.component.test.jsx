@@ -111,50 +111,7 @@ describe("AnalysisForm lig seçimi", () => {
     ).toBeDisabled();
   });
 
-  it("manuel oran değişikliğinde otomatik odds snapshot çiftini temizler", () => {
-    const onChange = vi.fn();
-    render(
-      <AnalysisForm
-        formData={{
-          ...formData,
-          market_1x2: {
-            raw_odds: { HOME_WIN: 2.3, DRAW: 3.2, AWAY_WIN: 3.4 },
-          },
-          opening_odds_1x2: {
-            HOME_WIN: 2.5,
-            DRAW: 3.1,
-            AWAY_WIN: 3.2,
-          },
-          current_odds_1x2: {
-            HOME_WIN: 2.3,
-            DRAW: 3.2,
-            AWAY_WIN: 3.4,
-          },
-          opening_odds_at: "2030-07-29T09:00:00+00:00",
-          current_odds_at: "2030-07-30T09:00:00+00:00",
-        }}
-        leagues={leagues}
-        loading={false}
-        onChange={onChange}
-        onSubmit={vi.fn()}
-      />,
-    );
-
-    fireEvent.change(screen.getByLabelText("Bahis oranı"), {
-      target: { value: "2.2" },
-    });
-
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        opening_odds_1x2: null,
-        current_odds_1x2: null,
-        opening_odds_at: null,
-        current_odds_at: null,
-      }),
-    );
-  });
-
-  it("temel istatistikleri gösterir ancak ayrıntılı model girdilerini ekrana basmaz", () => {
+  it("otomatik hesaplanan istatistik, oran ve model girdilerini ekrana basmaz", () => {
     render(
       <AnalysisForm
         formData={{ ...formData, feature_overrides: {} }}
@@ -165,9 +122,10 @@ describe("AnalysisForm lig seçimi", () => {
       />,
     );
 
-    expect(screen.getAllByLabelText("Hücum Gücü")).toHaveLength(2);
-    expect(screen.getAllByLabelText("Savunma Gücü")).toHaveLength(2);
-    expect(screen.getAllByLabelText("Gol Beklentisi (xG)")).toHaveLength(2);
+    expect(screen.queryByLabelText("Hücum Gücü")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Gol Beklentisi (xG)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Bahis oranı")).not.toBeInTheDocument();
+    expect(screen.queryByText("Piyasa Oranları ve Maç Bağlamı")).not.toBeInTheDocument();
     expect(
       screen.queryByText("Hesaplanan Tüm Model Girdileri"),
     ).not.toBeInTheDocument();
