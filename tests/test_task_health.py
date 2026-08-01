@@ -57,6 +57,7 @@ def test_celery_connection_recovery_and_delivery_guards_are_enabled() -> None:
     assert set(celery_app.conf.beat_schedule) == {
         "collect-upcoming-lineups",
         "collect-upcoming-odds",
+        "derive-historical-xg-daily",
         "sync-football-data-fixtures-daily",
         "sync-understat-xg-daily",
         "sync-completed-matches-daily",

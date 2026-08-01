@@ -84,7 +84,7 @@ class HistoricalTrainingDataBuilder:
             },
             venue,
         )
-        observations: list[tuple[datetime, float]] = []
+        observations: list[tuple[datetime, float, float]] = []
         for fixture in fixtures:
             kickoff = HistoricalTrainingDataBuilder._as_utc_datetime(fixture.kickoff)
             value = (
@@ -97,18 +97,28 @@ class HistoricalTrainingDataBuilder:
                 and math.isfinite(float(value))
                 and 0.0 <= float(value) <= 15.0
             ):
-                observations.append((kickoff, float(value)))
+                confidence = fixture.xg_confidence
+                confidence_weight = (
+                    float(confidence)
+                    if isinstance(confidence, (int, float))
+                    and not isinstance(confidence, bool)
+                    and math.isfinite(float(confidence))
+                    and 0.0 < float(confidence) <= 1.0
+                    else 0.5
+                )
+                observations.append((kickoff, float(value), confidence_weight))
         if observations:
-            reference = max(kickoff for kickoff, _ in observations)
+            reference = max(kickoff for kickoff, _, _ in observations)
             weighted = [
                 (
                     value,
-                    math.exp(
+                    confidence
+                    * math.exp(
                         -settings.GOAL_TIME_DECAY_FACTOR
                         * max(0.0, (reference - kickoff).total_seconds() / 86400.0)
                     ),
                 )
-                for kickoff, value in observations
+                for kickoff, value, confidence in observations
             ]
             denominator = math.fsum(weight for _, weight in weighted)
             if denominator > 0.0:

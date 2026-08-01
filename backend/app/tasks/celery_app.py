@@ -33,6 +33,10 @@ celery_app.conf.update(
             "task": "app.tasks.jobs.sync_understat_xg_task",
             "schedule": 86400.0,
         },
+        "derive-historical-xg-daily": {
+            "task": "app.tasks.jobs.derive_historical_xg_task",
+            "schedule": 86400.0,
+        },
         "sync-current-season-primary-weekly": {
             "task": "app.tasks.jobs.sync_historical_fixtures_task",
             "schedule": 604800.0,

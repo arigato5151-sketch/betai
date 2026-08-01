@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     UNDERSTAT_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
     UNDERSTAT_MATCH_TOLERANCE_HOURS: int = Field(default=48, ge=1, le=48)
     UNDERSTAT_REQUEST_INTERVAL_SECONDS: float = Field(default=1.5, ge=0.5, le=10)
+    DERIVED_XG_ENABLED: bool = True
+    DERIVED_XG_MIN_TRAINING_MATCHES: int = Field(default=500, ge=100, le=10000)
+    DERIVED_XG_MAX_HOLDOUT_MAE: float = Field(default=0.60, gt=0, le=2)
+    DERIVED_XG_MIN_BASELINE_IMPROVEMENT: float = Field(default=0.10, ge=0, le=1)
+    DERIVED_XG_CONFIDENCE: float = Field(default=0.65, gt=0, lt=0.95)
     CLUBELO_ENABLED: bool = False
     CLUBELO_BASE_URL: str = "http://api.clubelo.com"
     CLUBELO_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=120)

@@ -71,6 +71,7 @@ def match_understat_xg(
                 "away_xg": observation.away_xg,
                 "xg_source": "understat",
                 "xg_provider_match_id": observation.provider_match_id,
+                "xg_confidence": 0.95,
             }
         )
     return XGMatchResult(

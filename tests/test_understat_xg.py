@@ -104,6 +104,12 @@ async def test_understat_client_sends_xhr_headers_and_normalizes_xg() -> None:
     ]
 
 
+def test_understat_supports_top_five_leagues_and_rfpl() -> None:
+    assert UnderstatClient().supported_league_ids == frozenset(
+        {39, 61, 78, 135, 140, 235}
+    )
+
+
 @pytest.mark.asyncio
 async def test_understat_client_rejects_invalid_xg() -> None:
     async def handler(_: httpx.Request) -> httpx.Response:
@@ -161,6 +167,7 @@ def test_xg_matching_requires_team_score_and_close_kickoff() -> None:
             "away_xg": 0.82,
             "xg_source": "understat",
             "xg_provider_match_id": "12345",
+            "xg_confidence": 0.95,
         },
     )
 
@@ -184,6 +191,14 @@ def test_xg_matching_requires_team_score_and_close_kickoff() -> None:
         ("Parma Calcio 1913", "Parma"),
         ("Athletic Club", "Ath Bilbao"),
         ("Real Sociedad", "Sociedad"),
+        ("Akron", "Akron Togliatti"),
+        ("Dinamo Moscow", "Dynamo Moscow"),
+        ("FC Krasnodar", "Krasnodar"),
+        ("FK Akhmat", "Akhmat Grozny"),
+        ("Krylya Sovetov Samara", "Krylya Sovetov"),
+        ("Nizhny Novgorod", "Pari NN"),
+        ("PFC Sochi", "Sochi"),
+        ("Zenit St. Petersburg", "Zenit"),
     ],
 )
 def test_verified_provider_team_aliases_match(
@@ -227,6 +242,7 @@ def test_repository_persists_xg_with_provenance() -> None:
         assert stored.away_xg == 0.82
         assert stored.xg_source == "understat"
         assert stored.xg_provider_match_id == "12345"
+        assert stored.xg_confidence == 0.95
         assert stored.xg_updated_at is not None
 
 

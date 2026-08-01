@@ -280,6 +280,7 @@ class HistoricalFixture(Base):
     xg_updated_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    xg_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     home_starting_xi: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     away_starting_xi: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     actual_result: Mapped[str] = mapped_column(String(16), nullable=False)

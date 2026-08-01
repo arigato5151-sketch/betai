@@ -96,7 +96,7 @@ class HistoricalFixtureRepository:
 
     def update_xg_many(self, updates: Iterable[Mapping[str, object]]) -> int:
         """Apply validated provider xG updates in one transaction."""
-        rows_by_fixture_id: dict[int, tuple[float, float, str, str]] = {}
+        rows_by_fixture_id: dict[int, tuple[float, float, str, str, float]] = {}
         for row in updates:
             fixture_id = row.get("fixture_id")
             if (
@@ -114,6 +114,7 @@ class HistoricalFixtureRepository:
                 self._validated_xg(row.get("away_xg"), "away_xg"),
                 source[:50],
                 provider_match_id[:100],
+                self._validated_confidence(row.get("xg_confidence")),
             )
         if not rows_by_fixture_id:
             return 0
@@ -125,14 +126,15 @@ class HistoricalFixtureRepository:
         timestamp = utc_now()
         try:
             for fixture in fixtures:
-                home_xg, away_xg, source, provider_match_id = rows_by_fixture_id[
-                    fixture.fixture_id
-                ]
+                home_xg, away_xg, source, provider_match_id, confidence = (
+                    rows_by_fixture_id[fixture.fixture_id]
+                )
                 fixture.home_xg = home_xg
                 fixture.away_xg = away_xg
                 fixture.xg_source = source
                 fixture.xg_provider_match_id = provider_match_id
                 fixture.xg_updated_at = timestamp
+                fixture.xg_confidence = confidence
             self.db.commit()
         except (KeyError, TypeError, ValueError, SQLAlchemyError):
             self.db.rollback()
@@ -146,6 +148,15 @@ class HistoricalFixtureRepository:
         parsed = float(value)
         if not math.isfinite(parsed) or not 0.0 <= parsed <= 15.0:
             raise ValueError(f"{label} must be between 0 and 15")
+        return parsed
+
+    @staticmethod
+    def _validated_confidence(value: object) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("xg_confidence must be numeric")
+        parsed = float(value)
+        if not math.isfinite(parsed) or not 0.0 < parsed <= 1.0:
+            raise ValueError("xg_confidence must be between 0 and 1")
         return parsed
 
     def get_league_history(

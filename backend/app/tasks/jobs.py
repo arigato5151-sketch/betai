@@ -30,6 +30,7 @@ from app.prediction.ml.training_data import HistoricalTrainingDataBuilder
 from app.prediction.ensemble_weights import ensemble_weight_manager
 from app.prediction.audit import PredictionAuditor
 from app.services.data_quality import DataQualityService
+from app.services.derived_xg import DerivedXGService
 from app.services.model_monitoring import ModelMonitoringService
 
 logger = logging.getLogger("bet-ai-pro.tasks")
@@ -635,6 +636,30 @@ def sync_understat_xg_task(seasons: list[int] | None = None) -> dict[str, object
     }
     logger.info("Understat xG synchronization completed: %s", result)
     return result
+
+
+@shared_task(name="app.tasks.jobs.derive_historical_xg_task")
+def derive_historical_xg_task() -> dict[str, object]:
+    """Fill non-observed xG only after the holdout quality gate passes."""
+    if not settings.DERIVED_XG_ENABLED:
+        return {"status": "disabled", "fixtures_updated": 0}
+
+    with SessionLocal() as db:
+        repository = HistoricalFixtureRepository(db)
+        result = DerivedXGService().build_updates(repository.get_all())
+        updated = (
+            repository.update_xg_many(result.updates) if result.status == "ready" else 0
+        )
+    response: dict[str, object] = {
+        "status": result.status,
+        "training_matches": result.training_matches,
+        "fixtures_updated": updated,
+        "holdout_mae": result.holdout_mae,
+        "baseline_mae": result.baseline_mae,
+        "holdout_r2": result.holdout_r2,
+    }
+    logger.info("Derived xG synchronization completed: %s", response)
+    return response
 
 
 @shared_task(name="app.tasks.jobs.sync_uefa_fixtures_task")

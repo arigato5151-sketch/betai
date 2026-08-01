@@ -20,6 +20,7 @@ UNDERSTAT_LEAGUES: Mapping[int, str] = MappingProxyType(
         78: "Bundesliga",
         135: "Serie_A",
         140: "La_liga",
+        235: "RFPL",
     }
 )
 

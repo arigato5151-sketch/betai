@@ -226,17 +226,26 @@ form ve H2H feature'larında gelecek bilgisi sızıntısı oluşmaz.
 1 Ağustos 2026 tarihinde yapılan 2025/26 yeniden senkronizasyonunda 4.764 yerel lig
 maçının 4.524'ünde maç istatistikleri, 4.520'sinde açılış ve 4.524'ünde kapanış
 oranları doğrulandı. Rusya rolling feed'indeki 240 maç yalnızca sonuç içerdiğinden
-zenginleştirme alanları boş kalır.
+şut, kart ve oran alanları boş kalır.
 
-Beş büyük ligde maç bazlı beklenen gol verisi, ayrı ve kapatılabilir Understat
+Beş büyük lig ve Rusya Premier Ligi'nde maç bazlı beklenen gol verisi, ayrı ve kapatılabilir Understat
 sağlayıcısından günlük olarak alınır (`UNDERSTAT_ENABLED`). JSON yanıtı boyut,
 tip ve değer aralığı açısından doğrulanır; lig istekleri sağlayıcı yükünü sınırlamak
 için varsayılan 1,5 saniye aralıkla gönderilir. Kayıtlar yalnızca normalize takım
 adları, final skor ve en fazla 48 saatlik başlama zamanı farkı birlikte uyuştuğunda
 eşleştirilir. Birden fazla eşit aday varsa kayıt reddedilir. 2025/26 pilotunda
-beş ligdeki 1.752 maçın 1.751'i için xG kaynağı bulundu; Understat'ta bulunmayan
-tek maçın alanları `NULL` kaldı. Bu gözlemler geçmiş ML eğitiminde gelecek veri
-sızıntısı olmadan, önceki maçların zaman ağırlıklı xG ortalaması olarak kullanılır.
+bu altı ligde 1.991 doğrulanmış maç xG kaydı bulundu.
+
+Gerçek xG'si bulunmayan ancak şut istatistikleri tam olan yerel lig maçları için
+ayrı bir `derived_shot_model` katmanı kullanılır. Model yalnız Understat gözlemleriyle
+eğitilir ve kronolojik `%20` holdout'ta MAE sınırı ile baseline iyileşme kapısını
+geçmeden veritabanına yazamaz. Güncel çalışmada MAE `0,471`, baseline MAE `0,707`
+ve R² `0,549` ölçüldü; 2.773 maç `0,65` güven puanlı türetilmiş xG ile tamamlandı.
+Understat gözlemleri `0,95` güvenle saklanır ve hiçbir zaman türetilmiş değerle
+ezilmez. Böylece 2025/26'daki 4.764 yerel lig maçının tamamında xG bulunur. Bu
+gözlemler geçmiş ML eğitiminde gelecek veri sızıntısı olmadan, kaynak güveni ve
+zaman ağırlığı birlikte kullanılarak ortalanır. Üç UEFA organizasyonundaki 531
+maç için güvenilir xG kaynağı henüz bulunmadığından alanlar boş bırakılır.
 
 Yeni sezon yayını her lig için ayrı denetlenir. Örneğin Rusya rolling feed'i
 yayımlanmışken Premier League dosyası henüz yoksa Rusya'nın güncel sezonu alınır,
