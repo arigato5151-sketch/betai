@@ -7,7 +7,7 @@ import io
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, cast
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -75,6 +75,18 @@ _ROLLING_COLUMNS = frozenset(
     {"Country", "League", "Season", "Date", "Home", "Away", "HG", "AG", "Res"}
 )
 _RESULTS = {"H": "HOME_WIN", "D": "DRAW", "A": "AWAY_WIN"}
+_OPENING_ODDS_TRIPLETS = (
+    ("B365H", "B365D", "B365A"),
+    ("AvgH", "AvgD", "AvgA"),
+    ("BFDH", "BFDD", "BFDA"),
+    ("MaxH", "MaxD", "MaxA"),
+)
+_CLOSING_ODDS_TRIPLETS = (
+    ("B365CH", "B365CD", "B365CA"),
+    ("AvgCH", "AvgCD", "AvgCA"),
+    ("BFDCH", "BFDCD", "BFDCA"),
+    ("MaxCH", "MaxCD", "MaxCA"),
+)
 
 
 def _stable_negative_id(namespace: str, natural_key: str) -> int:
@@ -308,24 +320,39 @@ class FootballDataCSVClient:
             "home_red_cards": "HR",
             "away_red_cards": "AR",
         }
-        odds_columns = {
-            "opening_home_odd": "B365H",
-            "opening_draw_odd": "B365D",
-            "opening_away_odd": "B365A",
-            "closing_home_odd": "B365CH",
-            "closing_draw_odd": "B365CD",
-            "closing_away_odd": "B365CA",
-        }
+        opening = cls._first_complete_odds(row, _OPENING_ODDS_TRIPLETS)
+        closing = cls._first_complete_odds(row, _CLOSING_ODDS_TRIPLETS)
         return {
             **{
                 target: cls._optional_non_negative_int(row.get(source), source)
                 for target, source in integer_columns.items()
             },
-            **{
-                target: cls._optional_decimal_odd(row.get(source), source)
-                for target, source in odds_columns.items()
-            },
+            "opening_home_odd": opening[0] if opening else None,
+            "opening_draw_odd": opening[1] if opening else None,
+            "opening_away_odd": opening[2] if opening else None,
+            "closing_home_odd": closing[0] if closing else None,
+            "closing_draw_odd": closing[1] if closing else None,
+            "closing_away_odd": closing[2] if closing else None,
         }
+
+    @classmethod
+    def _first_complete_odds(
+        cls,
+        row: Mapping[str, object],
+        candidates: tuple[tuple[str, str, str], ...],
+    ) -> tuple[float, float, float] | None:
+        """Choose one complete 1X2 source; never mix bookmakers in a triplet."""
+        for columns in candidates:
+            raw_values = tuple(str(row.get(column) or "").strip() for column in columns)
+            if not all(raw_values):
+                continue
+            parsed = tuple(
+                cls._optional_decimal_odd(value, column)
+                for value, column in zip(raw_values, columns, strict=True)
+            )
+            if all(value is not None for value in parsed):
+                return cast(tuple[float, float, float], parsed)
+        return None
 
     @staticmethod
     def _optional_non_negative_int(value: object, column: str) -> int | None:

@@ -98,6 +98,38 @@ async def test_missing_optional_statistics_remain_unknown() -> None:
 
 
 @pytest.mark.asyncio
+async def test_odds_use_complete_market_average_when_primary_bookmaker_is_missing() -> (
+    None
+):
+    content = (
+        "Div,Date,Time,HomeTeam,AwayTeam,FTHG,FTAG,FTR,"
+        "B365H,B365D,B365A,AvgH,AvgD,AvgA,AvgCH,AvgCD,AvgCA\n"
+        "F2,23/08/2025,19:00,Boulogne,St Etienne,0,1,A,"
+        ",3.40,,3.17,3.34,2.11,4.81,3.70,1.65\n"
+    ).encode()
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=content)
+
+    imported = await FootballDataCSVClient(
+        base_url="https://data.test",
+        transport=httpx.MockTransport(handler),
+    ).get_completed_fixtures(62, 2025)
+
+    fixture = imported.fixtures[0]
+    assert (
+        fixture["opening_home_odd"],
+        fixture["opening_draw_odd"],
+        fixture["opening_away_odd"],
+    ) == pytest.approx((3.17, 3.34, 2.11))
+    assert (
+        fixture["closing_home_odd"],
+        fixture["closing_draw_odd"],
+        fixture["closing_away_odd"],
+    ) == pytest.approx((4.81, 3.70, 1.65))
+
+
+@pytest.mark.asyncio
 async def test_invalid_optional_stat_fails_closed() -> None:
     content = (
         "Div,Date,Time,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HS\n"

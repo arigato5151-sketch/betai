@@ -216,17 +216,20 @@ Celery Beat, izin verilen liglerin mevcut sezon tamamlanmış maçlarını Footb
 CSV arşivinden günlük olarak `historical_fixtures` tablosuna idempotent biçimde
 yazar. Football-Data'nın 14 yerel lig eşlemesi; şema doğrulama, yerel saatten
 UTC'ye dönüşüm ve kaynak provenance'ı ile içe alınır. Sonuçlara ek olarak kaynakta
-bulunan devre skoru, şut, isabetli şut, faul, korner, sarı/kırmızı kart ve Bet365
-açılış/kapanış 1X2 oranları da nullable alanlar olarak saklanır. Eksik değerler
+bulunan devre skoru, şut, isabetli şut, faul, korner, sarı/kırmızı kart ve
+açılış/kapanış 1X2 oranları da nullable alanlar olarak saklanır. Oranlar eksiksiz
+bir 1X2 üçlüsü korunarak sırasıyla Bet365, piyasa ortalaması, Betfair ve piyasa
+maksimumundan seçilir; farklı kaynaklar aynı üçlü içinde karıştırılmaz. Eksik değerler
 uydurulmaz; `NULL` bırakılır. Açılış-kapanış oranları tarihsel ML örneklerindeki
 `odds_movement_*` feature'larını doğrudan besler. Analiz sırasında yalnızca maçın `kickoff` zamanından
 önceki kayıtlar okunur; aynı anda başlayan maçlar tek batch olarak işlendiğinden Elo,
 form ve H2H feature'larında gelecek bilgisi sızıntısı oluşmaz.
 
 1 Ağustos 2026 tarihinde yapılan 2025/26 yeniden senkronizasyonunda 4.764 yerel lig
-maçının 4.524'ünde maç istatistikleri, 4.520'sinde açılış ve 4.524'ünde kapanış
-oranları doğrulandı. Rusya rolling feed'indeki 240 maç yalnızca sonuç içerdiğinden
-şut, kart ve oran alanları boş kalır.
+maçının 4.524'ünde maç istatistikleri ve açılış oranları, 4.684'ünde kapanış oranları
+doğrulandı. Rusya rolling feed'indeki 240 maçta açılış oranı bulunmazken 160 maçın
+kapanış oranları piyasa fallback'inden tamamlandı; şut ve kart alanları kaynakta
+bulunmadığı için boş kalır.
 
 Beş büyük lig ve Rusya Premier Ligi'nde maç bazlı beklenen gol verisi, ayrı ve kapatılabilir Understat
 sağlayıcısından günlük olarak alınır (`UNDERSTAT_ENABLED`). JSON yanıtı boyut,
