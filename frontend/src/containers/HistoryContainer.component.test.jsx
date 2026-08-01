@@ -73,10 +73,18 @@ describe("historyItemToSelectedMatch", () => {
       is_value_bet: 0,
       ml_cluster: 0,
       ml_confidence: 55,
-      data_quality: { ml_assessment: assessment },
+      data_quality: {
+        ml_assessment: assessment,
+        analysis_outputs: {
+          expected_goals: { home: 1.4, away: 1.1, total: 2.5 },
+          score_band: "0-2 Gol",
+        },
+      },
     });
 
     expect(selected.ml_safety_trigger).toBe("UPSET_CANDIDATE");
     expect(selected.ml_safety_details).toEqual(assessment);
+    expect(selected.analysis.expected_goals.total).toBe(2.5);
+    expect(selected.analysis.score_band).toBe("0-2 Gol");
   });
 });

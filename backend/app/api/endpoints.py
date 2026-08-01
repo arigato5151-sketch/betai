@@ -1230,6 +1230,13 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         "manual_feature_overrides": sorted(payload.feature_overrides),
         "manual_feature_override_count": len(payload.feature_overrides),
         "feature_provenance": feature_provenance,
+        "analysis_outputs": {
+            "expected_goals": analysis.get("expected_goals"),
+            "expected_score": analysis.get("expected_score"),
+            "score_band": analysis.get("score_band"),
+            "secondary_markets": analysis.get("secondary_markets", []),
+            "match_profile": analysis.get("match_profile"),
+        },
     }
     data_quality["ml_assessment"] = _assess_ml_safety(ml_result, analysis, data_quality)
 

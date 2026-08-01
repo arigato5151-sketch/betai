@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import AnalysisReport from "./AnalysisReport.jsx";
+import AnalysisReport, { buildAlternativeResults } from "./AnalysisReport.jsx";
 
 vi.mock("react-chartjs-2", () => ({
   Doughnut: () => <div data-testid="olasılık-grafiği" />,
@@ -17,6 +17,14 @@ const match = {
       DRAW: 23,
       AWAY_WIN: 15,
     },
+    expected_goals: { home: 1.8, away: 1.1, total: 2.9 },
+    expected_score: { home: 1, away: 0, label: "1-0", probability: 14.2 },
+    score_band: "0-2 Gol",
+    secondary_markets: [
+      { market: "OVER_2_5", pick: "UST", probability: 56.4 },
+      { market: "BTTS", pick: "VAR", probability: 52.3 },
+      { market: "OVER_1_5", pick: "UST", probability: 73.1 },
+    ],
   },
   value_assessment: {
     value_bet: true,
@@ -46,11 +54,28 @@ describe("AnalysisReport Türkçe gösterim katmanı", () => {
     expect(screen.getByText(/DEĞERLİ ORAN BULUNDU/)).toBeInTheDocument();
     expect(screen.queryByText("HOME_WIN")).not.toBeInTheDocument();
     expect(screen.queryByText("INSUFFICIENT_DATA")).not.toBeInTheDocument();
+    expect(screen.getByText("Alternatif Analiz Sonuçları")).toBeInTheDocument();
+    expect(screen.getByText("1-X · %85")).toBeInTheDocument();
+    expect(screen.getByText("1-0 · %14.2")).toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Ev Sahibi Kazandı" }),
     );
     expect(onSubmitActualResult).toHaveBeenCalledWith(42, "HOME_WIN");
+  });
+
+  it("geçersiz alternatif olasılıkları güvenli biçimde eler", () => {
+    expect(
+      buildAlternativeResults({
+        all_probabilities: {
+          HOME_WIN: Number.NaN,
+          DRAW: 30,
+          AWAY_WIN: 30,
+        },
+        expected_score: { home: 1, away: 1, probability: 120 },
+        secondary_markets: [{ market: "BTTS", pick: "VAR", probability: -1 }],
+      }),
+    ).toEqual([]);
   });
 
   it("ML güven yüzdesini ve olasılık farkını gösterir", () => {

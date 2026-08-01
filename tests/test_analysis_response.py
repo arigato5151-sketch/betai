@@ -385,6 +385,13 @@ async def test_analysis_collects_feature_snapshot_before_first_model(
     assert captured_stats_kwargs["away_match_history"] is away_matches
     assert captured_stats_kwargs["as_of"] == payload.kickoff
     assert computed["ml_result"] == {"ready": False}
+    assert computed["data_quality"]["analysis_outputs"] == {
+        "expected_goals": computed["analysis"]["expected_goals"],
+        "expected_score": computed["analysis"]["expected_score"],
+        "score_band": computed["analysis"]["score_band"],
+        "secondary_markets": computed["analysis"]["secondary_markets"],
+        "match_profile": computed["analysis"]["match_profile"],
+    }
 
 
 @pytest.mark.asyncio

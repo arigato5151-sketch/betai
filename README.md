@@ -27,6 +27,7 @@ Projenin kaynak koduna GitHub üzerinden ulaşabilirsiniz: [arigato5151-sketch/b
 - Backend kaynaklı lig seçimi; UEFA turnuvalarının Türkçe adlarla analize aktarılması
 - Türkiye saatine göre kronolojik sıralanan, yenilenebilir 7 günlük maç fikstürü; kart seçimiyle analiz formuna otomatik veri aktarımı
 - Fikstür seçildiğinde `ml_features_v8` girdilerini arka planda otomatik dolduran sade analiz formu
+- 1X2 yanında çifte şans, 1.5/2.5 gol, karşılıklı gol, beklenen gol, gol aralığı ve olası skor sonuçları
 - API-Football demo verisi kullanıldığında giriş ve uygulama başlığında görünür `Demo Modu` etiketi
 - Admin rolü için kullanıcı oluşturma, rol atama ve hesap aktifliği yönetim paneli
 

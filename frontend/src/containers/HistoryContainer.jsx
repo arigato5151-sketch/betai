@@ -10,6 +10,7 @@ export function historyItemToSelectedMatch(rawDbItem) {
   const mlInsufficient =
     rawDbItem.ml_cluster === null || rawDbItem.ml_cluster === undefined;
   const storedAssessment = rawDbItem.data_quality?.ml_assessment;
+  const storedAnalysisOutputs = rawDbItem.data_quality?.analysis_outputs ?? {};
 
   return {
     match: `${rawDbItem.home_team} – ${rawDbItem.away_team}`,
@@ -34,6 +35,7 @@ export function historyItemToSelectedMatch(rawDbItem) {
         AWAY_WIN: probAway,
         DRAW: probDraw,
       },
+      ...storedAnalysisOutputs,
     },
     value_assessment: {
       value_bet: rawDbItem.is_value_bet === 1,

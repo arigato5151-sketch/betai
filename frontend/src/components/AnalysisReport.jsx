@@ -13,8 +13,100 @@ import {
 
 ChartJS.register(ArcElement, Tooltip);
 
+const asProbability = (value) => {
+  const probability = Number(value);
+  return Number.isFinite(probability) && probability >= 0 && probability <= 100
+    ? probability
+    : null;
+};
+
+const secondaryMarket = (analysis, market) =>
+  Array.isArray(analysis?.secondary_markets)
+    ? analysis.secondary_markets.find((item) => item?.market === market)
+    : null;
+
+export function buildAlternativeResults(analysis) {
+  const results = [];
+  const probabilities = analysis?.all_probabilities ?? {};
+  const home = asProbability(probabilities.HOME_WIN);
+  const draw = asProbability(probabilities.DRAW);
+  const away = asProbability(probabilities.AWAY_WIN);
+
+  if (home !== null && draw !== null && away !== null) {
+    const total = home + draw + away;
+    if (total > 0) {
+      const normalized = {
+        home: (home / total) * 100,
+        draw: (draw / total) * 100,
+        away: (away / total) * 100,
+      };
+      const doubleChances = [
+        { label: "1-X", probability: normalized.home + normalized.draw },
+        { label: "X-2", probability: normalized.draw + normalized.away },
+        { label: "1-2", probability: normalized.home + normalized.away },
+      ].sort((left, right) => right.probability - left.probability);
+      results.push({
+        key: "double_chance",
+        title: "Çifte Şans",
+        value: doubleChances[0].label,
+        probability: Number(doubleChances[0].probability.toFixed(2)),
+      });
+    }
+  }
+
+  const over25 = secondaryMarket(analysis, "OVER_2_5");
+  if (over25 && asProbability(over25.probability) !== null) {
+    results.push({
+      key: "over_2_5",
+      title: "Toplam 2.5 Gol",
+      value: over25.pick === "UST" ? "Üst" : "Alt",
+      probability: asProbability(over25.probability),
+    });
+  }
+
+  const btts = secondaryMarket(analysis, "BTTS");
+  if (btts && asProbability(btts.probability) !== null) {
+    results.push({
+      key: "btts",
+      title: "Karşılıklı Gol",
+      value: btts.pick === "VAR" ? "Var" : "Yok",
+      probability: asProbability(btts.probability),
+    });
+  }
+
+  const over15 = secondaryMarket(analysis, "OVER_1_5");
+  if (over15 && asProbability(over15.probability) !== null) {
+    results.push({
+      key: "over_1_5",
+      title: "1.5 Gol Üst",
+      value: "Üst",
+      probability: asProbability(over15.probability),
+    });
+  }
+
+  const score = analysis?.expected_score;
+  if (
+    Number.isInteger(score?.home) &&
+    Number.isInteger(score?.away) &&
+    asProbability(score?.probability) !== null
+  ) {
+    results.push({
+      key: "score",
+      title: "En Olası Skor",
+      value: `${score.home}-${score.away}`,
+      probability: asProbability(score.probability),
+    });
+  }
+
+  return results;
+}
+
 function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
   const safetyTone = mlSafetyTone(match.ml_safety_trigger);
+  const alternativeResults = useMemo(
+    () => buildAlternativeResults(match.analysis),
+    [match.analysis],
+  );
   const chartData = useMemo(
     () => ({
       labels: ["Ev Sahibi", "Deplasman", "Beraberlik"],
@@ -155,6 +247,49 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
           </span>
         </div>
       </div>
+      {(alternativeResults.length > 0 || match.analysis.expected_goals) && (
+        <section className="border-t border-slate-800 pt-5 md:col-span-2">
+          <h3 className="mb-3 text-sm font-black text-slate-200">
+            Alternatif Analiz Sonuçları
+          </h3>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {match.analysis.expected_goals && (
+              <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+                <span className="text-[11px] text-slate-500">Beklenen Gol</span>
+                <p className="mt-1 font-black text-sky-300">
+                  {match.analysis.expected_goals.home} – {match.analysis.expected_goals.away}
+                </p>
+                <span className="text-[10px] text-slate-500">
+                  Toplam {match.analysis.expected_goals.total} xG
+                </span>
+              </div>
+            )}
+            {match.analysis.score_band && (
+              <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+                <span className="text-[11px] text-slate-500">Gol Aralığı</span>
+                <p className="mt-1 font-black text-slate-200">
+                  {match.analysis.score_band}
+                </p>
+              </div>
+            )}
+            {alternativeResults.map((result) => (
+              <div
+                key={result.key}
+                className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"
+              >
+                <span className="text-[11px] text-slate-500">{result.title}</span>
+                <p className="mt-1 font-black text-emerald-300">
+                  {result.value} · %{result.probability}
+                </p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-[10px] text-slate-500">
+            Gol ve skor seçenekleri Poisson/Dixon-Coles dağılımından; çifte şans
+            final ensemble 1X2 olasılıklarından hesaplanır.
+          </p>
+        </section>
+      )}
     </div>
   );
 }
