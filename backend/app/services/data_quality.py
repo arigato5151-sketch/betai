@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.allowed_leagues import ALLOWED_LEAGUES
 from app.db.models import HistoricalFixture, MatchPrediction, SyncRun
 
 
@@ -66,6 +67,28 @@ class DataQualityService:
             .group_by(HistoricalFixture.data_source)
             .all()
         }
+        current_season = (
+            current_time.year if current_time.month >= 7 else current_time.year - 1
+        )
+        current_season_counts = {
+            int(league_id): int(count)
+            for league_id, count in self.db.query(
+                HistoricalFixture.league_id,
+                func.count(HistoricalFixture.id),
+            )
+            .filter(HistoricalFixture.season == current_season)
+            .group_by(HistoricalFixture.league_id)
+            .all()
+        }
+        league_coverage = [
+            {
+                "league_id": int(league["id"]),
+                "league_name": str(league["name"]),
+                "fixtures": current_season_counts.get(int(league["id"]), 0),
+                "covered": current_season_counts.get(int(league["id"]), 0) > 0,
+            }
+            for league in ALLOWED_LEAGUES
+        ]
 
         prediction_total = self.db.query(func.count(MatchPrediction.id)).scalar() or 0
         labeled_total = (
@@ -137,6 +160,14 @@ class DataQualityService:
                 "freshness_hours": freshness_hours,
                 "lineup_coverage_pct": lineup_coverage,
                 "source_counts": source_counts,
+                "current_season": current_season,
+                "current_season_coverage": league_coverage,
+                "current_season_covered_leagues": sum(
+                    item["covered"] for item in league_coverage
+                ),
+                "current_season_missing_league_ids": [
+                    item["league_id"] for item in league_coverage if not item["covered"]
+                ],
             },
             "predictions": {
                 "total": prediction_total,

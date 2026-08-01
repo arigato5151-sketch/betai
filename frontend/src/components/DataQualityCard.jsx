@@ -97,6 +97,17 @@ function DataQualityCard({ data, error, loading, onRefresh }) {
             <ProviderStatus name="API-Football" provider={data.providers?.api_football} />
             <ProviderStatus name="Sportmonks" provider={data.providers?.sportmonks} />
           </div>
+          <div className="mt-3 rounded border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
+            <strong className="text-slate-200">
+              {data.historical?.current_season} sezon kapsamı: {data.historical?.current_season_covered_leagues ?? 0}/
+              {data.historical?.current_season_coverage?.length ?? 0} lig
+            </strong>
+            {(data.historical?.current_season_missing_league_ids?.length ?? 0) > 0 && (
+              <span className="ml-2">
+                Eksik lig kimlikleri: {data.historical.current_season_missing_league_ids.join(", ")}
+              </span>
+            )}
+          </div>
         </>
       )}
     </section>

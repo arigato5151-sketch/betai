@@ -337,6 +337,7 @@ async def _enrich_historical_player_context(
 def sync_historical_fixtures_task(
     seasons: list[int] | None = None,
     league_ids: list[int] | None = None,
+    enrich_player_context: bool = True,
 ) -> dict:
     """Ingest a validated league scope; pass seasons for a repeatable backfill."""
     target_seasons: list[int] = sorted(
@@ -394,13 +395,15 @@ def sync_historical_fixtures_task(
             existing_context_ids = PlayerContextRepository(
                 db
             ).get_fixture_ids_with_complete_player_context(fixture_ids)
-        player_context_failures = _run_async(
-            _enrich_historical_player_context(
-                api_client,
-                fixture_rows,
-                existing_context_ids,
+        player_context_failures = 0
+        if enrich_player_context:
+            player_context_failures = _run_async(
+                _enrich_historical_player_context(
+                    api_client,
+                    fixture_rows,
+                    existing_context_ids,
+                )
             )
-        )
 
         performance_rows: list[dict[str, object]] = []
         normalized_fixture_rows: list[dict] = []

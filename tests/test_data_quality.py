@@ -50,6 +50,9 @@ def test_data_quality_snapshot_reports_coverage_and_freshness() -> None:
     assert snapshot["historical"]["freshness_hours"] == 2.0
     assert snapshot["historical"]["lineup_coverage_pct"] == 100.0
     assert snapshot["historical"]["source_counts"] == {"api_football": 1}
+    assert snapshot["historical"]["current_season"] == 2026
+    assert snapshot["historical"]["current_season_covered_leagues"] == 1
+    assert 203 not in snapshot["historical"]["current_season_missing_league_ids"]
     assert snapshot["predictions"]["labeled_coverage_pct"] == 100.0
     assert snapshot["predictions"]["closing_odds_coverage_pct"] == 100.0
     assert snapshot["predictions"]["provenance_coverage_pct"] == 100.0
