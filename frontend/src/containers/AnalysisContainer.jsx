@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { buildBankrollSeries } from "../bankroll.js";
 import AnalysisForm from "../components/AnalysisForm.jsx";
@@ -133,10 +133,6 @@ function AnalysisContainer({
   const [fixtureLoading, setFixtureLoading] = useState(false);
   const [fixtureError, setFixtureError] = useState("");
   const [fixtureMessage, setFixtureMessage] = useState("");
-  const [featurePreview, setFeaturePreview] = useState(null);
-  const [featurePreviewLoading, setFeaturePreviewLoading] = useState(false);
-  const [featurePreviewError, setFeaturePreviewError] = useState("");
-  const [featurePreviewStale, setFeaturePreviewStale] = useState(false);
   const [leagues, setLeagues] = useState([]);
   const [leaguesLoading, setLeaguesLoading] = useState(true);
   const [leaguesError, setLeaguesError] = useState("");
@@ -144,49 +140,9 @@ function AnalysisContainer({
   const [backtestLoading, setBacktestLoading] = useState(false);
   const [backtestError, setBacktestError] = useState("");
   const analysisSectionRef = useRef(null);
-  const previewRequestIdRef = useRef(0);
   const bankrollSeries = useMemo(
     () => buildBankrollSeries(backtest?.bankroll_history),
     [backtest],
-  );
-
-  const loadFeaturePreview = useCallback(
-    async (candidateFormData) => {
-      if (!actions.analyze) return;
-      const requestId = previewRequestIdRef.current + 1;
-      previewRequestIdRef.current = requestId;
-      setFeaturePreviewLoading(true);
-      setFeaturePreviewError("");
-      try {
-        const response = await request("/analyze/preview", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(candidateFormData),
-        });
-        if (!response.ok) {
-          const errorBody = await response.json().catch(() => ({}));
-          throw new Error(
-            errorBody.detail || "Model girdileri hesaplanamadı.",
-          );
-        }
-        const preview = await response.json();
-        if (previewRequestIdRef.current === requestId) {
-          setFeaturePreview(preview);
-          setFeaturePreviewStale(false);
-        }
-      } catch (error) {
-        if (previewRequestIdRef.current === requestId) {
-          setFeaturePreviewError(
-            error.message || "Model girdileri hesaplanamadı.",
-          );
-        }
-      } finally {
-        if (previewRequestIdRef.current === requestId) {
-          setFeaturePreviewLoading(false);
-        }
-      }
-    },
-    [actions.analyze, request],
   );
 
   useEffect(() => {
@@ -225,12 +181,6 @@ function AnalysisContainer({
   }, [request]);
 
   useEffect(() => {
-    if (actions.analyze) {
-      loadFeaturePreview(initialFormData);
-    }
-  }, [actions.analyze, loadFeaturePreview]);
-
-  useEffect(() => {
     const selectedFixture = fixtureSelection?.fixture;
     if (!actions.analyze || !selectedFixture?.fixture_id) return undefined;
 
@@ -263,7 +213,6 @@ function AnalysisContainer({
             behavior: "smooth",
             block: "start",
           });
-          await loadFeaturePreview(nextFormData);
         }
       } catch (error) {
         if (isActive) {
@@ -283,7 +232,6 @@ function AnalysisContainer({
   }, [
     actions.analyze,
     fixtureSelection,
-    loadFeaturePreview,
     request,
   ]);
 
@@ -296,7 +244,6 @@ function AnalysisContainer({
 
     if (!fixtureIdentityChanged) {
       setFormData(nextFormData);
-      setFeaturePreviewStale(true);
       return;
     }
 
@@ -317,29 +264,6 @@ function AnalysisContainer({
       current_odds_at: null,
       away_travel_distance_km: null,
       feature_overrides: {},
-    });
-    setFeaturePreviewStale(true);
-  };
-
-  const handleFeatureOverride = (name, value) => {
-    if (!Number.isFinite(value)) return;
-    setFormData((current) => ({
-      ...current,
-      feature_overrides: {
-        ...(current.feature_overrides ?? {}),
-        [name]: value,
-      },
-    }));
-  };
-
-  const handleFeatureReset = (name) => {
-    setFormData((current) => {
-      const nextOverrides = { ...(current.feature_overrides ?? {}) };
-      delete nextOverrides[name];
-      return {
-        ...current,
-        feature_overrides: nextOverrides,
-      };
     });
   };
 
@@ -448,10 +372,6 @@ function AnalysisContainer({
         )}
         {actions.analyze ? (
           <AnalysisForm
-            featureError={featurePreviewError}
-            featureLoading={featurePreviewLoading}
-            featurePreview={featurePreview}
-            featurePreviewStale={featurePreviewStale}
             fixtureLoading={fixtureLoading}
             formData={formData}
             leagues={leagues}
@@ -459,9 +379,6 @@ function AnalysisContainer({
             leaguesLoading={leaguesLoading}
             loading={loading}
             onChange={handleFormChange}
-            onFeatureOverride={handleFeatureOverride}
-            onFeatureRefresh={() => loadFeaturePreview(formData)}
-            onFeatureReset={handleFeatureReset}
             onSubmit={handleSubmit}
           />
         ) : (

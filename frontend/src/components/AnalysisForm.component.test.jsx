@@ -154,40 +154,13 @@ describe("AnalysisForm lig seçimi", () => {
     );
   });
 
-  it("tüm temel istatistikleri ve eksik model girdilerini düzenlenebilir gösterir", () => {
-    const onFeatureOverride = vi.fn();
-    const onFeatureRefresh = vi.fn();
+  it("temel istatistikleri gösterir ancak ayrıntılı model girdilerini ekrana basmaz", () => {
     render(
       <AnalysisForm
-        featurePreview={{
-          features: [
-            {
-              name: "fatigue_index",
-              label: "Yorgunluk ve Seyahat Endeksi",
-              group: "Dinlenme ve seyahat",
-              value: 0,
-              calculated_value: 0,
-              default_value: 0,
-              availability: "missing",
-              missing_reason: "Takvim verisi eksik.",
-              overridden: false,
-              minimum: -1,
-              maximum: 1,
-              step: 0.01,
-            },
-          ],
-          derived: {
-            expected_goals: { home: 1.5, away: 1.1, total: 2.6 },
-          },
-          data_quality: { score: 60 },
-        }}
         formData={{ ...formData, feature_overrides: {} }}
         leagues={leagues}
         loading={false}
         onChange={vi.fn()}
-        onFeatureOverride={onFeatureOverride}
-        onFeatureRefresh={onFeatureRefresh}
-        onFeatureReset={vi.fn()}
         onSubmit={vi.fn()}
       />,
     );
@@ -195,17 +168,11 @@ describe("AnalysisForm lig seçimi", () => {
     expect(screen.getAllByLabelText("Hücum Gücü")).toHaveLength(2);
     expect(screen.getAllByLabelText("Savunma Gücü")).toHaveLength(2);
     expect(screen.getAllByLabelText("Gol Beklentisi (xG)")).toHaveLength(2);
-    expect(screen.getByText("Takvim verisi eksik.")).toBeInTheDocument();
-
-    fireEvent.change(
-      screen.getByLabelText("Yorgunluk ve Seyahat Endeksi"),
-      { target: { value: "0.4" } },
-    );
-    expect(onFeatureOverride).toHaveBeenCalledWith("fatigue_index", 0.4);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Değerleri Yeniden Hesapla" }),
-    );
-    expect(onFeatureRefresh).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByText("Hesaplanan Tüm Model Girdileri"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Yorgunluk ve Seyahat Endeksi"),
+    ).not.toBeInTheDocument();
   });
 });

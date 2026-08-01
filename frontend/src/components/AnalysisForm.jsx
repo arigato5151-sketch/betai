@@ -1,5 +1,4 @@
 import { leagueLabel } from "../localization.js";
-import AnalysisInputsPanel from "./AnalysisInputsPanel.jsx";
 
 const TEAM_STAT_FIELDS = [
   { key: "form", label: "Form", maximum: 100, step: 1 },
@@ -84,20 +83,13 @@ function TeamStatsEditor({ accentClass, label, onChange, side, stats }) {
 }
 
 function AnalysisForm({
-  featureError = "",
   formData,
   fixtureLoading = false,
-  featureLoading = false,
-  featurePreview = null,
-  featurePreviewStale = false,
   leagues = [],
   leaguesError = "",
   leaguesLoading = false,
   loading,
   onChange,
-  onFeatureOverride,
-  onFeatureRefresh,
-  onFeatureReset,
   onSubmit,
 }) {
   const hasLeagues = leagues.length > 0;
@@ -371,26 +363,13 @@ function AnalysisForm({
           </div>
         </details>
 
-        <AnalysisInputsPanel
-          error={featureError}
-          featureOverrides={formData.feature_overrides}
-          loading={featureLoading}
-          onOverride={onFeatureOverride}
-          onRefresh={onFeatureRefresh}
-          onReset={onFeatureReset}
-          preview={featurePreview}
-          stale={featurePreviewStale}
-        />
-
         <button
           type="submit"
-          disabled={loading || fixtureLoading || featureLoading}
+          disabled={loading || fixtureLoading}
           className="w-full rounded-lg bg-emerald-500 p-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-600 disabled:opacity-50"
         >
           {fixtureLoading
             ? "Maç verileri yükleniyor…"
-            : featureLoading
-              ? "Model girdileri hesaplanıyor…"
             : loading
               ? "Analiz ediliyor…"
               : "Tahmin Oluştur"}

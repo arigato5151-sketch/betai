@@ -150,13 +150,9 @@ describe("AnalysisContainer lig entegrasyonu", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Erken Takım – Rakip A analiz formuna yüklendi.",
     );
-    expect(screen.getByText(/Kaynak:/)).toHaveTextContent(
-      "Kaynak: Nötr varsayılan · Güven %0 · fallback",
-    );
-    fireEvent.change(
-      screen.getByLabelText("Yorgunluk ve Seyahat Endeksi"),
-      { target: { value: "0.4" } },
-    );
+    expect(
+      screen.queryByText("Hesaplanan Tüm Model Girdileri"),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Tahmin Oluştur" }));
     await waitFor(() => {
@@ -179,7 +175,7 @@ describe("AnalysisContainer lig entegrasyonu", () => {
       current_odds_1x2: prefillResponse.current_odds_1x2,
       opening_odds_at: prefillResponse.opening_odds_at,
       current_odds_at: prefillResponse.current_odds_at,
-      feature_overrides: { fatigue_index: 0.4 },
+      feature_overrides: {},
     });
   });
 
