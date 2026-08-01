@@ -58,6 +58,7 @@ def test_celery_connection_recovery_and_delivery_guards_are_enabled() -> None:
         "collect-upcoming-lineups",
         "collect-upcoming-odds",
         "sync-football-data-fixtures-daily",
+        "sync-understat-xg-daily",
         "sync-completed-matches-daily",
         "retrain-ml-model-weekly",
         "monitor-model-drift-daily",

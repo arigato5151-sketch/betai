@@ -228,6 +228,16 @@ maçının 4.524'ünde maç istatistikleri, 4.520'sinde açılış ve 4.524'ünd
 oranları doğrulandı. Rusya rolling feed'indeki 240 maç yalnızca sonuç içerdiğinden
 zenginleştirme alanları boş kalır.
 
+Beş büyük ligde maç bazlı beklenen gol verisi, ayrı ve kapatılabilir Understat
+sağlayıcısından günlük olarak alınır (`UNDERSTAT_ENABLED`). JSON yanıtı boyut,
+tip ve değer aralığı açısından doğrulanır; lig istekleri sağlayıcı yükünü sınırlamak
+için varsayılan 1,5 saniye aralıkla gönderilir. Kayıtlar yalnızca normalize takım
+adları, final skor ve en fazla 48 saatlik başlama zamanı farkı birlikte uyuştuğunda
+eşleştirilir. Birden fazla eşit aday varsa kayıt reddedilir. 2025/26 pilotunda
+beş ligdeki 1.752 maçın 1.751'i için xG kaynağı bulundu; Understat'ta bulunmayan
+tek maçın alanları `NULL` kaldı. Bu gözlemler geçmiş ML eğitiminde gelecek veri
+sızıntısı olmadan, önceki maçların zaman ağırlıklı xG ortalaması olarak kullanılır.
+
 Yeni sezon yayını her lig için ayrı denetlenir. Örneğin Rusya rolling feed'i
 yayımlanmışken Premier League dosyası henüz yoksa Rusya'nın güncel sezonu alınır,
 yalnız yayımlanmayan lig bir önceki sezona düşer. API-Football ve CSV takım adları

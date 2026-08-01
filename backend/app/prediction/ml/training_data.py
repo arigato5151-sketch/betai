@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import defaultdict, deque
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -70,7 +71,7 @@ class HistoricalTrainingDataBuilder:
         clean_sheets = int(frame["clean_sheet"].sum())
         failed_to_score = int((frame["goals_for"] == 0).sum())
         played = len(frame)
-        return build_team_profile(
+        profile = build_team_profile(
             {
                 "form": form,
                 "goals": {
@@ -83,6 +84,40 @@ class HistoricalTrainingDataBuilder:
             },
             venue,
         )
+        observations: list[tuple[datetime, float]] = []
+        for fixture in fixtures:
+            kickoff = HistoricalTrainingDataBuilder._as_utc_datetime(fixture.kickoff)
+            value = (
+                fixture.home_xg if fixture.home_team_id == team_id else fixture.away_xg
+            )
+            if (
+                kickoff is not None
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+                and 0.0 <= float(value) <= 15.0
+            ):
+                observations.append((kickoff, float(value)))
+        if observations:
+            reference = max(kickoff for kickoff, _ in observations)
+            weighted = [
+                (
+                    value,
+                    math.exp(
+                        -settings.GOAL_TIME_DECAY_FACTOR
+                        * max(0.0, (reference - kickoff).total_seconds() / 86400.0)
+                    ),
+                )
+                for kickoff, value in observations
+            ]
+            denominator = math.fsum(weight for _, weight in weighted)
+            if denominator > 0.0:
+                profile["xg"] = round(
+                    math.fsum(value * weight for value, weight in weighted)
+                    / denominator,
+                    4,
+                )
+        return profile
 
     @staticmethod
     def _update_elo(

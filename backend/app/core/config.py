@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     FOOTBALL_DATA_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
     FIXTURE_DOWNLOAD_BASE_URL: str = "https://fixturedownload.com/feed/json"
     FIXTURE_DOWNLOAD_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
+    UNDERSTAT_ENABLED: bool = False
+    UNDERSTAT_BASE_URL: str = "https://understat.com"
+    UNDERSTAT_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
+    UNDERSTAT_MATCH_TOLERANCE_HOURS: int = Field(default=48, ge=1, le=48)
+    UNDERSTAT_REQUEST_INTERVAL_SECONDS: float = Field(default=1.5, ge=0.5, le=10)
     CLUBELO_ENABLED: bool = False
     CLUBELO_BASE_URL: str = "http://api.clubelo.com"
     CLUBELO_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=120)
@@ -413,6 +418,24 @@ class Settings(BaseSettings):
                 "FIXTURE_DOWNLOAD_BASE_URL must point to "
                 "https://fixturedownload.com/feed/json"
             )
+        return normalized
+
+    @field_validator("UNDERSTAT_BASE_URL")
+    @classmethod
+    def validate_understat_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "understat.com"
+            or parsed.username
+            or parsed.password
+            or parsed.port
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("UNDERSTAT_BASE_URL must point to https://understat.com")
         return normalized
 
     @model_validator(mode="after")

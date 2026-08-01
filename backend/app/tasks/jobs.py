@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
@@ -21,6 +22,8 @@ from app.services.football_data_csv import (
     FootballDataDownloadError,
 )
 from app.services.fixture_download import FixtureDownloadClient, UEFA_FEEDS
+from app.providers.understat import UnderstatClient
+from app.services.understat_xg import match_understat_xg
 from app.services.odds_history import OddsHistoryService, odds_history_service
 from app.prediction.ml.model import ml_pipeline
 from app.prediction.ml.training_data import HistoricalTrainingDataBuilder
@@ -543,6 +546,94 @@ def sync_football_data_fixtures_task(seasons: list[int] | None = None) -> dict:
     if league_season_fallbacks:
         result["league_season_fallbacks"] = league_season_fallbacks
     logger.info("Football-Data fixture synchronization completed: %s", result)
+    return result
+
+
+@shared_task(name="app.tasks.jobs.sync_understat_xg_task")
+def sync_understat_xg_task(seasons: list[int] | None = None) -> dict[str, object]:
+    """Enrich top-five-league historical fixtures with match-level xG."""
+    if not settings.UNDERSTAT_ENABLED:
+        return {"status": "disabled", "fixtures_updated": 0}
+
+    target_seasons = sorted(
+        set(seasons if seasons is not None else [_current_football_season()])
+    )
+    client = UnderstatClient()
+    with SessionLocal() as db:
+        sync_run_id = (
+            DataQualityService(db).start_sync("understat_xg", target_seasons).id
+        )
+
+    fetched = updated = unmatched = ambiguous = 0
+    failures: list[dict[str, object]] = []
+    request_count = len(client.supported_league_ids) * len(target_seasons)
+    request_index = 0
+    try:
+        for league_id in sorted(client.supported_league_ids):
+            for season in target_seasons:
+                try:
+                    observations = _run_async(
+                        client.get_completed_fixture_xg(league_id, season)
+                    )
+                    fetched += len(observations)
+                    with SessionLocal() as db:
+                        repository = HistoricalFixtureRepository(db)
+                        historical = repository.get_league_history(
+                            league_id=league_id,
+                            season=season,
+                            before=datetime.now(UTC),
+                        )
+                        matches = match_understat_xg(
+                            historical,
+                            observations,
+                            tolerance_hours=settings.UNDERSTAT_MATCH_TOLERANCE_HOURS,
+                        )
+                        updated += repository.update_xg_many(matches.updates)
+                    unmatched += len(matches.unmatched_provider_ids)
+                    ambiguous += len(matches.ambiguous_provider_ids)
+                except Exception as exc:
+                    logger.exception(
+                        "Understat xG sync failed for league=%s season=%s",
+                        league_id,
+                        season,
+                    )
+                    failures.append(
+                        {
+                            "league_id": league_id,
+                            "season": season,
+                            "error": type(exc).__name__,
+                        }
+                    )
+                finally:
+                    request_index += 1
+                    if request_index < request_count:
+                        time.sleep(settings.UNDERSTAT_REQUEST_INTERVAL_SECONDS)
+        with SessionLocal() as db:
+            DataQualityService(db).finish_sync(
+                sync_run_id,
+                processed=updated,
+                failures=failures,
+            )
+    except Exception as exc:
+        with SessionLocal() as db:
+            DataQualityService(db).finish_sync(
+                sync_run_id,
+                processed=updated,
+                failures=failures,
+                error_type=type(exc).__name__,
+            )
+        raise
+
+    result: dict[str, object] = {
+        "status": "partial" if failures else "completed",
+        "seasons": target_seasons,
+        "fixtures_fetched": fetched,
+        "fixtures_updated": updated,
+        "unmatched_fixtures": unmatched,
+        "ambiguous_fixtures": ambiguous,
+        "failed_league_seasons": failures,
+    }
+    logger.info("Understat xG synchronization completed: %s", result)
     return result
 
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from sqlalchemy import and_, or_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -92,6 +93,60 @@ class HistoricalFixtureRepository:
             )
             .all()
         )
+
+    def update_xg_many(self, updates: Iterable[Mapping[str, object]]) -> int:
+        """Apply validated provider xG updates in one transaction."""
+        rows_by_fixture_id: dict[int, tuple[float, float, str, str]] = {}
+        for row in updates:
+            fixture_id = row.get("fixture_id")
+            if (
+                isinstance(fixture_id, bool)
+                or not isinstance(fixture_id, int)
+                or fixture_id == 0
+            ):
+                raise ValueError("fixture_id must be a non-zero integer")
+            source = str(row.get("xg_source") or "").strip()
+            provider_match_id = str(row.get("xg_provider_match_id") or "").strip()
+            if not source or not provider_match_id:
+                raise ValueError("xG provenance cannot be blank")
+            rows_by_fixture_id[fixture_id] = (
+                self._validated_xg(row.get("home_xg"), "home_xg"),
+                self._validated_xg(row.get("away_xg"), "away_xg"),
+                source[:50],
+                provider_match_id[:100],
+            )
+        if not rows_by_fixture_id:
+            return 0
+        fixtures = (
+            self.db.query(HistoricalFixture)
+            .filter(HistoricalFixture.fixture_id.in_(rows_by_fixture_id))
+            .all()
+        )
+        timestamp = utc_now()
+        try:
+            for fixture in fixtures:
+                home_xg, away_xg, source, provider_match_id = rows_by_fixture_id[
+                    fixture.fixture_id
+                ]
+                fixture.home_xg = home_xg
+                fixture.away_xg = away_xg
+                fixture.xg_source = source
+                fixture.xg_provider_match_id = provider_match_id
+                fixture.xg_updated_at = timestamp
+            self.db.commit()
+        except (KeyError, TypeError, ValueError, SQLAlchemyError):
+            self.db.rollback()
+            raise
+        return len(fixtures)
+
+    @staticmethod
+    def _validated_xg(value: object, label: str) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{label} must be numeric")
+        parsed = float(value)
+        if not math.isfinite(parsed) or not 0.0 <= parsed <= 15.0:
+            raise ValueError(f"{label} must be between 0 and 15")
+        return parsed
 
     def get_league_history(
         self, *, league_id: int, before: datetime, season: int | None = None

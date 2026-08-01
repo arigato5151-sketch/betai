@@ -157,6 +157,23 @@ def test_historical_training_uses_fixture_opening_and_closing_odds() -> None:
     assert snapshot["odds_movement_away"] == 10.0
 
 
+def test_historical_training_prefers_prior_observed_xg() -> None:
+    start = datetime(2025, 8, 1, tzinfo=UTC)
+    fixtures = [
+        fixture(1, start, 1, 2, 2, 0),
+        fixture(2, start + timedelta(days=1), 3, 4, 1, 0),
+        fixture(3, start + timedelta(days=7), 1, 3, 1, 1),
+    ]
+    fixtures[0].home_xg = 2.45
+    fixtures[1].home_xg = 1.35
+
+    rows = HistoricalTrainingDataBuilder(minimum_team_history=1).build(fixtures)
+
+    assert len(rows) == 1
+    assert rows[0].feature_snapshot["home_xg"] == 2.45
+    assert rows[0].feature_snapshot["away_xg"] == 1.35
+
+
 def test_simultaneous_fixtures_do_not_leak_results_between_snapshots() -> None:
     start = datetime(2025, 8, 1, tzinfo=UTC)
     shared_kickoff = start + timedelta(days=7)

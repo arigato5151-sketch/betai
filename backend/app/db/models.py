@@ -273,6 +273,13 @@ class HistoricalFixture(Base):
     closing_home_odd: Mapped[float | None] = mapped_column(Float, nullable=True)
     closing_draw_odd: Mapped[float | None] = mapped_column(Float, nullable=True)
     closing_away_odd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    home_xg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    away_xg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    xg_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    xg_provider_match_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    xg_updated_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     home_starting_xi: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     away_starting_xi: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     actual_result: Mapped[str] = mapped_column(String(16), nullable=False)
