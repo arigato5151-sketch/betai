@@ -18,6 +18,7 @@ VAULT_SECRET_KEYS = frozenset(
         "JWT_SECRET_KEY",
         "JWT_REFRESH_SECRET_KEY",
         "MODEL_SIGNING_KEY",
+        "SPORTMONKS_API_TOKEN",
         "ADMIN_PASSWORD",
     }
 )
@@ -52,6 +53,14 @@ def load_external_secrets(
 ) -> dict[str, Any]:
     """Load allowlisted secrets from Vault or Azure Key Vault."""
     config = _bootstrap_environment(env_file)
+    required_keys = set(REQUIRED_VAULT_SECRET_KEYS)
+    if config.get("SPORTMONKS_ENABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        required_keys.add("SPORTMONKS_API_TOKEN")
     provider = config.get("SECRET_PROVIDER", "env").strip().lower()
     if provider == "env":
         return {"provider": "env", "loaded_keys": 0}
@@ -71,7 +80,7 @@ def load_external_secrets(
             try:
                 value = azure_client.get_secret(secret_name).value
             except Exception:
-                if key in REQUIRED_VAULT_SECRET_KEYS:
+                if key in required_keys:
                     missing.append(key)
                 continue
             if not isinstance(value, str) or not value:
@@ -111,7 +120,7 @@ def load_external_secrets(
         raise_on_deleted_version=True,
     )
     payload: Mapping[str, object] = response.get("data", {}).get("data", {})
-    missing = sorted(REQUIRED_VAULT_SECRET_KEYS - payload.keys())
+    missing = sorted(required_keys - payload.keys())
     if missing:
         raise RuntimeError(
             f"Vault payload is missing required keys: {', '.join(missing)}"

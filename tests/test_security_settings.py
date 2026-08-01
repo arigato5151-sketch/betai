@@ -34,6 +34,20 @@ def test_valid_production_security_configuration() -> None:
     assert settings.REQUIRE_ORIGIN_HEADER is True
 
 
+def test_enabled_sportmonks_requires_non_placeholder_token() -> None:
+    with pytest.raises(ValidationError, match="SPORTMONKS_API_TOKEN"):
+        production_settings(
+            SPORTMONKS_ENABLED=True,
+            SPORTMONKS_API_TOKEN="replace_with_sportmonks_token",
+        )
+
+
+def test_model_signing_key_must_differ_from_jwt_secrets() -> None:
+    shared = "a-production-secret-that-is-long-enough-123"
+    with pytest.raises(ValidationError, match="MODEL_SIGNING_KEY"):
+        production_settings(JWT_SECRET_KEY=shared, MODEL_SIGNING_KEY=shared)
+
+
 @pytest.mark.parametrize(
     ("override", "expected_message"),
     [

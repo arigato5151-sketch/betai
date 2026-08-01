@@ -461,6 +461,8 @@ class Settings(BaseSettings):
             errors.append(
                 "MODEL_SIGNING_KEY must be non-default and at least 32 characters"
             )
+        elif self.MODEL_SIGNING_KEY in secrets:
+            errors.append("MODEL_SIGNING_KEY must be distinct from JWT secrets")
 
         if (
             len(self.ADMIN_PASSWORD) < 12
@@ -475,6 +477,14 @@ class Settings(BaseSettings):
             "your_api_football_key",
         }:
             errors.append("API_FOOTBALL_KEY must be configured")
+        if self.SPORTMONKS_ENABLED and (
+            len(self.SPORTMONKS_API_TOKEN) < 24
+            or self.SPORTMONKS_API_TOKEN
+            in {"your_sportmonks_token", "replace_with_sportmonks_token"}
+        ):
+            errors.append(
+                "SPORTMONKS_API_TOKEN must be configured when Sportmonks is enabled"
+            )
 
         frontend_origin = self.FRONTEND_URL.rstrip("/")
         if not frontend_origin.startswith("https://"):

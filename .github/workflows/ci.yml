@@ -52,6 +52,8 @@ jobs:
         run: npm --prefix frontend run test --if-present
       - name: Frontend production build
         run: npm --prefix frontend run build
+      - name: Secret leak guard
+        run: python scripts/check_secrets.py
       - name: Dependency audit
         run: |
           python -m pip install pip-audit
