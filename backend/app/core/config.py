@@ -115,9 +115,9 @@ class Settings(BaseSettings):
 
     # Kalibre edildi: bkz. docs/CALIBRATION.md
     LEAGUE_BASELINE_GOALS: float = Field(default=1.32, gt=0)
-    # TODO: kalibrasyon — 0.01 ≈ 69 günlük yarı ömür; out-of-time grid bekleniyor.
+    # Kalibre edildi: bkz. docs/CALIBRATION.md ve calibration_time_decay.json
     GOAL_TIME_DECAY_FACTOR: float = Field(
-        default=0.01,
+        default=0.008,
         ge=0,
         le=1,
         allow_inf_nan=False,

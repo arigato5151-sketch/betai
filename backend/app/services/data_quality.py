@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -82,10 +82,10 @@ class DataQualityService:
         }
         league_coverage = [
             {
-                "league_id": int(league["id"]),
+                "league_id": cast(int, league["id"]),
                 "league_name": str(league["name"]),
-                "fixtures": current_season_counts.get(int(league["id"]), 0),
-                "covered": current_season_counts.get(int(league["id"]), 0) > 0,
+                "fixtures": current_season_counts.get(cast(int, league["id"]), 0),
+                "covered": current_season_counts.get(cast(int, league["id"]), 0) > 0,
             }
             for league in ALLOWED_LEAGUES
         ]

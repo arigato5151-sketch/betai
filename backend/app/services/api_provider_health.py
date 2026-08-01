@@ -15,7 +15,9 @@ def _now() -> datetime:
 
 
 def _header_int(headers: Mapping[str, str], name: str) -> int | None:
-    raw = next((value for key, value in headers.items() if key.lower() == name.lower()), None)
+    raw = next(
+        (value for key, value in headers.items() if key.lower() == name.lower()), None
+    )
     try:
         return int(raw) if raw is not None else None
     except (TypeError, ValueError):
@@ -91,7 +93,9 @@ class APIFootballHealthTracker:
                 "minute_limit": _header_int(headers, "x-ratelimit-limit"),
                 "minute_remaining": _header_int(headers, "x-ratelimit-remaining"),
             }
-            self._state.update({key: value for key, value in quota.items() if value is not None})
+            self._state.update(
+                {key: value for key, value in quota.items() if value is not None}
+            )
             self._state["last_status_code"] = status_code
             if status_code == 200:
                 self._state.update(
@@ -125,9 +129,12 @@ class APIFootballHealthTracker:
                 last_status_code=429,
                 last_failure_at=_now().isoformat(),
                 last_error="rate_limited",
-                consecutive_failures=int(self._state.get("consecutive_failures") or 0) + 1,
+                consecutive_failures=int(self._state.get("consecutive_failures") or 0)
+                + 1,
             )
-            self._open_circuit(max(retry_after, settings.API_FOOTBALL_CIRCUIT_OPEN_SECONDS))
+            self._open_circuit(
+                max(retry_after, settings.API_FOOTBALL_CIRCUIT_OPEN_SECONDS)
+            )
             await self._persist()
 
     async def record_transport_failure(self, error: str) -> None:
@@ -135,7 +142,9 @@ class APIFootballHealthTracker:
 
     def _open_circuit(self, seconds: int) -> None:
         self._state["status"] = "circuit_open"
-        self._state["circuit_open_until"] = (_now() + timedelta(seconds=seconds)).isoformat()
+        self._state["circuit_open_until"] = (
+            _now() + timedelta(seconds=seconds)
+        ).isoformat()
 
     async def snapshot(self) -> dict[str, Any]:
         async with self._lock:

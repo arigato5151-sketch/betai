@@ -4,6 +4,22 @@ Son çalışma: **26 Temmuz 2026**
 
 ## Sonuç
 
+### 1 Ağustos 2026 zaman-decay out-of-time doğrulaması
+
+`GOAL_TIME_DECAY_FACTOR`, 8.341 maçtan üretilen 7.628 nokta-zaman örneğiyle
+yeniden tarandı. İlk %80 (6.102 örnek) seçim, kronolojik son %20 (1.526 örnek)
+dokunulmamış doğrulama kümesi olarak kullanıldı. Her takım için yalnız maçtan önceki
+en fazla 20 karşılaşma hesaba katıldı.
+
+- Seçim kümesinin adayı: `0.008`.
+- Holdout Brier, `0.01` için `0.638612`; `0.008` için `0.637246`.
+- Holdout iyileşmesi: `0.001366` multiclass Brier.
+- Oran verisi bu hedefli turda kullanılmadığı için ROI sonucu üretilmedi.
+
+Sonuç holdout üzerinde de aynı yönde olduğu için production varsayılanı `0.008`
+olarak güncellendi. Tam makine-okunur çıktı `docs/calibration_time_decay.json`
+dosyasındadır.
+
 `Settings` içindeki 37 kalibrasyon alanının 27'si tarihsel duyarlılık
 analizinden geçirildi. On alan, yürütülen tahmin yolunda etkisiz olması veya
 yeterli tarihsel örneğin bulunmaması nedeniyle açık TODO olarak bırakıldı.
@@ -121,10 +137,9 @@ Bu alanların TODO yorumları, nedenleriyle birlikte kodda korunmuştur.
 
 ## Rapor sonrası eklenen parametre
 
-`GOAL_TIME_DECAY_FACTOR=0.01`, bu 37 alanlık çalışma tamamlandıktan sonra
-zaman ağırlıklı Poisson için eklenmiştir. Değer yaklaşık 69 günlük teorik yarı ömür
-sağlar; henüz bu rapordaki grid sonuçlarıyla kalibre edilmiş sayılmaz. Bir sonraki
-out-of-time çalışmada `0.0–0.03` aralığında ayrıca taranmalıdır.
+`GOAL_TIME_DECAY_FACTOR`, ilk 37 alanlık çalışmadan sonra eklenmiş ve 1 Ağustos
+2026 tarihli kronolojik out-of-time turunda ayrıca doğrulanmıştır. Güncel `0.008`
+değeri yaklaşık 87 günlük teorik yarı ömür sağlar.
 
 Lig bazlı BMA için eklenen `ENSEMBLE_BMA_*` prior, yarı ömür, kalite ve guard
 değerleri de bu 37 alanlık çalışmadan sonra eklenmiştir. Bunlar güvenli başlangıç

@@ -48,7 +48,12 @@ def tracked_files(root: Path) -> list[Path]:
 def find_exposed_secrets(root: Path) -> list[str]:
     findings: list[str] = []
     for path in tracked_files(root):
-        if not path.is_file() or path.suffix.lower() in {".png", ".jpg", ".ico", ".lock"}:
+        if not path.is_file() or path.suffix.lower() in {
+            ".png",
+            ".jpg",
+            ".ico",
+            ".lock",
+        }:
             continue
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -57,10 +62,14 @@ def find_exposed_secrets(root: Path) -> list[str]:
         for line_number, line in enumerate(lines, start=1):
             for match in ASSIGNMENT.finditer(line):
                 value = match.group("value").strip()
-                if not value or any(marker in value or marker in line for marker in SAFE_MARKERS):
+                if not value or any(
+                    marker in value or marker in line for marker in SAFE_MARKERS
+                ):
                     continue
                 if len(value) >= 20:
-                    findings.append(f"{path.relative_to(root)}:{line_number}:{match.group('name')}")
+                    findings.append(
+                        f"{path.relative_to(root)}:{line_number}:{match.group('name')}"
+                    )
     return findings
 
 

@@ -1,0 +1,77 @@
+{
+  "generated_at": "2026-08-01T16:06:29.478863+00:00",
+  "dataset": {
+    "fixtures": 8341,
+    "samples": 7628,
+    "league_count": 14,
+    "seasons": [
+      2024,
+      2025,
+      2026
+    ],
+    "start": "2024-08-02T18:30:00+00:00",
+    "end": "2026-07-26T14:30:00+00:00",
+    "odds_season": null,
+    "odds_samples": 0
+  },
+  "method": {
+    "grid_factors": [
+      0.8,
+      0.9,
+      1.0,
+      1.1,
+      1.2
+    ],
+    "brier": "mean multiclass Brier; binary Brier for double chance",
+    "roi": "not measured",
+    "leakage_control": "point-in-time rolling team windows; simultaneous fixtures share the same pre-kickoff state"
+  },
+  "results": [
+    {
+      "name": "GOAL_TIME_DECAY_FACTOR",
+      "status": "validated",
+      "route": "rich_profile_1x2",
+      "current": 0.01,
+      "recommended_factor_range": [
+        0.8,
+        0.9
+      ],
+      "current_brier": 0.640463935113797,
+      "current_roi_pct": null,
+      "best_factor": 0.8,
+      "best_value": 0.008,
+      "best_brier": 0.6390908415315618,
+      "best_roi_pct": null,
+      "samples": 7628,
+      "odds_samples": 0,
+      "brier_improvement": 0.00137309,
+      "out_of_time": {
+        "selection_samples": 6102,
+        "validation_samples": 1526,
+        "selected_factor": 0.8,
+        "selected_value": 0.008,
+        "validation_current": {
+          "name": "GOAL_TIME_DECAY_FACTOR",
+          "factor": 1.0,
+          "value": 0.01,
+          "brier_score": 0.6386123833808028,
+          "roi_pct": null,
+          "backtest_bets": 0,
+          "samples": 1526,
+          "odds_samples": 0
+        },
+        "validation_selected": {
+          "name": "GOAL_TIME_DECAY_FACTOR",
+          "factor": 0.8,
+          "value": 0.008,
+          "brier_score": 0.6372461700407075,
+          "roi_pct": null,
+          "backtest_bets": 0,
+          "samples": 1526,
+          "odds_samples": 0
+        },
+        "validation_brier_improvement": 0.00136621
+      }
+    }
+  ]
+}

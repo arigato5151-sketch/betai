@@ -60,6 +60,8 @@ def test_celery_connection_recovery_and_delivery_guards_are_enabled() -> None:
         "sync-football-data-fixtures-daily",
         "sync-completed-matches-daily",
         "retrain-ml-model-weekly",
+        "monitor-model-drift-daily",
+        "sync-current-season-primary-weekly",
     }
 
 

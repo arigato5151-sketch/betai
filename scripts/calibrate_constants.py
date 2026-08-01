@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import httpx
+import pandas as pd
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = ROOT_DIR / "backend"
@@ -37,6 +38,7 @@ from app.services.football_data_csv import (  # noqa: E402
 GRID_FACTORS = (0.8, 0.9, 1.0, 1.1, 1.2)
 OUTCOMES = BacktestEngine.OUTCOMES
 RICH_PARAMETERS = (
+    "GOAL_TIME_DECAY_FACTOR",
     "LEAGUE_BASELINE_GOALS",
     "FORM_DECAY_WEIGHTS",
     "AWAY_ATTACK_PENALTY",
@@ -155,6 +157,8 @@ class CalibrationSample:
     fixture: FixtureRecord
     home_window: TeamWindow
     away_window: TeamWindow
+    home_history: tuple[FixtureRecord, ...]
+    away_history: tuple[FixtureRecord, ...]
 
 
 @dataclass(frozen=True)
@@ -226,9 +230,10 @@ def _build_samples(
     *,
     recent_match_count: int,
     minimum_team_history: int,
+    goal_history_match_count: int = 20,
 ) -> list[CalibrationSample]:
     history: dict[tuple[int, int], deque[FixtureRecord]] = defaultdict(
-        lambda: deque(maxlen=recent_match_count)
+        lambda: deque(maxlen=max(recent_match_count, goal_history_match_count))
     )
     samples: list[CalibrationSample] = []
     pending: list[FixtureRecord] = []
@@ -250,8 +255,14 @@ def _build_samples(
             samples.append(
                 CalibrationSample(
                     fixture=fixture,
-                    home_window=_team_window(home_history, fixture.home_team_id),
-                    away_window=_team_window(away_history, fixture.away_team_id),
+                    home_window=_team_window(
+                        home_history[-recent_match_count:], fixture.home_team_id
+                    ),
+                    away_window=_team_window(
+                        away_history[-recent_match_count:], fixture.away_team_id
+                    ),
+                    home_history=tuple(home_history),
+                    away_history=tuple(away_history),
                 )
             )
         pending.append(fixture)
@@ -291,8 +302,40 @@ def _profiles(
     *,
     legacy: bool,
 ) -> tuple[dict[str, object], dict[str, object]]:
-    home = build_team_profile(sample.home_window.api_payload("home"), "home")
-    away = build_team_profile(sample.away_window.api_payload("away"), "away")
+    def history_frame(
+        fixtures: tuple[FixtureRecord, ...], team_id: int
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "match_date": fixture.kickoff,
+                    "goals_for": (
+                        fixture.home_goals
+                        if fixture.home_team_id == team_id
+                        else fixture.away_goals
+                    ),
+                    "goals_against": (
+                        fixture.away_goals
+                        if fixture.home_team_id == team_id
+                        else fixture.home_goals
+                    ),
+                }
+                for fixture in fixtures
+            ]
+        )
+
+    home = build_team_profile(
+        sample.home_window.api_payload("home"),
+        "home",
+        match_history=history_frame(sample.home_history, sample.fixture.home_team_id),
+        as_of=sample.fixture.kickoff,
+    )
+    away = build_team_profile(
+        sample.away_window.api_payload("away"),
+        "away",
+        match_history=history_frame(sample.away_history, sample.fixture.away_team_id),
+        as_of=sample.fixture.kickoff,
+    )
     if legacy:
         home.pop("attack_strength", None)
         home.pop("defense_strength", None)
@@ -637,7 +680,12 @@ def _calibrate_parameter(
     }
 
 
-def run(*, with_odds: bool, odds_season: int) -> dict[str, object]:
+def run(
+    *,
+    with_odds: bool,
+    odds_season: int,
+    selected_parameters: tuple[str, ...] | None = None,
+) -> dict[str, object]:
     fixtures = _load_fixtures()
     if not fixtures:
         raise RuntimeError("No historical fixtures are available")
@@ -652,12 +700,16 @@ def run(*, with_odds: bool, odds_season: int) -> dict[str, object]:
         if with_odds
         else {}
     )
-    parameters = (
+    inventory = (
         *RICH_PARAMETERS,
         *LEGACY_PARAMETERS,
         *SECONDARY_PARAMETERS,
         *ELO_PARAMETERS,
     )
+    unknown = set(selected_parameters or ()) - set(inventory)
+    if unknown:
+        raise ValueError(f"Unknown calibration parameters: {sorted(unknown)}")
+    parameters = selected_parameters or inventory
     results = [
         _calibrate_parameter(
             name,
@@ -667,21 +719,66 @@ def run(*, with_odds: bool, odds_season: int) -> dict[str, object]:
         )
         for name in parameters
     ]
-    results.extend(
-        {
-            "name": name,
-            "status": "unvalidated",
-            "current": _serializable_value(getattr(settings, name)),
-            "reason": reason,
+    if "GOAL_TIME_DECAY_FACTOR" in parameters and len(samples) >= 100:
+        split_index = int(len(samples) * 0.8)
+        selection = _calibrate_parameter(
+            "GOAL_TIME_DECAY_FACTOR",
+            fixtures=fixtures,
+            samples=samples[:split_index],
+            odds_by_fixture=odds_by_fixture,
+        )
+        validation = _calibrate_parameter(
+            "GOAL_TIME_DECAY_FACTOR",
+            fixtures=fixtures,
+            samples=samples[split_index:],
+            odds_by_fixture=odds_by_fixture,
+        )
+        selected_factor = selection["best_metrics"]["factor"]
+        validation_selected = next(
+            candidate
+            for candidate in validation["grid"]
+            if candidate["factor"] == selected_factor
+        )
+        validation_current = next(
+            candidate for candidate in validation["grid"] if candidate["factor"] == 1.0
+        )
+        goal_result = next(
+            result for result in results if result["name"] == "GOAL_TIME_DECAY_FACTOR"
+        )
+        goal_result["out_of_time"] = {
+            "selection_samples": split_index,
+            "validation_samples": len(samples) - split_index,
+            "selected_factor": selected_factor,
+            "selected_value": selection["best_metrics"]["value"],
+            "validation_current": validation_current,
+            "validation_selected": validation_selected,
+            "validation_brier_improvement": round(
+                float(validation_current["brier_score"])
+                - float(validation_selected["brier_score"]),
+                8,
+            ),
         }
-        for name, reason in UNVALIDATED_PARAMETERS.items()
-    )
+    if selected_parameters is None:
+        results.extend(
+            {
+                "name": name,
+                "status": "unvalidated",
+                "current": _serializable_value(getattr(settings, name)),
+                "reason": reason,
+            }
+            for name, reason in UNVALIDATED_PARAMETERS.items()
+        )
     result_names = {str(result["name"]) for result in results}
-    expected_names = set(parameters) | set(UNVALIDATED_PARAMETERS)
-    if result_names != expected_names or len(results) != 37:
+    expected_names = (
+        set(parameters)
+        if selected_parameters is not None
+        else set(inventory) | set(UNVALIDATED_PARAMETERS)
+    )
+    expected_count = len(expected_names)
+    if result_names != expected_names or len(results) != expected_count:
         raise RuntimeError(
             "Calibration inventory drift: "
-            f"expected 37 unique fields, got {len(result_names)}"
+            f"expected {expected_count} unique fields, got {len(result_names)}"
         )
     return {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -723,6 +820,22 @@ def main() -> None:
     )
     parser.add_argument("--odds-season", type=int, default=2025)
     parser.add_argument(
+        "--parameter",
+        action="append",
+        choices=sorted(
+            (
+                *RICH_PARAMETERS,
+                *LEGACY_PARAMETERS,
+                *SECONDARY_PARAMETERS,
+                *ELO_PARAMETERS,
+            )
+        ),
+        help="Calibrate only the selected field; may be repeated.",
+    )
+    parser.add_argument(
+        "--output", type=Path, help="Write the JSON report to this path."
+    )
+    parser.add_argument(
         "--summary-only",
         action="store_true",
         help="Print compact per-parameter results without every grid point.",
@@ -733,6 +846,7 @@ def main() -> None:
     report = run(
         with_odds=args.with_football_data_odds,
         odds_season=args.odds_season,
+        selected_parameters=tuple(args.parameter) if args.parameter else None,
     )
     if args.summary_only:
         compact_results: list[dict[str, object]] = []
@@ -758,10 +872,15 @@ def main() -> None:
                     "samples": current["samples"],
                     "odds_samples": current["odds_samples"],
                     "brier_improvement": result["brier_improvement"],
+                    "out_of_time": result.get("out_of_time"),
                 }
             )
         report["results"] = compact_results
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    rendered = json.dumps(report, ensure_ascii=False, indent=2)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)
 
 
 if __name__ == "__main__":
