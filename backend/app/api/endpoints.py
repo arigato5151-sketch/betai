@@ -1527,5 +1527,15 @@ def run_audit(db: Session = Depends(get_db)):
     "/operations/data-quality",
     dependencies=[Depends(require_permission("audit:read"))],
 )
-def get_data_quality(db: Session = Depends(get_db)):
-    return DataQualityService(db).snapshot()
+async def get_data_quality(db: Session = Depends(get_db)):
+    from app.services.api_provider_health import api_football_health
+
+    snapshot = DataQualityService(db).snapshot()
+    snapshot["providers"] = {
+        "api_football": await api_football_health.snapshot(),
+        "sportmonks": {
+            "status": "configured" if settings.SPORTMONKS_ENABLED else "disabled",
+            "enabled": settings.SPORTMONKS_ENABLED,
+        },
+    }
+    return snapshot

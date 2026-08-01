@@ -9,6 +9,12 @@ import pytest
 from app.core.demo_data import DEMO_UPCOMING_FIXTURES
 from app.core.exceptions import APIDataError
 from app.services.api_football import APIFootballClient
+from app.services.api_provider_health import api_football_health
+
+
+@pytest.fixture(autouse=True)
+def reset_api_provider_health() -> None:
+    api_football_health.reset_for_test()
 
 
 class FakeResponse:
@@ -70,12 +76,62 @@ async def test_retry_recovers_from_server_error(
     )
     sleep = AsyncMock()
     monkeypatch.setattr("app.services.api_football.asyncio.sleep", sleep)
+    monkeypatch.setattr("app.services.api_football.random.uniform", lambda *_: 0.0)
 
     result = await client._request_with_retry("fixtures", {}, base_backoff=0.01)
 
     assert result == {"response": [1]}
     assert fake_client.get_calls == 2
     sleep.assert_awaited_once_with(0.01)
+
+
+@pytest.mark.asyncio
+async def test_quota_headers_are_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.api_provider_health import api_football_health
+
+    api_football_health.reset_for_test()
+    client = APIFootballClient()
+    install_fake_http_client(
+        monkeypatch,
+        [
+            FakeResponse(
+                200,
+                payload={"response": []},
+                headers={
+                    "x-ratelimit-requests-limit": "100",
+                    "x-ratelimit-requests-remaining": "73",
+                    "X-RateLimit-Limit": "10",
+                    "X-RateLimit-Remaining": "8",
+                },
+            )
+        ],
+    )
+
+    await client._request_with_retry("fixtures", {})
+    status = await api_football_health.snapshot()
+
+    assert status["status"] == "ready"
+    assert status["daily_remaining"] == 73
+    assert status["minute_remaining"] == 8
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_opens_circuit_and_skips_next_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.api_provider_health import api_football_health
+
+    api_football_health.reset_for_test()
+    client = APIFootballClient()
+    fake_client = install_fake_http_client(
+        monkeypatch,
+        [FakeResponse(429, headers={"Retry-After": "30"})],
+    )
+
+    assert await client._request_with_retry("fixtures", {}, retries=1) is None
+    assert await client._request_with_retry("fixtures", {}, retries=1) is None
+    assert fake_client.get_calls == 1
+    assert (await api_football_health.snapshot())["status"] == "circuit_open"
 
 
 @pytest.mark.asyncio

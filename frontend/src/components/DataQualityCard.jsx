@@ -15,6 +15,33 @@ function Metric({ label, value, suffix = "" }) {
   );
 }
 
+function ProviderStatus({ name, provider }) {
+  if (!provider) return null;
+  const status = provider.status ?? "unknown";
+  const tone = status === "ready" || status === "configured"
+    ? "border-emerald-800 text-emerald-300"
+    : status === "disabled" || status === "unknown"
+      ? "border-slate-700 text-slate-400"
+      : "border-amber-800 text-amber-300";
+
+  return (
+    <div className={`rounded border p-3 ${tone}`}>
+      <span className="block text-xs text-slate-500">{name}</span>
+      <strong className="text-sm">{status}</strong>
+      {provider.daily_remaining !== null && provider.daily_remaining !== undefined && (
+        <span className="mt-1 block text-xs text-slate-400">
+          Günlük kota: {provider.daily_remaining}/{provider.daily_limit ?? "?"}
+        </span>
+      )}
+      {provider.circuit_open_until && (
+        <span className="mt-1 block text-xs text-amber-400">
+          Devre tekrar deneme: {new Date(provider.circuit_open_until).toLocaleTimeString("tr-TR")}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function DataQualityCard({ data, error, loading, onRefresh }) {
   const statusColors = {
     healthy: "border-emerald-700 bg-emerald-950/40 text-emerald-300",
@@ -55,16 +82,22 @@ function DataQualityCard({ data, error, loading, onRefresh }) {
       </div>
       {error && <p className="mt-3 rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">{error}</p>}
       {data && (
-        <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-8">
-          <Metric label="Maç" value={data.historical?.fixtures} />
-          <Metric label="Lig / Sezon" value={`${data.historical?.leagues ?? 0} / ${data.historical?.seasons ?? 0}`} />
-          <Metric label="Güncellik" value={data.historical?.freshness_hours} suffix=" saat" />
-          <Metric label="Kadro Kapsaması" value={data.historical?.lineup_coverage_pct} suffix="%" />
-          <Metric label="Etiket Kapsaması" value={data.predictions?.labeled_coverage_pct} suffix="%" />
-          <Metric label="Kapanış Oranı" value={data.predictions?.closing_odds_coverage_pct} suffix="%" />
-          <Metric label="Veri Kökeni" value={data.predictions?.provenance_coverage_pct} suffix="%" />
-          <Metric label="Son Senkron" value={syncStatusLabel(data.latest_sync?.status)} />
-        </div>
+        <>
+          <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-8">
+            <Metric label="Maç" value={data.historical?.fixtures} />
+            <Metric label="Lig / Sezon" value={`${data.historical?.leagues ?? 0} / ${data.historical?.seasons ?? 0}`} />
+            <Metric label="Güncellik" value={data.historical?.freshness_hours} suffix=" saat" />
+            <Metric label="Kadro Kapsaması" value={data.historical?.lineup_coverage_pct} suffix="%" />
+            <Metric label="Etiket Kapsaması" value={data.predictions?.labeled_coverage_pct} suffix="%" />
+            <Metric label="Kapanış Oranı" value={data.predictions?.closing_odds_coverage_pct} suffix="%" />
+            <Metric label="Veri Kökeni" value={data.predictions?.provenance_coverage_pct} suffix="%" />
+            <Metric label="Son Senkron" value={syncStatusLabel(data.latest_sync?.status)} />
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            <ProviderStatus name="API-Football" provider={data.providers?.api_football} />
+            <ProviderStatus name="Sportmonks" provider={data.providers?.sportmonks} />
+          </div>
+        </>
       )}
     </section>
   );

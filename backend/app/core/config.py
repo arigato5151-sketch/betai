@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     SECRET_PROVIDER: Literal["env", "vault", "azure_key_vault"] = "env"
     DEBUG: bool = True
     API_FOOTBALL_KEY: str = "DEMO_KEY"
+    API_FOOTBALL_CIRCUIT_FAILURE_THRESHOLD: int = Field(default=4, ge=2, le=20)
+    API_FOOTBALL_CIRCUIT_OPEN_SECONDS: int = Field(default=60, ge=10, le=900)
+    API_FOOTBALL_MAX_RETRY_AFTER_SECONDS: int = Field(default=120, ge=10, le=900)
+    API_FOOTBALL_BACKOFF_JITTER_RATIO: float = Field(default=0.2, ge=0, le=1)
     DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/bet_ai_pro"
     ALLOW_DATABASE_FALLBACK: bool = True
     REDIS_URL: str = "redis://localhost:6379/0"

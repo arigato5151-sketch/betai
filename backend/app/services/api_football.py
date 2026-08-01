@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import math
+import random
 from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List, Optional, cast
 from zoneinfo import ZoneInfo
@@ -23,6 +24,7 @@ from app.core.exceptions import (
     APITimeoutError,
 )
 from app.services.cache import cache
+from app.services.api_provider_health import api_football_health
 from app.prediction.stats_engine import build_team_profile
 
 logger = logging.getLogger("bet-ai-pro.api_football")
@@ -53,6 +55,10 @@ class APIFootballClient:
         url = f"{self.base_url}/{path.lstrip('/')}"
         last_error: APIFootballException | None = None
 
+        if not await api_football_health.allow_request():
+            logger.warning("API-Football circuit is open; request skipped: %s", path)
+            return None
+
         for attempt in range(retries):
             try:
                 async with httpx.AsyncClient(
@@ -61,6 +67,7 @@ class APIFootballClient:
                     response = await client.get(url, params=params)
 
                     if response.status_code == 200:
+                        await api_football_health.record_response(200, response.headers)
                         logger.info(
                             f"✓ API request successful: {path} (attempt {attempt + 1})"
                         )
@@ -72,7 +79,16 @@ class APIFootballClient:
                             retry_after = int(response.headers.get("Retry-After", 60))
                         except (TypeError, ValueError):
                             retry_after = 60
-                        retry_after = max(0, min(retry_after, 120))
+                        retry_after = max(
+                            0,
+                            min(
+                                retry_after,
+                                settings.API_FOOTBALL_MAX_RETRY_AFTER_SECONDS,
+                            ),
+                        )
+                        await api_football_health.record_rate_limit(
+                            response.headers, retry_after
+                        )
                         last_error = APIRateLimitError(path, retry_after)
                         logger.warning(
                             f"⚠ Rate limited (429) on {path}. Retry after {retry_after}s (attempt {attempt + 1}/{retries})"
@@ -88,6 +104,11 @@ class APIFootballClient:
                     last_error = APIDataError(
                         path, response.status_code, response.text[:200]
                     )
+                    await api_football_health.record_response(
+                        response.status_code,
+                        response.headers,
+                        f"http_{response.status_code}",
+                    )
                     if 400 <= response.status_code < 500:
                         break
 
@@ -96,15 +117,22 @@ class APIFootballClient:
                     f"⚠ Timeout on {path} (attempt {attempt + 1}/{retries}): {str(e)}"
                 )
                 last_error = APITimeoutError(path, retries)
+                await api_football_health.record_transport_failure("timeout")
             except httpx.RequestError as e:
                 logger.warning(
                     f"⚠ Request failed on {path} (attempt {attempt + 1}/{retries}): {str(e)}"
                 )
                 last_error = APIDataError(path, 0, str(e))
+                await api_football_health.record_transport_failure("request_error")
 
             # Exponential backoff between retries
             if attempt < retries - 1:
-                wait_time = base_backoff * (2**attempt)
+                base_wait = base_backoff * (2**attempt)
+                jitter = random.uniform(
+                    0,
+                    base_wait * settings.API_FOOTBALL_BACKOFF_JITTER_RATIO,
+                )
+                wait_time = base_wait + jitter
                 logger.debug(
                     f"Sleeping {wait_time}s before retry {attempt + 2}/{retries}"
                 )
