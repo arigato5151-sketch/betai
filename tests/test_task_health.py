@@ -62,6 +62,7 @@ def test_celery_connection_recovery_and_delivery_guards_are_enabled() -> None:
         "retrain-ml-model-weekly",
         "monitor-model-drift-daily",
         "sync-current-season-primary-weekly",
+        "sync-uefa-fixtures-daily",
     }
 
 

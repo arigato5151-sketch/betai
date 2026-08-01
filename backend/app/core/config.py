@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     LOG_FORMAT: Literal["text", "json"] = "text"
     FOOTBALL_DATA_BASE_URL: str = "https://www.football-data.co.uk"
     FOOTBALL_DATA_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
+    FIXTURE_DOWNLOAD_BASE_URL: str = "https://fixturedownload.com/feed/json"
+    FIXTURE_DOWNLOAD_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
     CLUBELO_ENABLED: bool = False
     CLUBELO_BASE_URL: str = "http://api.clubelo.com"
     CLUBELO_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=120)
@@ -389,6 +391,27 @@ class Settings(BaseSettings):
             raise ValueError(
                 "SPORTMONKS_BASE_URL must point to "
                 "https://api.sportmonks.com/v3/football"
+            )
+        return normalized
+
+    @field_validator("FIXTURE_DOWNLOAD_BASE_URL")
+    @classmethod
+    def validate_fixture_download_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "fixturedownload.com"
+            or parsed.username
+            or parsed.password
+            or parsed.port
+            or parsed.path != "/feed/json"
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "FIXTURE_DOWNLOAD_BASE_URL must point to "
+                "https://fixturedownload.com/feed/json"
             )
         return normalized
 

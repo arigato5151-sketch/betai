@@ -20,6 +20,7 @@ from app.services.football_data_csv import (
     FootballDataCSVClient,
     FootballDataDownloadError,
 )
+from app.services.fixture_download import FixtureDownloadClient, UEFA_FEEDS
 from app.services.odds_history import OddsHistoryService, odds_history_service
 from app.prediction.ml.model import ml_pipeline
 from app.prediction.ml.training_data import HistoricalTrainingDataBuilder
@@ -542,6 +543,68 @@ def sync_football_data_fixtures_task(seasons: list[int] | None = None) -> dict:
     if league_season_fallbacks:
         result["league_season_fallbacks"] = league_season_fallbacks
     logger.info("Football-Data fixture synchronization completed: %s", result)
+    return result
+
+
+@shared_task(name="app.tasks.jobs.sync_uefa_fixtures_task")
+def sync_uefa_fixtures_task(seasons: list[int] | None = None) -> dict[str, object]:
+    """Import completed UEFA fixtures from the public JSON result feeds."""
+    target_seasons = sorted(
+        set(seasons if seasons is not None else [_current_football_season()])
+    )
+    with SessionLocal() as db:
+        run_id = (
+            DataQualityService(db)
+            .start_sync("fixture_download_uefa", target_seasons)
+            .id
+        )
+
+    client = FixtureDownloadClient()
+    fixture_rows: list[dict[str, Any]] = []
+    failures: list[dict[str, object]] = []
+    for season in target_seasons:
+        for league_id in UEFA_FEEDS:
+            try:
+                fixture_rows.extend(
+                    _run_async(client.get_completed_fixtures(league_id, season))
+                )
+            except Exception as exc:
+                logger.exception(
+                    "UEFA fixture fetch failed for league=%s season=%s",
+                    league_id,
+                    season,
+                )
+                failures.append(
+                    {
+                        "league_id": league_id,
+                        "season": season,
+                        "error": type(exc).__name__,
+                    }
+                )
+
+    try:
+        with SessionLocal() as db:
+            processed = HistoricalFixtureRepository(db).upsert_many(fixture_rows)
+            DataQualityService(db).finish_sync(
+                run_id,
+                processed=processed,
+                failures=failures,
+            )
+    except Exception as exc:
+        with SessionLocal() as db:
+            DataQualityService(db).finish_sync(
+                run_id,
+                processed=0,
+                failures=failures,
+                error_type=type(exc).__name__,
+            )
+        raise
+    result: dict[str, object] = {
+        "seasons": target_seasons,
+        "fixtures_processed": processed,
+        "failed_league_seasons": failures,
+    }
+    logger.info("UEFA fixture synchronization completed: %s", result)
     return result
 
 

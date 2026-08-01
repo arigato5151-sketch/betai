@@ -230,8 +230,10 @@ bağlamak yerine alan eksik bırakılır.
 Uygulama toplam 17 organizasyonu destekler. Yerel liglere ek olarak API-Football
 kimlikleri `2`, `3` ve `848` olan UEFA Şampiyonlar Ligi, UEFA Avrupa Ligi ve UEFA
 Konferans Ligi yaklaşan fikstür, manuel analiz ve tarihsel backfill kapsamındadır.
-UEFA turnuvaları Football-Data CSV kaynağında bulunmadığından yalnız API-Football
-üzerinden alınır.
+UEFA turnuvaları Football-Data CSV kaynağında bulunmadığından tamamlanmış maç
+sonuçları günlük olarak Fixture Download JSON akışından alınır. Bu açık veri
+kaynağı kullanılamazsa plan erişimi bulunan sezonlarda API-Football backfill'i
+çalıştırılabilir.
 
 2025/26 sezonunu tekrar içe aktarmak için:
 
@@ -252,6 +254,13 @@ Yalnız UEFA turnuvalarını kota kontrollü biçimde backfill etmek için:
 ```powershell
 cd backend
 python -c "from app.tasks.jobs import sync_historical_fixtures_task; print(sync_historical_fixtures_task.run([2023, 2024], [2, 3, 848]))"
+```
+
+UEFA 2025/26 sonuçlarını anahtarsız açık veri kaynağından içe aktarmak için:
+
+```powershell
+cd backend
+python -c "from app.tasks.jobs import sync_uefa_fixtures_task; print(sync_uefa_fixtures_task.run([2025]))"
 ```
 
 Football-Data içe aktarımı API anahtarı gerektirmez. API-Football backfill'i için

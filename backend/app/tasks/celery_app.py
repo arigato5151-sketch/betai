@@ -35,6 +35,10 @@ celery_app.conf.update(
             # One fixture call per supported league; player calls run in a separate job.
             "kwargs": {"enrich_player_context": False},
         },
+        "sync-uefa-fixtures-daily": {
+            "task": "app.tasks.jobs.sync_uefa_fixtures_task",
+            "schedule": 86400.0,
+        },
         "sync-completed-matches-daily": {
             "task": "app.tasks.jobs.sync_completed_matches_task",
             "schedule": 86400.0,  # 24 hours
