@@ -6,8 +6,8 @@ import AnalysisReport from "../components/AnalysisReport.jsx";
 import BankrollChart from "../components/BankrollChart.jsx";
 
 const initialFormData = {
-  home_team: "Fenerbahçe",
-  away_team: "Galatasaray",
+  home_team: "",
+  away_team: "",
   league_id: null,
   odd: 2.3,
   home_stats: { form: 93, attack: 88, defense: 85, xg: 2.15 },

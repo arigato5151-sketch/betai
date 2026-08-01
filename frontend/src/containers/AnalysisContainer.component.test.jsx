@@ -78,6 +78,21 @@ function renderContainer(request, fixtureSelection) {
 }
 
 describe("AnalysisContainer lig entegrasyonu", () => {
+  it("ilk açılışta takım alanlarını boş gösterir", async () => {
+    const request = vi.fn(async (path) => {
+      if (path === "/leagues") {
+        return { ok: true, json: async () => [] };
+      }
+      throw new Error(`Beklenmeyen istek: ${path}`);
+    });
+
+    renderContainer(request);
+
+    expect(screen.getByLabelText("Ev sahibi takım")).toHaveValue("");
+    expect(screen.getByLabelText("Deplasman takımı")).toHaveValue("");
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/leagues"));
+  });
+
   it("seçilen fikstürü analiz formuna taşır ve fixture bağlamıyla gönderir", async () => {
     const prefillResponse = {
       fixture: {
