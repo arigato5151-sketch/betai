@@ -1417,6 +1417,8 @@ def get_ml_labeling_queue(
     dependencies=[Depends(require_permission("history:read"))],
 )
 def get_ml_status(db: Session = Depends(get_db)):
+    from app.services.model_monitoring import ModelMonitoringService
+
     result = ml_pipeline.status()
     labeled_predictions = MatchPredictionRepository(db).count_labeled()
     historical_fixtures = db.query(func.count(HistoricalFixture.id)).scalar() or 0
@@ -1428,6 +1430,7 @@ def get_ml_status(db: Session = Depends(get_db)):
             settings.HISTORICAL_TRAINING_MIN_TEAM_MATCHES
         ),
     }
+    result["monitoring"] = ModelMonitoringService(db).snapshot()
     return result
 
 

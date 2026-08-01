@@ -51,5 +51,9 @@ celery_app.conf.update(
             "task": "app.tasks.jobs.retrain_ml_model_task",
             "schedule": 604800.0,  # Weekly
         },
+        "monitor-model-drift-daily": {
+            "task": "app.tasks.jobs.monitor_model_drift_task",
+            "schedule": 86400.0,
+        },
     },
 )

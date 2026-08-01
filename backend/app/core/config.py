@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "development-access-secret-change-me"
     JWT_REFRESH_SECRET_KEY: str = "development-refresh-secret-change-me"
     MODEL_SIGNING_KEY: str = "development-model-signing-key-change-me"
+    MODEL_DRIFT_WINDOW_SIZE: int = Field(default=100, ge=20, le=2000)
+    MODEL_DRIFT_MIN_SAMPLES: int = Field(default=30, ge=10, le=1000)
+    MODEL_DRIFT_BRIER_THRESHOLD: float = Field(default=0.04, gt=0, le=1)
     JWT_ALGORITHM: Literal["HS256", "HS384", "HS512"] = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, ge=1, le=1440)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, ge=1, le=90)

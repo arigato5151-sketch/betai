@@ -26,6 +26,7 @@ from app.prediction.ml.training_data import HistoricalTrainingDataBuilder
 from app.prediction.ensemble_weights import ensemble_weight_manager
 from app.prediction.audit import PredictionAuditor
 from app.services.data_quality import DataQualityService
+from app.services.model_monitoring import ModelMonitoringService
 
 logger = logging.getLogger("bet-ai-pro.tasks")
 
@@ -584,6 +585,17 @@ def retrain_ml_model_task() -> str:
         else:
             logger.warning("ML model retraining job skipped or failed.")
             return "Retraining failed."
+
+
+@shared_task(name="app.tasks.jobs.monitor_model_drift_task")
+def monitor_model_drift_task() -> dict[str, object]:
+    """Queue a challenger training run when recent calibration materially degrades."""
+    with SessionLocal() as db:
+        status = ModelMonitoringService(db).snapshot()
+    retraining_queued = bool(status["drift_detected"])
+    if retraining_queued:
+        retrain_ml_model_task.delay()
+    return {**status, "retraining_queued": retraining_queued}
 
 
 @shared_task(name="app.tasks.jobs.sync_completed_matches_task")

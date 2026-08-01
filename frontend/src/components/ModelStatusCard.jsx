@@ -12,6 +12,7 @@ function Value({ label, children }) {
 function ModelStatusCard({ status, error, loading, onRefresh }) {
   const metrics = status?.metrics ?? {};
   const trainingData = status?.training_data ?? {};
+  const monitoring = status?.monitoring ?? {};
 
   return (
     <section
@@ -57,6 +58,9 @@ function ModelStatusCard({ status, error, loading, onRefresh }) {
           <Value label="Kalibrasyon">{metrics.calibration_error?.toFixed?.(4)}</Value>
           <Value label="Doğruluk">{metrics.accuracy !== undefined ? `%${(metrics.accuracy * 100).toFixed(1)}` : "-"}</Value>
           <Value label="Lig">{metrics.league_count ?? 0}</Value>
+          <Value label="Drift">{monitoring.status ?? "-"}</Value>
+          <Value label="Güncel Brier">{monitoring.recent_brier?.toFixed?.(4)}</Value>
+          <Value label="Brier Değişimi">{monitoring.brier_delta?.toFixed?.(4)}</Value>
         </div>
       )}
     </section>
