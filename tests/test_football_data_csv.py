@@ -51,6 +51,71 @@ async def test_standard_feed_is_normalized_with_stable_external_ids() -> None:
 
 
 @pytest.mark.asyncio
+async def test_standard_feed_normalizes_optional_match_stats_and_odds() -> None:
+    content = (
+        "Div,Date,Time,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HS,AS,HST,AST,"
+        "HF,AF,HC,AC,HY,AY,HR,AR,B365H,B365D,B365A,B365CH,B365CD,B365CA\n"
+        "E0,16/08/2025,15:00,Home,Away,2,1,H,1,0,15,8,7,3,10,12,6,4,2,3,0,1,"
+        "1.95,3.40,4.10,1.80,3.60,4.50\n"
+    ).encode()
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=content)
+
+    imported = await FootballDataCSVClient(
+        base_url="https://data.test",
+        transport=httpx.MockTransport(handler),
+    ).get_completed_fixtures(39, 2025)
+
+    fixture = imported.fixtures[0]
+    assert fixture["home_shots"] == 15
+    assert fixture["away_shots_on_target"] == 3
+    assert fixture["home_corners"] == 6
+    assert fixture["away_red_cards"] == 1
+    assert fixture["opening_home_odd"] == 1.95
+    assert fixture["closing_away_odd"] == 4.5
+
+
+@pytest.mark.asyncio
+async def test_missing_optional_statistics_remain_unknown() -> None:
+    content = (
+        "Div,Date,Time,HomeTeam,AwayTeam,FTHG,FTAG,FTR\n"
+        "E0,16/08/2025,15:00,Home,Away,2,1,H\n"
+    ).encode()
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=content)
+
+    imported = await FootballDataCSVClient(
+        base_url="https://data.test",
+        transport=httpx.MockTransport(handler),
+    ).get_completed_fixtures(39, 2025)
+
+    fixture = imported.fixtures[0]
+    assert fixture["home_shots"] is None
+    assert fixture["opening_home_odd"] is None
+    assert fixture["closing_home_odd"] is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_optional_stat_fails_closed() -> None:
+    content = (
+        "Div,Date,Time,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HS\n"
+        "E0,16/08/2025,15:00,Home,Away,2,1,H,-1\n"
+    ).encode()
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=content)
+
+    client = FootballDataCSVClient(
+        base_url="https://data.test",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(FootballDataFormatError, match="Invalid HS value"):
+        await client.get_completed_fixtures(39, 2025)
+
+
+@pytest.mark.asyncio
 async def test_rolling_russian_feed_filters_the_requested_season() -> None:
     content = (
         "Country,League,Season,Date,Time,Home,Away,HG,AG,Res\n"

@@ -489,6 +489,10 @@ def test_football_data_sync_task_persists_source_rows(
     row["home_team_id"] = -(1 << 41)
     row["away_team_id"] = -(1 << 42)
     row["data_source"] = "football_data_csv"
+    row["home_shots"] = 14
+    row["away_shots_on_target"] = 3
+    row["opening_home_odd"] = 2.0
+    row["closing_home_odd"] = 1.8
 
     class FakeClient:
         supported_league_ids = frozenset({203})
@@ -514,6 +518,10 @@ def test_football_data_sync_task_persists_source_rows(
         stored = session.query(HistoricalFixture).one()
         assert stored.fixture_id == -(1 << 40)
         assert stored.data_source == "football_data_csv"
+        assert stored.home_shots == 14
+        assert stored.away_shots_on_target == 3
+        assert stored.opening_home_odd == 2.0
+        assert stored.closing_home_odd == 1.8
 
 
 def test_football_data_sync_falls_back_until_new_feed_is_published(

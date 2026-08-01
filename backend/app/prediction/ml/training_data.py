@@ -470,6 +470,16 @@ class HistoricalTrainingDataBuilder:
                         fixture,
                         locations,
                     ),
+                    opening_odds={
+                        "HOME_WIN": fixture.opening_home_odd,
+                        "DRAW": fixture.opening_draw_odd,
+                        "AWAY_WIN": fixture.opening_away_odd,
+                    },
+                    current_odds={
+                        "HOME_WIN": fixture.closing_home_odd,
+                        "DRAW": fixture.closing_draw_odd,
+                        "AWAY_WIN": fixture.closing_away_odd,
+                    },
                     home_player_impact=home_player_impact,
                     away_player_impact=away_player_impact,
                 )

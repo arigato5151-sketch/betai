@@ -133,6 +133,30 @@ def test_historical_training_requires_prior_history_for_both_teams() -> None:
     assert rows == []
 
 
+def test_historical_training_uses_fixture_opening_and_closing_odds() -> None:
+    start = datetime(2025, 8, 1, tzinfo=UTC)
+    fixtures = [
+        fixture(1, start, 1, 2, 2, 0),
+        fixture(2, start + timedelta(days=1), 3, 4, 1, 0),
+        fixture(3, start + timedelta(days=7), 1, 3, 1, 1),
+    ]
+    target = fixtures[-1]
+    target.opening_home_odd = 2.0
+    target.opening_draw_odd = 3.0
+    target.opening_away_odd = 4.0
+    target.closing_home_odd = 1.8
+    target.closing_draw_odd = 3.3
+    target.closing_away_odd = 4.4
+
+    rows = HistoricalTrainingDataBuilder(minimum_team_history=1).build(fixtures)
+
+    assert len(rows) == 1
+    snapshot = rows[0].feature_snapshot
+    assert snapshot["odds_movement_home"] == -10.0
+    assert snapshot["odds_movement_draw"] == 10.0
+    assert snapshot["odds_movement_away"] == 10.0
+
+
 def test_simultaneous_fixtures_do_not_leak_results_between_snapshots() -> None:
     start = datetime(2025, 8, 1, tzinfo=UTC)
     shared_kickoff = start + timedelta(days=7)

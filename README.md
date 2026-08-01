@@ -215,10 +215,18 @@ backend/app/
 Celery Beat, izin verilen liglerin mevcut sezon tamamlanmış maçlarını Football-Data
 CSV arşivinden günlük olarak `historical_fixtures` tablosuna idempotent biçimde
 yazar. Football-Data'nın 14 yerel lig eşlemesi; şema doğrulama, yerel saatten
-UTC'ye dönüşüm ve kaynak
-provenance'ı ile içe alınır. Analiz sırasında yalnızca maçın `kickoff` zamanından
+UTC'ye dönüşüm ve kaynak provenance'ı ile içe alınır. Sonuçlara ek olarak kaynakta
+bulunan devre skoru, şut, isabetli şut, faul, korner, sarı/kırmızı kart ve Bet365
+açılış/kapanış 1X2 oranları da nullable alanlar olarak saklanır. Eksik değerler
+uydurulmaz; `NULL` bırakılır. Açılış-kapanış oranları tarihsel ML örneklerindeki
+`odds_movement_*` feature'larını doğrudan besler. Analiz sırasında yalnızca maçın `kickoff` zamanından
 önceki kayıtlar okunur; aynı anda başlayan maçlar tek batch olarak işlendiğinden Elo,
 form ve H2H feature'larında gelecek bilgisi sızıntısı oluşmaz.
+
+1 Ağustos 2026 tarihinde yapılan 2025/26 yeniden senkronizasyonunda 4.764 yerel lig
+maçının 4.524'ünde maç istatistikleri, 4.520'sinde açılış ve 4.524'ünde kapanış
+oranları doğrulandı. Rusya rolling feed'indeki 240 maç yalnızca sonuç içerdiğinden
+zenginleştirme alanları boş kalır.
 
 Yeni sezon yayını her lig için ayrı denetlenir. Örneğin Rusya rolling feed'i
 yayımlanmışken Premier League dosyası henüz yoksa Rusya'nın güncel sezonu alınır,

@@ -276,6 +276,7 @@ class FootballDataCSVClient:
                     "away_team": away_team[:100],
                     "home_goals": home_score,
                     "away_goals": away_score,
+                    **self._optional_statistics(row),
                     "home_starting_xi": None,
                     "away_starting_xi": None,
                     "actual_result": actual_result,
@@ -285,6 +286,72 @@ class FootballDataCSVClient:
             )
 
         return FootballDataImport(fixtures=fixtures, skipped_rows=skipped_rows)
+
+    @classmethod
+    def _optional_statistics(
+        cls, row: Mapping[str, object]
+    ) -> dict[str, int | float | None]:
+        """Normalize optional match statistics without inventing missing values."""
+        integer_columns = {
+            "half_time_home_goals": "HTHG",
+            "half_time_away_goals": "HTAG",
+            "home_shots": "HS",
+            "away_shots": "AS",
+            "home_shots_on_target": "HST",
+            "away_shots_on_target": "AST",
+            "home_fouls": "HF",
+            "away_fouls": "AF",
+            "home_corners": "HC",
+            "away_corners": "AC",
+            "home_yellow_cards": "HY",
+            "away_yellow_cards": "AY",
+            "home_red_cards": "HR",
+            "away_red_cards": "AR",
+        }
+        odds_columns = {
+            "opening_home_odd": "B365H",
+            "opening_draw_odd": "B365D",
+            "opening_away_odd": "B365A",
+            "closing_home_odd": "B365CH",
+            "closing_draw_odd": "B365CD",
+            "closing_away_odd": "B365CA",
+        }
+        return {
+            **{
+                target: cls._optional_non_negative_int(row.get(source), source)
+                for target, source in integer_columns.items()
+            },
+            **{
+                target: cls._optional_decimal_odd(row.get(source), source)
+                for target, source in odds_columns.items()
+            },
+        }
+
+    @staticmethod
+    def _optional_non_negative_int(value: object, column: str) -> int | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            parsed = int(raw)
+        except ValueError as exc:
+            raise FootballDataFormatError(f"Invalid {column} value") from exc
+        if parsed < 0:
+            raise FootballDataFormatError(f"Invalid {column} value")
+        return parsed
+
+    @staticmethod
+    def _optional_decimal_odd(value: object, column: str) -> float | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            parsed = float(raw)
+        except ValueError as exc:
+            raise FootballDataFormatError(f"Invalid {column} value") from exc
+        if not 1.0 < parsed < 1000.0:
+            raise FootballDataFormatError(f"Invalid {column} value")
+        return parsed
 
     @staticmethod
     def _belongs_to_feed(
