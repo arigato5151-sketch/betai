@@ -82,3 +82,42 @@ async def test_unsupported_league_is_rejected_before_network() -> None:
 
     with pytest.raises(ValueError, match="Unsupported UEFA"):
         await client.get_completed_fixtures(39, 2025)
+
+
+@pytest.mark.asyncio
+async def test_upcoming_league_feed_keeps_only_requested_date_range() -> None:
+    payload = [
+        {
+            "MatchNumber": 1,
+            "DateUtc": "2026-08-08 19:00:00Z",
+            "HomeTeam": "Lorient",
+            "AwayTeam": "Reims",
+            "HomeTeamScore": None,
+            "AwayTeamScore": None,
+        },
+        {
+            "MatchNumber": 2,
+            "DateUtc": "2026-08-20 19:00:00Z",
+            "HomeTeam": "Metz",
+            "AwayTeam": "Troyes",
+            "HomeTeamScore": None,
+            "AwayTeamScore": None,
+        },
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://fixturedownload.com/feed/json/ligue-2-2026"
+        return httpx.Response(200, json=payload)
+
+    client = FixtureDownloadClient(transport=httpx.MockTransport(handler))
+    fixtures = await client.get_scheduled_fixtures(
+        62,
+        2026,
+        start=datetime(2026, 8, 2, tzinfo=UTC).date(),
+        end=datetime(2026, 8, 9, tzinfo=UTC).date(),
+    )
+
+    assert len(fixtures) == 1
+    assert fixtures[0]["home_team"] == "Lorient"
+    assert fixtures[0]["status"] == "NS"
+    assert fixtures[0]["fixture_id"] < 0

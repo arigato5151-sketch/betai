@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -15,7 +15,7 @@ MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 
 
 class FixtureDownloadError(RuntimeError):
-    """Base error for the public UEFA fixture feed."""
+    """Base error for the public fixture feeds."""
 
 
 class FixtureDownloadFormatError(FixtureDownloadError):
@@ -33,6 +33,21 @@ UEFA_FEEDS: Mapping[int, UEFAFeed] = MappingProxyType(
         2: UEFAFeed(2, "champions-league"),
         3: UEFAFeed(3, "europa-league"),
         848: UEFAFeed(848, "conference-league"),
+    }
+)
+
+UPCOMING_FEEDS: Mapping[int, UEFAFeed] = MappingProxyType(
+    {
+        39: UEFAFeed(39, "epl"),
+        40: UEFAFeed(40, "championship"),
+        140: UEFAFeed(140, "la-liga"),
+        135: UEFAFeed(135, "serie-a"),
+        78: UEFAFeed(78, "bundesliga"),
+        61: UEFAFeed(61, "ligue-1"),
+        62: UEFAFeed(62, "ligue-2"),
+        94: UEFAFeed(94, "primeira-liga"),
+        203: UEFAFeed(203, "super-lig"),
+        88: UEFAFeed(88, "eredivisie"),
     }
 )
 
@@ -75,27 +90,49 @@ class FixtureDownloadClient:
             now=now or datetime.now(UTC),
         )
 
+    async def get_scheduled_fixtures(
+        self,
+        league_id: int,
+        season: int,
+        *,
+        start: date,
+        end: date,
+    ) -> list[dict[str, Any]]:
+        feed = UPCOMING_FEEDS.get(league_id)
+        if feed is None:
+            raise ValueError(f"Unsupported upcoming league_id: {league_id}")
+        if end < start or (end - start).days > 31:
+            raise ValueError("Invalid upcoming fixture date range")
+        payload = await self._download(f"{feed.slug}-{season}")
+        return self._parse_scheduled(
+            payload,
+            league_id=league_id,
+            season=season,
+            start=start,
+            end=end,
+        )
+
     async def _download(self, slug: str) -> object:
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout_seconds,
                 follow_redirects=False,
                 transport=self.transport,
-                headers={"User-Agent": "BetAIPlatform/1.0 uefa-results-importer"},
+                headers={"User-Agent": "BetAIPlatform/1.0 fixture-importer"},
             ) as client:
                 response = await client.get(f"{self.base_url}/{slug}")
                 response.raise_for_status()
         except httpx.HTTPError as exc:
             raise FixtureDownloadError(
-                "UEFA fixture feed could not be downloaded"
+                "Fixture feed could not be downloaded"
             ) from exc
         if len(response.content) > MAX_PAYLOAD_BYTES:
-            raise FixtureDownloadFormatError("UEFA fixture payload is too large")
+            raise FixtureDownloadFormatError("Fixture payload is too large")
         try:
             return response.json()
         except ValueError as exc:
             raise FixtureDownloadFormatError(
-                "UEFA fixture payload is not JSON"
+                "Fixture payload is not JSON"
             ) from exc
 
     @staticmethod
@@ -178,6 +215,69 @@ class FixtureDownloadClient:
                         else "AWAY_WIN" if away_score > home_score else "DRAW"
                     ),
                     "status": "FT",
+                    "data_source": "fixture_download",
+                }
+            )
+        return fixtures
+
+    @staticmethod
+    def _parse_scheduled(
+        payload: object,
+        *,
+        league_id: int,
+        season: int,
+        start: date,
+        end: date,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(payload, list):
+            raise FixtureDownloadFormatError("Fixture payload must be a list")
+        fixtures: list[dict[str, Any]] = []
+        natural_keys: set[str] = set()
+        for index, raw in enumerate(payload, start=1):
+            if not isinstance(raw, dict):
+                raise FixtureDownloadFormatError(f"Invalid fixture row {index}")
+            home = str(raw.get("HomeTeam") or "").strip()
+            away = str(raw.get("AwayTeam") or "").strip()
+            date_raw = str(raw.get("DateUtc") or "").strip()
+            if not home or not away or home == away or not date_raw:
+                raise FixtureDownloadFormatError(
+                    f"Invalid fixture identity at row {index}"
+                )
+            try:
+                kickoff = datetime.strptime(date_raw, "%Y-%m-%d %H:%M:%SZ").replace(
+                    tzinfo=UTC
+                )
+            except ValueError as exc:
+                raise FixtureDownloadFormatError(
+                    f"Invalid fixture date at row {index}"
+                ) from exc
+            if kickoff.date() < start or kickoff.date() > end:
+                continue
+            home_key = stable_team_name_key(home)
+            away_key = stable_team_name_key(away)
+            natural_key = (
+                f"{league_id}:{season}:{kickoff.isoformat()}:{home_key}:{away_key}"
+            )
+            if natural_key in natural_keys:
+                raise FixtureDownloadFormatError(f"Duplicate fixture at row {index}")
+            natural_keys.add(natural_key)
+            fixtures.append(
+                {
+                    "fixture_id": _stable_negative_id(
+                        "fixture-download-fixture", natural_key
+                    ),
+                    "league_id": league_id,
+                    "season": season,
+                    "kickoff": kickoff,
+                    "home_team_id": _stable_negative_id(
+                        "fixture-download-team", home_key
+                    ),
+                    "away_team_id": _stable_negative_id(
+                        "fixture-download-team", away_key
+                    ),
+                    "home_team": home[:100],
+                    "away_team": away[:100],
+                    "status": "NS",
                     "data_source": "fixture_download",
                 }
             )

@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     MULTI_FIXTURE_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=60)
     FIXTURE_DOWNLOAD_BASE_URL: str = "https://fixturedownload.com/feed/json"
     FIXTURE_DOWNLOAD_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
+    FIXTURE_DOWNLOAD_UPCOMING_ENABLED: bool = True
     UNDERSTAT_ENABLED: bool = False
     UNDERSTAT_BASE_URL: str = "https://understat.com"
     UNDERSTAT_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)

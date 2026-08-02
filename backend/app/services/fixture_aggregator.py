@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.team_identity import stable_team_name_key
 from app.services.api_football import APIFootballClient
 from app.services.cache import cache
+from app.services.fixture_download import FixtureDownloadClient, UPCOMING_FEEDS
 
 logger = logging.getLogger("bet-ai-pro.fixture_aggregator")
 
@@ -23,6 +24,7 @@ SOURCE_ID_OFFSETS = {
     "thesportsdb": 1_000_000_000,
     "sportmonks": 1_250_000_000,
     "football_data_org": 1_500_000_000,
+    "fixture_download": 1_750_000_000,
 }
 MAX_PROVIDER_ID = 249_999_999
 
@@ -81,6 +83,19 @@ FOOTBALL_DATA_CODES = {
     "DED": 88,
 }
 
+LEAGUE_NAMES = {
+    39: "Premier League",
+    40: "Championship",
+    140: "La Liga",
+    135: "Serie A",
+    78: "Bundesliga",
+    61: "Ligue 1",
+    62: "Ligue 2",
+    94: "Liga Portugal",
+    203: "Süper Lig",
+    88: "Eredivisie",
+}
+
 
 class FixtureSourceError(RuntimeError):
     """Raised when an optional fixture provider cannot be read safely."""
@@ -115,6 +130,14 @@ def _positive_id(value: object, source: str) -> int | None:
     if raw_id <= 0 or raw_id > MAX_PROVIDER_ID:
         return None
     return SOURCE_ID_OFFSETS[source] + raw_id
+
+
+def _hashed_provider_id(value: object, source: str) -> int | None:
+    try:
+        raw_id = abs(int(str(value)))
+    except (TypeError, ValueError):
+        return None
+    return _positive_id((raw_id % MAX_PROVIDER_ID) or 1, source)
 
 
 class _HTTPFixtureSource:
@@ -366,6 +389,82 @@ class SportmonksFixtureSource(_HTTPFixtureSource):
         )
 
 
+class FixtureDownloadFixtureSource:
+    def __init__(
+        self,
+        *,
+        client: FixtureDownloadClient | None = None,
+        enabled: bool | None = None,
+    ) -> None:
+        self.client = client or FixtureDownloadClient()
+        self.enabled = (
+            settings.FIXTURE_DOWNLOAD_UPCOMING_ENABLED if enabled is None else enabled
+        )
+
+    @property
+    def configured(self) -> bool:
+        return self.enabled
+
+    async def get_fixtures(self, start: date, end: date) -> list[dict[str, Any]]:
+        season = start.year if start.month >= 7 else start.year - 1
+        league_ids = tuple(UPCOMING_FEEDS)
+        results = await asyncio.gather(
+            *(
+                self.client.get_scheduled_fixtures(
+                    league_id,
+                    season,
+                    start=start,
+                    end=end,
+                )
+                for league_id in league_ids
+            ),
+            return_exceptions=True,
+        )
+        rows: list[dict[str, Any]] = []
+        for league_id, result in zip(league_ids, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.warning(
+                    "FixtureDownload feed unavailable for league %s: %s",
+                    league_id,
+                    result,
+                )
+                continue
+            rows.extend(self._normalize(item) for item in result)
+        return [row for row in rows if row]
+
+    @staticmethod
+    def _normalize(item: object) -> dict[str, Any]:
+        if not isinstance(item, dict):
+            return {}
+        league_id = item.get("league_id")
+        kickoff = item.get("kickoff")
+        home = str(item.get("home_team") or "").strip()
+        away = str(item.get("away_team") or "").strip()
+        if (
+            not isinstance(league_id, int)
+            or not isinstance(kickoff, datetime)
+            or not home
+            or not away
+        ):
+            return {}
+        fixture_id = _hashed_provider_id(item.get("fixture_id"), "fixture_download")
+        home_team_id = _hashed_provider_id(item.get("home_team_id"), "fixture_download")
+        away_team_id = _hashed_provider_id(item.get("away_team_id"), "fixture_download")
+        if fixture_id is None:
+            return {}
+        return _fixture_row(
+            fixture_id=fixture_id,
+            league_id=league_id,
+            league=LEAGUE_NAMES.get(league_id, ""),
+            home=home,
+            away=away,
+            kickoff=kickoff.astimezone(ISTANBUL),
+            source="fixture_download",
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+        )
+
+
 def _sportmonks_participant(
     participants: list[object], location: str
 ) -> tuple[object, str] | None:
@@ -420,16 +519,18 @@ class FixtureAggregator:
         football_data: FootballDataOrgFixtureSource | None = None,
         sportmonks: SportmonksFixtureSource | None = None,
         thesportsdb: TheSportsDBFixtureSource | None = None,
+        fixture_download: FixtureDownloadFixtureSource | None = None,
     ) -> None:
         self.api_football = api_football or APIFootballClient()
         self.football_data = football_data or FootballDataOrgFixtureSource()
         self.sportmonks = sportmonks or SportmonksFixtureSource()
         self.thesportsdb = thesportsdb or TheSportsDBFixtureSource()
+        self.fixture_download = fixture_download or FixtureDownloadFixtureSource()
 
     async def get_upcoming_fixtures(
         self, days: int = 7, limit: int = 100
     ) -> list[dict[str, Any]]:
-        cache_key = f"merged-upcoming:v1:{days}:{limit}"
+        cache_key = f"merged-upcoming:v2:{days}:{limit}"
         cached = await cache.get("fixtures", cache_key)
         if isinstance(cached, list):
             return cached
@@ -450,6 +551,10 @@ class FixtureAggregator:
             tasks.append(("sportmonks", self.sportmonks.get_fixtures(today, end)))
         if self.thesportsdb.configured:
             tasks.append(("thesportsdb", self.thesportsdb.get_fixtures(today, end)))
+        if self.fixture_download.configured:
+            tasks.append(
+                ("fixture_download", self.fixture_download.get_fixtures(today, end))
+            )
 
         results = await asyncio.gather(
             *(task for _, task in tasks), return_exceptions=True

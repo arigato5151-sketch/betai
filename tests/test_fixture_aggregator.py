@@ -9,6 +9,7 @@ import pytest
 from app.services.fixture_aggregator import (
     ISTANBUL,
     FixtureAggregator,
+    FixtureDownloadFixtureSource,
     FootballDataOrgFixtureSource,
     SportmonksFixtureSource,
     TheSportsDBFixtureSource,
@@ -63,6 +64,23 @@ def test_canonical_league_mapping_disambiguates_premier_leagues() -> None:
     assert canonical_league_id("Premier League", "England") == 39
     assert canonical_league_id("Premier League", "Russia") == 235
     assert canonical_league_id("UEFA Europa Conference League") == 848
+
+
+def test_fixture_download_normalization_uses_safe_positive_ids() -> None:
+    row = FixtureDownloadFixtureSource._normalize(
+        {
+            "fixture_id": -8_000_000_000_000,
+            "league_id": 62,
+            "kickoff": future_kickoff(),
+            "home_team_id": -7_000_000_000_000,
+            "away_team_id": -6_000_000_000_000,
+            "home_team": "Lorient",
+            "away_team": "Reims",
+        }
+    )
+
+    assert 1_750_000_000 < row["fixture_id"] < 2_000_000_000
+    assert row["source"] == "fixture_download"
 
 
 @pytest.mark.asyncio
@@ -197,6 +215,7 @@ async def test_aggregator_merges_duplicates_and_isolates_source_failures(
         football_data=StubSource([duplicate]),
         sportmonks=failing,
         thesportsdb=StubSource([extra]),
+        fixture_download=StubSource([], configured=False),
     )
     monkeypatch.setattr(
         "app.services.fixture_aggregator.cache.get", AsyncMock(return_value=None)
@@ -222,6 +241,7 @@ async def test_alternative_fixture_prefill_uses_safe_neutral_defaults(
         football_data=StubSource([], configured=False),
         sportmonks=StubSource([], configured=False),
         thesportsdb=StubSource([]),
+        fixture_download=StubSource([], configured=False),
     )
     monkeypatch.setattr(
         "app.services.fixture_aggregator.cache.get", AsyncMock(return_value=row)
