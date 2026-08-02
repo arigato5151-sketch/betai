@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     LOG_FORMAT: Literal["text", "json"] = "text"
     FOOTBALL_DATA_BASE_URL: str = "https://www.football-data.co.uk"
     FOOTBALL_DATA_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
+    FOOTBALL_DATA_ORG_ENABLED: bool = False
+    FOOTBALL_DATA_ORG_API_KEY: str = ""
+    FOOTBALL_DATA_ORG_BASE_URL: str = "https://api.football-data.org/v4"
+    THESPORTSDB_ENABLED: bool = True
+    THESPORTSDB_BASE_URL: str = "https://www.thesportsdb.com/api/v1/json/123"
+    MULTI_FIXTURE_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=60)
     FIXTURE_DOWNLOAD_BASE_URL: str = "https://fixturedownload.com/feed/json"
     FIXTURE_DOWNLOAD_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
     UNDERSTAT_ENABLED: bool = False
@@ -411,6 +417,45 @@ class Settings(BaseSettings):
             )
         return normalized
 
+    @field_validator("FOOTBALL_DATA_ORG_BASE_URL")
+    @classmethod
+    def validate_football_data_org_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "api.football-data.org"
+            or parsed.path != "/v4"
+            or parsed.username
+            or parsed.password
+            or parsed.port
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "FOOTBALL_DATA_ORG_BASE_URL must point to "
+                "https://api.football-data.org/v4"
+            )
+        return normalized
+
+    @field_validator("THESPORTSDB_BASE_URL")
+    @classmethod
+    def validate_thesportsdb_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "www.thesportsdb.com"
+            or not parsed.path.startswith("/api/v1/json/")
+            or parsed.username
+            or parsed.password
+            or parsed.port
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("THESPORTSDB_BASE_URL must point to TheSportsDB v1 API")
+        return normalized
+
     @field_validator("FIXTURE_DOWNLOAD_BASE_URL")
     @classmethod
     def validate_fixture_download_base_url(cls, value: str) -> str:
@@ -562,6 +607,14 @@ class Settings(BaseSettings):
         ):
             errors.append(
                 "SPORTMONKS_API_TOKEN must be configured when Sportmonks is enabled"
+            )
+        if self.FOOTBALL_DATA_ORG_ENABLED and (
+            len(self.FOOTBALL_DATA_ORG_API_KEY) < 16
+            or self.FOOTBALL_DATA_ORG_API_KEY
+            in {"your_football_data_org_key", "replace_with_football_data_org_key"}
+        ):
+            errors.append(
+                "FOOTBALL_DATA_ORG_API_KEY must be configured when football-data.org is enabled"
             )
 
         frontend_origin = self.FRONTEND_URL.rstrip("/")

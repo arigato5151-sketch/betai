@@ -421,7 +421,7 @@ async def test_upcoming_endpoint_forwards_week_and_limit(
     from app.api import endpoints
 
     fetch = AsyncMock(return_value=[])
-    monkeypatch.setattr(endpoints.football_api, "get_upcoming_fixtures", fetch)
+    monkeypatch.setattr(endpoints.fixture_aggregator, "get_upcoming_fixtures", fetch)
 
     result = await endpoints.list_upcoming_fixtures(days=7, limit=80)
 

@@ -19,6 +19,7 @@ VAULT_SECRET_KEYS = frozenset(
         "JWT_REFRESH_SECRET_KEY",
         "MODEL_SIGNING_KEY",
         "SPORTMONKS_API_TOKEN",
+        "FOOTBALL_DATA_ORG_API_KEY",
         "ADMIN_PASSWORD",
     }
 )
@@ -61,6 +62,13 @@ def load_external_secrets(
         "on",
     }:
         required_keys.add("SPORTMONKS_API_TOKEN")
+    if config.get("FOOTBALL_DATA_ORG_ENABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        required_keys.add("FOOTBALL_DATA_ORG_API_KEY")
     provider = config.get("SECRET_PROVIDER", "env").strip().lower()
     if provider == "env":
         return {"provider": "env", "loaded_keys": 0}

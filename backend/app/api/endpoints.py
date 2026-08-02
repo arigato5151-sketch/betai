@@ -34,6 +34,7 @@ from app.db.historical_repository import HistoricalFixtureRepository
 from app.db.player_context_repository import PlayerContextRepository
 from app.db.models import HistoricalFixture
 from app.services.api_football import APIFootballClient
+from app.services.fixture_aggregator import FixtureAggregator
 from app.services.data_quality import DataQualityService
 from app.services.external_features import external_feature_service
 from app.services.odds_history import odds_history_service
@@ -81,6 +82,7 @@ from app.api.admin import router as admin_router
 logger = logging.getLogger("bet-ai-pro.api")
 router = APIRouter()
 football_api = APIFootballClient()
+fixture_aggregator = FixtureAggregator(api_football=football_api)
 router.include_router(admin_router)
 
 
@@ -1359,12 +1361,12 @@ async def list_upcoming_fixtures(
     days: int = Query(default=7, ge=1, le=14),
     limit: int = Query(default=100, ge=1, le=200),
 ):
-    return await football_api.get_upcoming_fixtures(days=days, limit=limit)
+    return await fixture_aggregator.get_upcoming_fixtures(days=days, limit=limit)
 
 
 @router.get("/fixtures/{fixture_id}/prefill")
 async def fixture_prefill(fixture_id: int):
-    payload = await football_api.get_fixture_prefill(fixture_id)
+    payload = await fixture_aggregator.get_fixture_prefill(fixture_id)
     if not payload:
         raise HTTPException(status_code=404, detail="Maç bulunamadı.")
     return odds_history_service.enrich_prefill(payload)
@@ -1416,7 +1418,7 @@ async def preview_analysis_inputs(payload: AnalysisRequest):
     dependencies=[Depends(require_permission("analysis:create"))],
 )
 async def analyze_fixture(fixture_id: int):
-    prefill = await football_api.get_fixture_prefill(fixture_id)
+    prefill = await fixture_aggregator.get_fixture_prefill(fixture_id)
     if not prefill:
         raise HTTPException(status_code=404, detail="Maç bulunamadı.")
     prefill = odds_history_service.enrich_prefill(prefill)

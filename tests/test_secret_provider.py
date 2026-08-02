@@ -87,6 +87,20 @@ def test_vault_requires_sportmonks_token_when_provider_is_enabled(
         )
 
 
+def test_vault_requires_football_data_key_when_provider_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_vault_environment(monkeypatch)
+    monkeypatch.setenv("FOOTBALL_DATA_ORG_ENABLED", "true")
+    payload = {key: "configured" for key in REQUIRED_VAULT_SECRET_KEYS}
+
+    with pytest.raises(RuntimeError, match="FOOTBALL_DATA_ORG_API_KEY"):
+        load_external_secrets(
+            Path("missing.env"),
+            client_factory=Mock(return_value=vault_client(payload)),
+        )
+
+
 def test_vault_provider_supports_approle_authentication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -124,7 +138,7 @@ def test_azure_key_vault_uses_managed_identity_and_allowlisted_names(
         azure_client_factory=client_factory,
     )
 
-    assert status == {"provider": "azure_key_vault", "loaded_keys": 8}
+    assert status == {"provider": "azure_key_vault", "loaded_keys": 9}
     credential_factory.assert_called_once_with()
     client_factory.assert_called_once_with(
         vault_url="https://bets.vault.azure.net", credential=credential

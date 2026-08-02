@@ -142,10 +142,16 @@ function UpcomingFixtures({
                         </span>
                       </div>
                       {(fixture.is_demo ||
+                        fixture.sources?.length > 1 ||
                         selectedFixtureId === fixture.fixture_id) && (
                         <div className="mt-3 flex items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-widest">
                           {fixture.is_demo && (
                             <span className="text-amber-500">Demo veri</span>
+                          )}
+                          {fixture.sources?.length > 1 && (
+                            <span className="text-sky-400">
+                              {fixture.sources.length} kaynak doğruladı
+                            </span>
                           )}
                           {selectedFixtureId === fixture.fixture_id && (
                             <span className="text-emerald-400">

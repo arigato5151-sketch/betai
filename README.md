@@ -690,6 +690,12 @@ SPORTMONKS_API_TOKEN=
 SPORTMONKS_BASE_URL=https://api.sportmonks.com/v3/football
 SPORTMONKS_PLAYER_LOOKBACK_DAYS=120
 SPORTMONKS_PLAYER_LOOKBACK_MATCHES=10
+FOOTBALL_DATA_ORG_ENABLED=false
+FOOTBALL_DATA_ORG_API_KEY=
+FOOTBALL_DATA_ORG_BASE_URL=https://api.football-data.org/v4
+THESPORTSDB_ENABLED=true
+THESPORTSDB_BASE_URL=https://www.thesportsdb.com/api/v1/json/123
+MULTI_FIXTURE_TIMEOUT_SECONDS=15
 ODDS_SNAPSHOT_MIN_INTERVAL_SECONDS=300
 ODDS_SNAPSHOT_CONFIDENCE=0.90
 DATABASE_URL=sqlite:///./matches.db
@@ -734,6 +740,12 @@ LOG_FORMAT=text
 ```
 
 `API_FOOTBALL_KEY=DEMO_KEY` uygulamanın gömülü demo verisini kullanmasını sağlar. Canlı fikstürler için değeri geçerli API-Football anahtarıyla değiştirin. Redis kapalıysa Memcached, Memcached de kapalıysa süreç içi TTL cache kullanılır.
+
+Yaklaşan fikstür akışı API-Football, Sportmonks, football-data.org ve TheSportsDB
+sonuçlarını paralel toplar; aynı lig, takımlar ve tarihteki maçları tek kayıtta
+birleştirir. Bir servis geçici olarak hata verirse diğer kaynaklar çalışmaya devam
+eder. football-data.org anahtarlı ve isteğe bağlıdır; TheSportsDB varsayılan olarak
+ek anahtar gerektirmeyen tamamlayıcı kaynaktır.
 
 Frontend API adresi ayrı olarak `frontend/.env` dosyasında tutulur:
 
