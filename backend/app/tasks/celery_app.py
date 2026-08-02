@@ -51,6 +51,10 @@ celery_app.conf.update(
             "task": "app.tasks.jobs.sync_statsbomb_open_data_task",
             "schedule": 86400.0,
         },
+        "sync-open-meteo-weather-daily": {
+            "task": "app.tasks.jobs.sync_open_meteo_weather_task",
+            "schedule": 86400.0,
+        },
         "sync-wikidata-team-locations-weekly": {
             "task": "app.tasks.jobs.sync_wikidata_team_locations_task",
             "schedule": 604800.0,

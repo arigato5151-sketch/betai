@@ -141,6 +141,58 @@ class HistoricalFixtureRepository:
             raise
         return len(fixtures)
 
+    def update_weather_many(self, updates: Iterable[Mapping[str, object]]) -> int:
+        """Apply validated match-time weather values without replacing fixture data."""
+        rows: dict[int, Mapping[str, object]] = {}
+        for row in updates:
+            fixture_id = row.get("fixture_id")
+            if isinstance(fixture_id, bool) or not isinstance(fixture_id, int):
+                raise ValueError("fixture_id must be an integer")
+            rows[fixture_id] = row
+        if not rows:
+            return 0
+        fixtures = (
+            self.db.query(HistoricalFixture)
+            .filter(HistoricalFixture.fixture_id.in_(rows))
+            .all()
+        )
+        try:
+            for fixture in fixtures:
+                row = rows[fixture.fixture_id]
+                fixture.weather_temperature_c = self._bounded_float(
+                    row.get("weather_temperature_c"), -80.0, 65.0
+                )
+                fixture.weather_precipitation_mm = self._bounded_float(
+                    row.get("weather_precipitation_mm"), 0.0, 500.0
+                )
+                fixture.weather_wind_speed_kmh = self._bounded_float(
+                    row.get("weather_wind_speed_kmh"), 0.0, 300.0
+                )
+                source = str(row.get("weather_source") or "").strip()
+                observed_at = row.get("weather_observed_at")
+                updated_at = row.get("weather_updated_at")
+                if not source or not isinstance(observed_at, datetime):
+                    raise ValueError("Weather provenance is required")
+                fixture.weather_source = source[:50]
+                fixture.weather_observed_at = observed_at
+                fixture.weather_updated_at = (
+                    updated_at if isinstance(updated_at, datetime) else utc_now()
+                )
+            self.db.commit()
+        except (KeyError, TypeError, ValueError, SQLAlchemyError):
+            self.db.rollback()
+            raise
+        return len(fixtures)
+
+    @staticmethod
+    def _bounded_float(value: object, minimum: float, maximum: float) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("Weather value must be numeric")
+        numeric = float(value)
+        if not math.isfinite(numeric) or not minimum <= numeric <= maximum:
+            raise ValueError("Weather value is out of range")
+        return numeric
+
     @staticmethod
     def _validated_xg(value: object, label: str) -> float:
         if isinstance(value, bool) or not isinstance(value, (int, float)):

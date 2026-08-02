@@ -16,7 +16,7 @@ from app.db.player_context_repository import (
 )
 from app.db.session import SessionLocal
 from app.db.repository import MatchPredictionRepository
-from app.db.models import HistoricalFixture, MatchPrediction
+from app.db.models import HistoricalFixture, MatchPrediction, TeamLocation
 from app.services.api_football import APIFootballClient
 from app.services.football_data_csv import (
     FootballDataCSVClient,
@@ -26,6 +26,7 @@ from app.services.fixture_download import FixtureDownloadClient, UEFA_FEEDS
 from app.providers.understat import UnderstatClient
 from app.providers.openligadb import OpenLigaDBClient, is_openligadb_fixture_id
 from app.providers.statsbomb_open import StatsBombOpenDataClient, database_row
+from app.providers.open_meteo import OpenMeteoClient
 from app.providers.wikidata import WikidataError, WikidataTeamLocationClient
 from app.providers.geonames_city import GeoNamesCityResolver
 from app.services.understat_xg import match_understat_xg
@@ -1076,6 +1077,88 @@ def sync_statsbomb_open_data_task() -> dict[str, object]:
         "failed_events": len(failures),
     }
     logger.info("StatsBomb Open Data synchronization completed: %s", result)
+    return result
+
+
+@shared_task(name="app.tasks.jobs.sync_open_meteo_weather_task")
+def sync_open_meteo_weather_task() -> dict[str, object]:
+    """Incrementally add match-time weather where a home venue is known."""
+    if not settings.OPEN_METEO_ENABLED:
+        return {"status": "disabled", "processed": 0, "failed": 0}
+
+    with SessionLocal() as db:
+        run_id = DataQualityService(db).start_sync("open_meteo", []).id
+        candidates = (
+            db.query(
+                HistoricalFixture.fixture_id,
+                TeamLocation.latitude,
+                TeamLocation.longitude,
+                HistoricalFixture.kickoff,
+            )
+            .join(
+                TeamLocation,
+                (TeamLocation.data_source == HistoricalFixture.data_source)
+                & (TeamLocation.team_id == HistoricalFixture.home_team_id),
+            )
+            .filter(
+                HistoricalFixture.weather_source.is_(None),
+                HistoricalFixture.kickoff < datetime.now(UTC),
+                TeamLocation.latitude.is_not(None),
+                TeamLocation.longitude.is_not(None),
+            )
+            .order_by(HistoricalFixture.kickoff.desc())
+            .limit(settings.OPEN_METEO_BACKFILL_BATCH_SIZE)
+            .all()
+        )
+
+    requests = [
+        (fixture_id, float(latitude), float(longitude), kickoff)
+        for fixture_id, latitude, longitude, kickoff in candidates
+        if latitude is not None and longitude is not None
+    ]
+    processed = 0
+    failures: list[dict[str, object]] = []
+    try:
+        observations, failed_ids = _run_async(OpenMeteoClient().get_many(requests))
+        failures = [
+            {"fixture_id": fixture_id, "error": "WeatherLookupFailed"}
+            for fixture_id in failed_ids
+        ]
+        updates = [
+            {
+                "fixture_id": fixture_id,
+                "weather_temperature_c": observation.temperature_c,
+                "weather_precipitation_mm": observation.precipitation_mm,
+                "weather_wind_speed_kmh": observation.wind_speed_kmh,
+                "weather_source": observation.source,
+                "weather_observed_at": observation.observed_at,
+                "weather_updated_at": observation.fetched_at,
+            }
+            for fixture_id, observation in observations.items()
+        ]
+        with SessionLocal() as db:
+            processed = HistoricalFixtureRepository(db).update_weather_many(updates)
+            DataQualityService(db).finish_sync(
+                run_id,
+                processed=processed,
+                failures=failures,
+            )
+    except Exception as exc:
+        with SessionLocal() as db:
+            DataQualityService(db).finish_sync(
+                run_id,
+                processed=processed,
+                failures=failures,
+                error_type=type(exc).__name__,
+            )
+        raise
+    result: dict[str, object] = {
+        "status": "partial" if failures else "completed",
+        "processed": processed,
+        "failed": len(failures),
+        "candidates": len(requests),
+    }
+    logger.info("Open-Meteo synchronization completed: %s", result)
     return result
 
 

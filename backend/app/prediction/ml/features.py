@@ -15,7 +15,7 @@ LEAGUE_ONE_HOT_FEATURES = [
 
 
 class FeatureEngine:
-    SCHEMA_VERSION = "ml_features_v8"
+    SCHEMA_VERSION = "ml_features_v9"
     COMPATIBLE_SNAPSHOT_VERSIONS = {
         "ml_features_v1",
         "ml_features_v2",
@@ -24,6 +24,7 @@ class FeatureEngine:
         "ml_features_v5",
         "ml_features_v6",
         "ml_features_v7",
+        "ml_features_v8",
         SCHEMA_VERSION,
     }
     CATEGORICAL_FEATURE_NAMES = (
@@ -78,6 +79,10 @@ class FeatureEngine:
         "odds_movement_home",
         "odds_movement_draw",
         "odds_movement_away",
+        "weather_temperature_c",
+        "weather_precipitation_mm",
+        "weather_wind_speed_kmh",
+        "weather_available",
         *LEAGUE_FEATURE_NAMES,
         *CATEGORICAL_FEATURE_NAMES,
     ]
@@ -126,6 +131,10 @@ class FeatureEngine:
         "odds_movement_home": 0.0,
         "odds_movement_draw": 0.0,
         "odds_movement_away": 0.0,
+        "weather_temperature_c": 15.0,
+        "weather_precipitation_mm": 0.0,
+        "weather_wind_speed_kmh": 0.0,
+        "weather_available": 0.0,
         **{name: 0.0 for name in LEAGUE_ONE_HOT_FEATURES},
         **{name: 0.0 for name in CATEGORICAL_FEATURE_NAMES},
     }
@@ -567,6 +576,7 @@ class FeatureEngine:
         away_travel_distance_km: object = 0.0,
         home_player_impact: TeamStrengthImpact | None = None,
         away_player_impact: TeamStrengthImpact | None = None,
+        weather: Mapping[str, object] | None = None,
     ) -> Dict[str, float]:
         """
         Robust feature vector inşa et - training'de kullanılan aynı formüllerle.
@@ -683,6 +693,7 @@ class FeatureEngine:
             opening_odds,
             current_odds,
         )
+        weather_features = FeatureEngine.weather_features(weather)
 
         return {
             "home_form": float(home_stats.get("form", 50.0)),
@@ -742,6 +753,7 @@ class FeatureEngine:
             "home_lineup_continuity": home_lineup[2],
             "away_lineup_continuity": away_lineup[2],
             **odds_movements,
+            **weather_features,
             **{
                 name: float(name == f"league_{league_id}")
                 for name in FeatureEngine.LEAGUE_FEATURE_NAMES
@@ -750,3 +762,34 @@ class FeatureEngine:
             "home_team_id": float(home_team_id or 0),
             "away_team_id": float(away_team_id or 0),
         }
+
+    @classmethod
+    def weather_features(cls, weather: Mapping[str, object] | None) -> Dict[str, float]:
+        """Normalize weather inputs or return an explicit neutral/missing vector."""
+        defaults = {
+            name: cls.FEATURE_DEFAULTS[name]
+            for name in (
+                "weather_temperature_c",
+                "weather_precipitation_mm",
+                "weather_wind_speed_kmh",
+                "weather_available",
+            )
+        }
+        if not isinstance(weather, Mapping):
+            return defaults
+        bounds = {
+            "weather_temperature_c": (-80.0, 65.0),
+            "weather_precipitation_mm": (0.0, 500.0),
+            "weather_wind_speed_kmh": (0.0, 300.0),
+        }
+        normalized: Dict[str, float] = {}
+        for name, (minimum, maximum) in bounds.items():
+            value = weather.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return defaults
+            numeric = float(value)
+            if not math.isfinite(numeric) or not minimum <= numeric <= maximum:
+                return defaults
+            normalized[name] = numeric
+        normalized["weather_available"] = 1.0
+        return normalized

@@ -770,6 +770,21 @@ Görev gerektiğinde elle de çalıştırılabilir:
 docker compose exec backend python -c "from app.tasks.jobs import sync_statsbomb_open_data_task; print(sync_statsbomb_open_data_task.run())"
 ```
 
+Open-Meteo, konumu bilinen ev sahibi/stadyum için maç saatine en yakın sıcaklık,
+yağış ve rüzgâr değerlerini otomatik getirir. Gelecek maçlarda güncel tahmin,
+2022 sonrası eğitim maçlarında tarihsel tahmin, daha eski maçlarda hava arşivi
+kullanılır. Konum veya hava verisi yoksa model açık bir `weather_available=0`
+göstergesiyle nötr değerlere döner. Tarihsel backfill günlük 100 maçla ilerler.
+
+```env
+OPEN_METEO_ENABLED=true
+OPEN_METEO_BACKFILL_BATCH_SIZE=100
+OPEN_METEO_CONCURRENCY=2
+```
+
+Open-Meteo anahtarsız erişimi non-commercial kullanım içindir. Ticari dağıtımda
+Open-Meteo lisans/plan koşulları ayrıca doğrulanmalıdır.
+
 Frontend API adresi ayrı olarak `frontend/.env` dosyasında tutulur:
 
 ```env

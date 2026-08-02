@@ -40,6 +40,11 @@ from app.services.external_features import external_feature_service
 from app.services.odds_history import odds_history_service
 from app.services.sportmonks_players import sportmonks_player_service
 from app.services.travel_context import travel_context_service
+from app.providers.open_meteo import (
+    OpenMeteoClient,
+    OpenMeteoError,
+    WeatherObservation,
+)
 from app.prediction.stats_engine import StatsEngine
 from app.prediction.ensemble import ProbabilityEnsembler
 from app.prediction.value_calc import ValueCalc
@@ -83,6 +88,7 @@ logger = logging.getLogger("bet-ai-pro.api")
 router = APIRouter()
 football_api = APIFootballClient()
 fixture_aggregator = FixtureAggregator(api_football=football_api)
+open_meteo_client = OpenMeteoClient()
 router.include_router(admin_router)
 
 
@@ -967,6 +973,27 @@ async def _apply_external_travel_fallback(
     )
 
 
+async def _fetch_match_weather(
+    payload: AnalysisRequest,
+    historical: HistoricalFeatureContext,
+) -> WeatherObservation | None:
+    if (
+        payload.kickoff is None
+        or historical.venue_latitude is None
+        or historical.venue_longitude is None
+    ):
+        return None
+    try:
+        return await open_meteo_client.get_weather(
+            latitude=historical.venue_latitude,
+            longitude=historical.venue_longitude,
+            at=payload.kickoff,
+        )
+    except (OpenMeteoError, ValueError) as exc:
+        logger.warning("Open-Meteo weather lookup failed: %s", type(exc).__name__)
+        return None
+
+
 async def _compute_analysis(payload: AnalysisRequest) -> dict:
     """Run analysis with external inputs and a short point-in-time history read."""
     home_stats = payload.home_stats.model_dump()
@@ -980,6 +1007,7 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         _get_historical_feature_context(payload),
     )
     historical = await _apply_external_travel_fallback(payload, historical)
+    weather_observation = await _fetch_match_weather(payload, historical)
     (
         home_matches_df,
         away_matches_df,
@@ -1064,6 +1092,9 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         ),
         home_player_impact=home_player_impact,
         away_player_impact=away_player_impact,
+        weather=(
+            weather_observation.features() if weather_observation is not None else None
+        ),
     )
     feature_vector = {
         name: float(
@@ -1138,6 +1169,7 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
             or historical.away_travel_distance_km > 0
         ),
         "odds_movement_available": bool(opening_odds and current_odds),
+        "weather_available": weather_observation is not None,
     }
     feature_provenance = dict(historical.feature_provenance)
     active_travel_provenance: dict[str, object] | None = (
@@ -1187,6 +1219,19 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
                 for feature_name in AnalysisInputCatalog.ODDS_MOVEMENT_INPUTS
             }
         )
+    if weather_observation is not None:
+        weather_provenance: dict[str, object] = {
+            "source": weather_observation.source,
+            "captured_at": weather_observation.fetched_at.isoformat(),
+            "confidence": 0.85,
+            "is_fallback": weather_observation.source == "open_meteo_archive",
+        }
+        feature_provenance.update(
+            {
+                feature_name: weather_provenance
+                for feature_name in AnalysisInputCatalog.WEATHER_INPUTS
+            }
+        )
     data_quality = {
         "score": round(
             100.0
@@ -1216,6 +1261,16 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
             2,
         ),
         "travel_provenance": active_travel_provenance,
+        "weather": (
+            {
+                **weather_observation.features(),
+                "source": weather_observation.source,
+                "observed_at": weather_observation.observed_at.isoformat(),
+                "fetched_at": weather_observation.fetched_at.isoformat(),
+            }
+            if weather_observation is not None
+            else None
+        ),
         "odds_snapshot": {
             "movement_features_used": bool(opening_odds and current_odds),
             "opening_captured_at": (

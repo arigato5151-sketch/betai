@@ -17,6 +17,7 @@ kalitesi nedeniyle tahmin girdisine alınmayan adayları kaydeder.
 | TheSportsDB | Tamamlayıcı fikstür | Anahtarsız günlük futbol feed'i | Crowd-sourced; tek başına güven kaynağı değil |
 | Wikidata / GeoNames | Kulüp ve şehir koordinatı | Seyahat/yorgunluk hesabı | Güven skoru ve yerel cache |
 | StatsBomb Open Data | Olay akışı, xG, şut, kart, korner ve ilk 11 | Seçili açık sezonlar; olaylar günlük sınırlı batch ile zenginleştirilir | Kaynak/logo atfı gerekir |
+| Open-Meteo | Maç saati sıcaklık, yağış ve rüzgâr | Stadyum/ev sahibi konumu bilinen maçlar; günlük artımlı backfill | Non-commercial anahtarsız API; kaynak atfı gerekir |
 
 ## Doğrulanan ancak tahmine bağlanmayan kaynaklar
 
@@ -25,9 +26,6 @@ kalitesi nedeniyle tahmin girdisine alınmayan adayları kaydeder.
 - **SportScore:** Ücretsiz ve atıflı API mevcut; canlı doğrulamada takım slug'ları
   yaş kategorilerine yanlış eşleşti ve bazı maç durum/tarihleri tutarsızdı. Bu
   nedenle tahmin girdisine alınmadı.
-- **Open-Meteo:** Tahmin ve tarihsel hava verisi kullanılabilir. Modelde veri
-  sızıntısı yaratmamak için geçmiş tahmin (historical forecast) zaman kesitleriyle
-  ayrı bir feature sürümünde eklenmelidir.
 
 ## xG doluluk sonucu
 

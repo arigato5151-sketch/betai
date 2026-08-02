@@ -527,6 +527,11 @@ class HistoricalTrainingDataBuilder:
                     },
                     home_player_impact=home_player_impact,
                     away_player_impact=away_player_impact,
+                    weather={
+                        "weather_temperature_c": fixture.weather_temperature_c,
+                        "weather_precipitation_mm": fixture.weather_precipitation_mm,
+                        "weather_wind_speed_kmh": fixture.weather_wind_speed_kmh,
+                    },
                 )
                 rows.append(
                     HistoricalTrainingRow(

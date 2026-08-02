@@ -281,6 +281,16 @@ class HistoricalFixture(Base):
         DateTime(timezone=True), nullable=True
     )
     xg_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weather_temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weather_precipitation_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weather_wind_speed_kmh: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weather_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    weather_observed_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    weather_updated_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     home_starting_xi: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     away_starting_xi: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     actual_result: Mapped[str] = mapped_column(String(16), nullable=False)

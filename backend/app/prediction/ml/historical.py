@@ -38,6 +38,8 @@ class HistoricalFeatureContext:
     away_travel_distance_km: float = 0.0
     travel_context_available: bool = False
     travel_provenance: dict[str, object] | None = None
+    venue_latitude: float | None = None
+    venue_longitude: float | None = None
 
 
 class HistoricalFeatureService:
@@ -129,6 +131,8 @@ class HistoricalFeatureService:
         away_travel_distance_km = 0.0
         travel_context_available = False
         travel_provenance: dict[str, object] | None = None
+        venue_latitude: float | None = None
+        venue_longitude: float | None = None
         if self.player_context_repository is not None:
             home_player_ratings = self._player_rating_map(home_team_id, before)
             away_player_ratings = self._player_rating_map(away_team_id, before)
@@ -139,6 +143,13 @@ class HistoricalFeatureService:
                 away_location = self.player_context_repository.get_team_location(
                     away_team_id
                 )
+                if (
+                    home_location is not None
+                    and home_location.latitude is not None
+                    and home_location.longitude is not None
+                ):
+                    venue_latitude = float(home_location.latitude)
+                    venue_longitude = float(home_location.longitude)
                 if (
                     home_location is not None
                     and away_location is not None
@@ -220,6 +231,8 @@ class HistoricalFeatureService:
             away_travel_distance_km=away_travel_distance_km,
             travel_context_available=travel_context_available,
             travel_provenance=travel_provenance,
+            venue_latitude=venue_latitude,
+            venue_longitude=venue_longitude,
         )
 
     @staticmethod

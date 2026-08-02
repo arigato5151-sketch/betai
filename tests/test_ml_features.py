@@ -470,6 +470,37 @@ def test_fatigue_index_combines_congestion_rest_and_away_travel(
     assert fatigue_index == 0.75
 
 
+def test_weather_features_are_normalized_with_safe_missing_defaults() -> None:
+    assert FeatureEngine.weather_features(None) == {
+        "weather_temperature_c": 15.0,
+        "weather_precipitation_mm": 0.0,
+        "weather_wind_speed_kmh": 0.0,
+        "weather_available": 0.0,
+    }
+    assert FeatureEngine.weather_features(
+        {
+            "weather_temperature_c": 7.5,
+            "weather_precipitation_mm": 2.0,
+            "weather_wind_speed_kmh": 24.0,
+        }
+    ) == {
+        "weather_temperature_c": 7.5,
+        "weather_precipitation_mm": 2.0,
+        "weather_wind_speed_kmh": 24.0,
+        "weather_available": 1.0,
+    }
+    assert (
+        FeatureEngine.weather_features(
+            {
+                "weather_temperature_c": 7.5,
+                "weather_precipitation_mm": -1.0,
+                "weather_wind_speed_kmh": 24.0,
+            }
+        )["weather_available"]
+        == 0.0
+    )
+
+
 @pytest.mark.parametrize(
     "travel_distance",
     [None, -10, float("nan"), float("inf"), True, "invalid"],
@@ -637,7 +668,7 @@ def test_uefa_competitions_have_distinct_one_hot_features(league_id: int) -> Non
         league_id=league_id,
     )
 
-    assert FeatureEngine.SCHEMA_VERSION == "ml_features_v8"
+    assert FeatureEngine.SCHEMA_VERSION == "ml_features_v9"
     assert features["league_id"] == float(league_id)
     assert features[f"league_{league_id}"] == 1.0
     assert sum(features[name] for name in FeatureEngine.LEAGUE_FEATURE_NAMES) == 1.0

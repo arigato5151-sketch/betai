@@ -89,6 +89,15 @@ class Settings(BaseSettings):
     STATSBOMB_OPEN_DATA_CONCURRENCY: int = Field(default=4, ge=1, le=8)
     STATSBOMB_OPEN_DATA_MIN_SEASON: int = Field(default=2004, ge=1950, le=2100)
     STATSBOMB_OPEN_DATA_ENRICH_BATCH_SIZE: int = Field(default=20, ge=1, le=100)
+    OPEN_METEO_ENABLED: bool = True
+    OPEN_METEO_FORECAST_URL: str = "https://api.open-meteo.com/v1/forecast"
+    OPEN_METEO_HISTORICAL_FORECAST_URL: str = (
+        "https://historical-forecast-api.open-meteo.com/v1/forecast"
+    )
+    OPEN_METEO_ARCHIVE_URL: str = "https://archive-api.open-meteo.com/v1/archive"
+    OPEN_METEO_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=60)
+    OPEN_METEO_CONCURRENCY: int = Field(default=2, ge=1, le=4)
+    OPEN_METEO_BACKFILL_BATCH_SIZE: int = Field(default=100, ge=1, le=100)
     FIXTURE_DOWNLOAD_BASE_URL: str = "https://fixturedownload.com/feed/json"
     FIXTURE_DOWNLOAD_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
     FIXTURE_DOWNLOAD_UPCOMING_ENABLED: bool = True
@@ -506,6 +515,32 @@ class Settings(BaseSettings):
             raise ValueError(
                 "STATSBOMB_OPEN_DATA_BASE_URL must point to the official StatsBomb open-data repository"
             )
+        return normalized
+
+    @field_validator(
+        "OPEN_METEO_FORECAST_URL",
+        "OPEN_METEO_HISTORICAL_FORECAST_URL",
+        "OPEN_METEO_ARCHIVE_URL",
+    )
+    @classmethod
+    def validate_open_meteo_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        allowed = {
+            ("api.open-meteo.com", "/v1/forecast"),
+            ("historical-forecast-api.open-meteo.com", "/v1/forecast"),
+            ("archive-api.open-meteo.com", "/v1/archive"),
+        }
+        if (
+            parsed.scheme != "https"
+            or (parsed.hostname, parsed.path) not in allowed
+            or parsed.username
+            or parsed.password
+            or parsed.port
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Open-Meteo URLs must point to official HTTPS API hosts")
         return normalized
 
     @field_validator("FIXTURE_DOWNLOAD_BASE_URL")

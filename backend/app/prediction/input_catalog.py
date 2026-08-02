@@ -67,6 +67,12 @@ class AnalysisInputCatalog:
         "odds_movement_draw",
         "odds_movement_away",
     }
+    WEATHER_INPUTS = {
+        "weather_temperature_c",
+        "weather_precipitation_mm",
+        "weather_wind_speed_kmh",
+        "weather_available",
+    }
     IDENTITY_INPUTS = {"league_id", "home_team_id", "away_team_id"}
 
     @classmethod
@@ -119,6 +125,14 @@ class AnalysisInputCatalog:
             return (0.0, 10.0, 0.01)
         if name in cls.ODDS_MOVEMENT_INPUTS:
             return (-100.0, 1000.0, 0.1)
+        if name == "weather_temperature_c":
+            return (-80.0, 65.0, 0.1)
+        if name == "weather_precipitation_mm":
+            return (0.0, 500.0, 0.1)
+        if name == "weather_wind_speed_kmh":
+            return (0.0, 300.0, 0.1)
+        if name == "weather_available":
+            return (0.0, 1.0, 1.0)
         return (-1_000_000.0, 1_000_000.0, 0.01)
 
     @classmethod
@@ -166,6 +180,8 @@ class AnalysisInputCatalog:
             return "Dinlenme ve seyahat"
         if name in cls.ODDS_MOVEMENT_INPUTS:
             return "Oran hareketleri"
+        if name in cls.WEATHER_INPUTS:
+            return "Hava koşulları"
         return "Lig ve takım kimlikleri"
 
     @classmethod
@@ -248,6 +264,12 @@ class AnalysisInputCatalog:
                 ("available", None)
                 if checks.get("odds_movement_available")
                 else ("missing", "Açılış ve güncel oran çifti bulunamadı.")
+            )
+        if name in cls.WEATHER_INPUTS:
+            return (
+                ("available", None)
+                if checks.get("weather_available")
+                else ("missing", "Stadyum konumu veya maç saati hava verisi yok.")
             )
         if name in cls.IDENTITY_INPUTS:
             return (

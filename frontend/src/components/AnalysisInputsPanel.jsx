@@ -46,6 +46,9 @@ const SOURCE_LABELS = {
   schedule_and_geonames_city: "Takvim + GeoNames şehir merkezi",
   schedule_and_curated_team_locations: "Takvim + doğrulanmış takım konumu",
   schedule_and_manual_override: "Takvim + manuel seyahat mesafesi",
+  open_meteo_forecast: "Open-Meteo hava tahmini",
+  open_meteo_historical_forecast: "Open-Meteo tarihsel tahmin",
+  open_meteo_archive: "Open-Meteo tarihsel hava arşivi",
 };
 
 function sourceLabel(source) {

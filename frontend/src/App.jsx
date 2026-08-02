@@ -175,6 +175,15 @@ function App() {
             className="h-7 w-auto opacity-80"
           />
         </a>
+        <span>·</span>
+        <a
+          href="https://open-meteo.com/"
+          target="_blank"
+          rel="noreferrer"
+          className="font-bold text-sky-400 hover:text-sky-300"
+        >
+          Hava verisi: Open-Meteo.com
+        </a>
       </footer>
     </div>
   );
