@@ -25,6 +25,7 @@ from app.services.football_data_csv import (
 from app.services.fixture_download import FixtureDownloadClient, UEFA_FEEDS
 from app.providers.understat import UnderstatClient
 from app.providers.openligadb import OpenLigaDBClient, is_openligadb_fixture_id
+from app.providers.statsbomb_open import StatsBombOpenDataClient, database_row
 from app.providers.wikidata import WikidataError, WikidataTeamLocationClient
 from app.providers.geonames_city import GeoNamesCityResolver
 from app.services.understat_xg import match_understat_xg
@@ -987,6 +988,94 @@ def sync_uefa_fixtures_task(seasons: list[int] | None = None) -> dict[str, objec
         "failed_league_seasons": failures,
     }
     logger.info("UEFA fixture synchronization completed: %s", result)
+    return result
+
+
+@shared_task(name="app.tasks.jobs.sync_statsbomb_open_data_task")
+def sync_statsbomb_open_data_task() -> dict[str, object]:
+    """Import public match metadata, then incrementally enrich events and xG."""
+    if not settings.STATSBOMB_OPEN_DATA_ENABLED:
+        return {"status": "disabled", "fixtures_processed": 0}
+
+    client = StatsBombOpenDataClient()
+    with SessionLocal() as db:
+        run_id = (
+            DataQualityService(db)
+            .start_sync(
+                "statsbomb_open",
+                [settings.STATSBOMB_OPEN_DATA_MIN_SEASON],
+            )
+            .id
+        )
+    metadata_processed = enriched_processed = 0
+    failures: list[dict[str, object]] = []
+    try:
+        catalog = _run_async(
+            client.get_catalog(min_season=settings.STATSBOMB_OPEN_DATA_MIN_SEASON)
+        )
+        catalog_by_id = {int(row["fixture_id"]): row for row in catalog}
+        with SessionLocal() as db:
+            existing_ids = {
+                fixture_id
+                for (fixture_id,) in db.query(HistoricalFixture.fixture_id)
+                .filter(HistoricalFixture.data_source == "statsbomb_open")
+                .all()
+            }
+            new_rows = [
+                database_row(row)
+                for fixture_id, row in catalog_by_id.items()
+                if fixture_id not in existing_ids
+            ]
+            metadata_processed = HistoricalFixtureRepository(db).upsert_many(new_rows)
+
+        with SessionLocal() as db:
+            pending_ids = [
+                fixture_id
+                for (fixture_id,) in db.query(HistoricalFixture.fixture_id)
+                .filter(
+                    HistoricalFixture.data_source == "statsbomb_open",
+                    HistoricalFixture.xg_source.is_(None),
+                )
+                .order_by(HistoricalFixture.kickoff.desc())
+                .limit(settings.STATSBOMB_OPEN_DATA_ENRICH_BATCH_SIZE)
+                .all()
+            ]
+        pending = [
+            catalog_by_id[fixture_id]
+            for fixture_id in pending_ids
+            if fixture_id in catalog_by_id
+        ]
+        enriched, failed_ids = _run_async(client.enrich_matches(pending))
+        failures.extend(
+            {"fixture_id": fixture_id, "error": "EventEnrichmentFailed"}
+            for fixture_id in failed_ids
+        )
+        with SessionLocal() as db:
+            enriched_processed = HistoricalFixtureRepository(db).upsert_many(
+                database_row(row) for row in enriched
+            )
+            DataQualityService(db).finish_sync(
+                run_id,
+                processed=metadata_processed + enriched_processed,
+                failures=failures,
+            )
+    except Exception as exc:
+        with SessionLocal() as db:
+            DataQualityService(db).finish_sync(
+                run_id,
+                processed=metadata_processed + enriched_processed,
+                failures=failures,
+                error_type=type(exc).__name__,
+            )
+        raise
+    result: dict[str, object] = {
+        "status": "partial" if failures else "completed",
+        "catalog_matches": len(catalog),
+        "metadata_processed": metadata_processed,
+        "events_enriched": enriched_processed,
+        "failed_events": len(failures),
+    }
+    logger.info("StatsBomb Open Data synchronization completed: %s", result)
     return result
 
 

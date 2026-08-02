@@ -160,6 +160,22 @@ function App() {
           />
         </AnalysisContainer>
       </main>
+
+      <footer className="mx-auto mt-10 flex max-w-7xl items-center justify-center gap-3 border-t border-slate-800 pt-5 text-xs text-slate-500">
+        <span>Seçili tarihsel olay verileri:</span>
+        <a
+          href="https://github.com/statsbomb/open-data"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="StatsBomb Open Data kaynağını aç"
+        >
+          <img
+            src="https://raw.githubusercontent.com/hudl/open-data/master/img/SB%20-%20Icon%20Lockup%20-%20Colour%20positive.png"
+            alt="StatsBomb"
+            className="h-7 w-auto opacity-80"
+          />
+        </a>
+      </footer>
     </div>
   );
 }

@@ -81,6 +81,14 @@ class Settings(BaseSettings):
     OPENLIGADB_ENABLED: bool = True
     OPENLIGADB_BASE_URL: str = "https://api.openligadb.de"
     OPENLIGADB_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=60)
+    STATSBOMB_OPEN_DATA_ENABLED: bool = True
+    STATSBOMB_OPEN_DATA_BASE_URL: str = (
+        "https://raw.githubusercontent.com/statsbomb/open-data/master/data"
+    )
+    STATSBOMB_OPEN_DATA_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0, le=120)
+    STATSBOMB_OPEN_DATA_CONCURRENCY: int = Field(default=4, ge=1, le=8)
+    STATSBOMB_OPEN_DATA_MIN_SEASON: int = Field(default=2004, ge=1950, le=2100)
+    STATSBOMB_OPEN_DATA_ENRICH_BATCH_SIZE: int = Field(default=20, ge=1, le=100)
     FIXTURE_DOWNLOAD_BASE_URL: str = "https://fixturedownload.com/feed/json"
     FIXTURE_DOWNLOAD_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
     FIXTURE_DOWNLOAD_UPCOMING_ENABLED: bool = True
@@ -477,6 +485,26 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "OPENLIGADB_BASE_URL must point to https://api.openligadb.de"
+            )
+        return normalized
+
+    @field_validator("STATSBOMB_OPEN_DATA_BASE_URL")
+    @classmethod
+    def validate_statsbomb_open_data_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "raw.githubusercontent.com"
+            or parsed.path != "/statsbomb/open-data/master/data"
+            or parsed.username
+            or parsed.password
+            or parsed.port
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "STATSBOMB_OPEN_DATA_BASE_URL must point to the official StatsBomb open-data repository"
             )
         return normalized
 

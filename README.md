@@ -751,6 +751,25 @@ birleştirir. Bir servis geçici olarak hata verirse diğer kaynaklar çalışma
 eder. football-data.org anahtarlı ve isteğe bağlıdır; TheSportsDB varsayılan olarak
 ek anahtar gerektirmeyen tamamlayıcı kaynaktır.
 
+StatsBomb Open Data, seçili açık sezonların maç sonuçlarını ve olay akışlarını
+tarihsel eğitim havuzuna ekler. Aylık görev katalogdaki yeni maçları kaydeder ve
+her çalışmada sınırlı bir grubu xG, şut, korner, kart ve ilk 11 verisiyle
+zenginleştirir. Batch boyutu yükseltilebilir; kaynak deposuna gereksiz yük
+oluşturmamak için varsayılan değer 20'dir.
+
+```env
+STATSBOMB_OPEN_DATA_ENABLED=true
+STATSBOMB_OPEN_DATA_MIN_SEASON=2004
+STATSBOMB_OPEN_DATA_ENRICH_BATCH_SIZE=20
+STATSBOMB_OPEN_DATA_CONCURRENCY=4
+```
+
+Görev gerektiğinde elle de çalıştırılabilir:
+
+```bash
+docker compose exec backend python -c "from app.tasks.jobs import sync_statsbomb_open_data_task; print(sync_statsbomb_open_data_task.run())"
+```
+
 Frontend API adresi ayrı olarak `frontend/.env` dosyasında tutulur:
 
 ```env
