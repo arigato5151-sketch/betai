@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     THESPORTSDB_ENABLED: bool = True
     THESPORTSDB_BASE_URL: str = "https://www.thesportsdb.com/api/v1/json/123"
     MULTI_FIXTURE_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=60)
+    OPENLIGADB_ENABLED: bool = True
+    OPENLIGADB_BASE_URL: str = "https://api.openligadb.de"
+    OPENLIGADB_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=60)
     FIXTURE_DOWNLOAD_BASE_URL: str = "https://fixturedownload.com/feed/json"
     FIXTURE_DOWNLOAD_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
     FIXTURE_DOWNLOAD_UPCOMING_ENABLED: bool = True
@@ -455,6 +458,26 @@ class Settings(BaseSettings):
             or parsed.fragment
         ):
             raise ValueError("THESPORTSDB_BASE_URL must point to TheSportsDB v1 API")
+        return normalized
+
+    @field_validator("OPENLIGADB_BASE_URL")
+    @classmethod
+    def validate_openligadb_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "api.openligadb.de"
+            or parsed.path
+            or parsed.username
+            or parsed.password
+            or parsed.port
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "OPENLIGADB_BASE_URL must point to https://api.openligadb.de"
+            )
         return normalized
 
     @field_validator("FIXTURE_DOWNLOAD_BASE_URL")

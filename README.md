@@ -696,6 +696,9 @@ FOOTBALL_DATA_ORG_BASE_URL=https://api.football-data.org/v4
 THESPORTSDB_ENABLED=true
 THESPORTSDB_BASE_URL=https://www.thesportsdb.com/api/v1/json/123
 MULTI_FIXTURE_TIMEOUT_SECONDS=15
+OPENLIGADB_ENABLED=true
+OPENLIGADB_BASE_URL=https://api.openligadb.de
+OPENLIGADB_TIMEOUT_SECONDS=20
 FIXTURE_DOWNLOAD_UPCOMING_ENABLED=true
 ODDS_SNAPSHOT_MIN_INTERVAL_SECONDS=300
 ODDS_SNAPSHOT_CONFIDENCE=0.90
@@ -742,7 +745,7 @@ LOG_FORMAT=text
 
 `API_FOOTBALL_KEY=DEMO_KEY` uygulamanın gömülü demo verisini kullanmasını sağlar. Canlı fikstürler için değeri geçerli API-Football anahtarıyla değiştirin. Redis kapalıysa Memcached, Memcached de kapalıysa süreç içi TTL cache kullanılır.
 
-Yaklaşan fikstür akışı API-Football, FixtureDownload, Sportmonks, football-data.org ve TheSportsDB
+Yaklaşan fikstür akışı API-Football, FixtureDownload, OpenLigaDB, Sportmonks, football-data.org ve TheSportsDB
 sonuçlarını paralel toplar; aynı lig, takımlar ve tarihteki maçları tek kayıtta
 birleştirir. Bir servis geçici olarak hata verirse diğer kaynaklar çalışmaya devam
 eder. football-data.org anahtarlı ve isteğe bağlıdır; TheSportsDB varsayılan olarak

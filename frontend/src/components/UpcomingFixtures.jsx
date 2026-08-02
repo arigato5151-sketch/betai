@@ -33,6 +33,9 @@ function UpcomingFixtures({
   selectedFixtureId,
 }) {
   const groupedFixtures = groupFixturesByDay(fixtures);
+  const fixtureSources = new Set(
+    fixtures.flatMap((fixture) => fixture.sources ?? [fixture.source]).filter(Boolean),
+  );
 
   return (
     <section
@@ -167,6 +170,35 @@ function UpcomingFixtures({
             </section>
           ))}
         </div>
+      )}
+      {fixtureSources.size > 0 && (
+        <p className="mt-5 border-t border-slate-800 pt-3 text-xs text-slate-500">
+          Fikstür kaynakları:
+          {fixtureSources.has("api_football") && (
+            <span className="ml-1">API-Football</span>
+          )}
+          {fixtureSources.has("fixture_download") && (
+            <a
+              href="https://fixturedownload.com/"
+              target="_blank"
+              rel="noreferrer"
+              className="ml-2 text-sky-400 hover:text-sky-300"
+            >
+              FixtureDownload
+            </a>
+          )}
+          {fixtureSources.has("openligadb") && (
+            <a
+              href="https://www.openligadb.de/"
+              target="_blank"
+              rel="noreferrer"
+              className="ml-2 text-sky-400 hover:text-sky-300"
+            >
+              OpenLigaDB (ODbL)
+            </a>
+          )}
+          .
+        </p>
       )}
     </section>
   );

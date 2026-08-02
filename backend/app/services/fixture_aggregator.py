@@ -12,6 +12,7 @@ import httpx
 from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS, LEAGUE_PRIORITY
 from app.core.config import settings
 from app.core.team_identity import stable_team_name_key
+from app.providers.openligadb import OpenLigaDBClient
 from app.services.api_football import APIFootballClient
 from app.services.cache import cache
 from app.services.fixture_download import FixtureDownloadClient, UPCOMING_FEEDS
@@ -520,17 +521,19 @@ class FixtureAggregator:
         sportmonks: SportmonksFixtureSource | None = None,
         thesportsdb: TheSportsDBFixtureSource | None = None,
         fixture_download: FixtureDownloadFixtureSource | None = None,
+        openligadb: OpenLigaDBClient | None = None,
     ) -> None:
         self.api_football = api_football or APIFootballClient()
         self.football_data = football_data or FootballDataOrgFixtureSource()
         self.sportmonks = sportmonks or SportmonksFixtureSource()
         self.thesportsdb = thesportsdb or TheSportsDBFixtureSource()
         self.fixture_download = fixture_download or FixtureDownloadFixtureSource()
+        self.openligadb = openligadb or OpenLigaDBClient()
 
     async def get_upcoming_fixtures(
         self, days: int = 7, limit: int = 100
     ) -> list[dict[str, Any]]:
-        cache_key = f"merged-upcoming:v2:{days}:{limit}"
+        cache_key = f"merged-upcoming:v3:{days}:{limit}"
         cached = await cache.get("fixtures", cache_key)
         if isinstance(cached, list):
             return cached
@@ -555,6 +558,10 @@ class FixtureAggregator:
             tasks.append(
                 ("fixture_download", self.fixture_download.get_fixtures(today, end))
             )
+        if self.openligadb.configured:
+            tasks.append(
+                ("openligadb", self.openligadb.get_upcoming_fixtures(today, end))
+            )
 
         results = await asyncio.gather(
             *(task for _, task in tasks), return_exceptions=True
@@ -572,6 +579,22 @@ class FixtureAggregator:
                     {**row, "source": "api_football", "sources": ["api_football"]}
                     for row in rows
                     if not row.get("is_demo")
+                ]
+            elif source == "openligadb":
+                rows = [
+                    _fixture_row(
+                        fixture_id=int(row["fixture_id"]),
+                        league_id=int(row["league_id"]),
+                        league=str(row["league"]),
+                        home=str(row["home_team"]),
+                        away=str(row["away_team"]),
+                        kickoff=row["kickoff"].astimezone(ISTANBUL),
+                        source="openligadb",
+                        home_team_id=int(row["home_team_id"]),
+                        away_team_id=int(row["away_team_id"]),
+                    )
+                    for row in rows
+                    if isinstance(row.get("kickoff"), datetime)
                 ]
             provider_rows.append((source, rows))
 

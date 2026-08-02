@@ -216,6 +216,7 @@ async def test_aggregator_merges_duplicates_and_isolates_source_failures(
         sportmonks=failing,
         thesportsdb=StubSource([extra]),
         fixture_download=StubSource([], configured=False),
+        openligadb=StubSource([], configured=False),
     )
     monkeypatch.setattr(
         "app.services.fixture_aggregator.cache.get", AsyncMock(return_value=None)
@@ -242,6 +243,7 @@ async def test_alternative_fixture_prefill_uses_safe_neutral_defaults(
         sportmonks=StubSource([], configured=False),
         thesportsdb=StubSource([]),
         fixture_download=StubSource([], configured=False),
+        openligadb=StubSource([], configured=False),
     )
     monkeypatch.setattr(
         "app.services.fixture_aggregator.cache.get", AsyncMock(return_value=row)

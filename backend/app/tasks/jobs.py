@@ -24,6 +24,7 @@ from app.services.football_data_csv import (
 )
 from app.services.fixture_download import FixtureDownloadClient, UEFA_FEEDS
 from app.providers.understat import UnderstatClient
+from app.providers.openligadb import OpenLigaDBClient, is_openligadb_fixture_id
 from app.providers.wikidata import WikidataError, WikidataTeamLocationClient
 from app.providers.geonames_city import GeoNamesCityResolver
 from app.services.understat_xg import match_understat_xg
@@ -1050,6 +1051,7 @@ def sync_completed_matches_task() -> str:
     """
     logger.info("Starting past predictions synchronization task...")
     api_client = APIFootballClient()
+    openligadb_client = OpenLigaDBClient()
 
     with SessionLocal() as db:
         repo = MatchPredictionRepository(db)
@@ -1074,7 +1076,12 @@ def sync_completed_matches_task() -> str:
 
             try:
                 # Retrieve actual fixture status from API asynchronously
-                fixture = _run_async(api_client.get_fixture_by_id(pred.fixture_id))
+                is_openligadb = is_openligadb_fixture_id(pred.fixture_id)
+                fixture = _run_async(
+                    openligadb_client.get_fixture_by_id(pred.fixture_id)
+                    if is_openligadb
+                    else api_client.get_fixture_by_id(pred.fixture_id)
+                )
 
                 if not fixture or fixture.get("status") not in {"FT", "AET", "PEN"}:
                     continue
@@ -1102,7 +1109,11 @@ def sync_completed_matches_task() -> str:
                 )
 
                 # Fetch closing odds dynamically if available to compute CLV
-                market = _run_async(api_client.get_fixture_market(pred.fixture_id))
+                market = (
+                    None
+                    if is_openligadb
+                    else _run_async(api_client.get_fixture_market(pred.fixture_id))
+                )
                 closing_odd = market["raw_odds"]["HOME_WIN"] if market else pred.odd
                 clv = PredictionAuditor.calculate_clv(pred.odd, closing_odd)
 

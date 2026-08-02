@@ -14,6 +14,8 @@ const unsortedFixtures = [
     away_team: "Rakip C",
     kickoff: "2030-07-31T21:00:00+03:00",
     is_demo: false,
+    source: "openligadb",
+    sources: ["openligadb"],
   },
   {
     fixture_id: 10,
@@ -63,6 +65,9 @@ describe("UpcomingFixturesContainer", () => {
     ]);
     expect(screen.getByText("UEFA Konferans Ligi")).toBeInTheDocument();
     expect(screen.getByText("Demo veri")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "OpenLigaDB (ODbL)" }),
+    ).toHaveAttribute("href", "https://www.openligadb.de/");
     expect(screen.getByText("Analize seçildi")).toBeInTheDocument();
 
     fireEvent.click(
