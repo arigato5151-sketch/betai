@@ -786,6 +786,52 @@
         }
       }
     },
+    "/api/predict/tiered": {
+      "post": {
+        "summary": "Predict With Tiered Model",
+        "description": "Predict via the current signed tier bundle without changing legacy analysis.",
+        "operationId": "predict_with_tiered_model_api_predict_tiered_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TieredPredictionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Predict With Tiered Model Api Predict Tiered Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ]
+      }
+    },
     "/api/history": {
       "get": {
         "summary": "Get History",
@@ -2024,6 +2070,26 @@
           "xg"
         ],
         "title": "TeamStatsInput"
+      },
+      "TieredPredictionRequest": {
+        "properties": {
+          "league_id": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "League Id"
+          },
+          "features": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Features"
+          }
+        },
+        "type": "object",
+        "required": [
+          "league_id"
+        ],
+        "title": "TieredPredictionRequest",
+        "description": "Feature payload for the signed multi-tier prediction endpoint."
       },
       "ValidationError": {
         "properties": {

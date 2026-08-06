@@ -50,6 +50,10 @@ from app.prediction.stats_engine import StatsEngine
 from app.prediction.ensemble import ProbabilityEnsembler
 from app.prediction.value_calc import ValueCalc
 from app.prediction.ml.model import ml_pipeline
+from app.prediction.ml.model_router import (
+    TieredArtifactIntegrityError,
+    get_active_tiered_predictor,
+)
 from app.prediction.ml.features import FeatureEngine
 from app.prediction.ml.historical import (
     HistoricalFeatureContext,
@@ -412,6 +416,21 @@ class AnalysisRequest(BaseModel):
         ):
             raise ValueError("opening odds timestamp cannot follow current odds")
         return self
+
+
+class TieredPredictionRequest(BaseModel):
+    """Feature payload for the signed multi-tier prediction endpoint."""
+
+    league_id: int = Field(..., gt=0)
+    features: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("features")
+    @classmethod
+    def validate_features(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        for name, feature in value.items():
+            if isinstance(feature, float) and not math.isfinite(feature):
+                raise ValueError(f"Feature {name} must be finite")
+        return value
 
 
 class ActualResultUpdate(BaseModel):
@@ -1495,6 +1514,41 @@ async def analyze_manual(payload: AnalysisRequest):
     except SQLAlchemyError as exc:
         logger.exception("Veritabanı hatası (manuel analiz)")
         raise HTTPException(status_code=500, detail="Veritabanı hatası.") from exc
+
+
+@router.post(
+    "/predict/tiered",
+    dependencies=[Depends(require_permission("analysis:create"))],
+)
+def predict_with_tiered_model(payload: TieredPredictionRequest) -> dict[str, object]:
+    """Predict via the current signed tier bundle without changing legacy analysis."""
+    try:
+        predictor = get_active_tiered_predictor()
+        prediction = predictor.predict(
+            {"league_id": payload.league_id, **payload.features}
+        )
+    except TieredArtifactIntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="İmzalı tier modeli kullanıma hazır değil.",
+        ) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    used_tier = "Tier 1" if prediction.tier == "tier1" else "Tier 2"
+    return {
+        "used_tier": used_tier,
+        "confidence_scores": {
+            "0": prediction.probabilities[0],
+            "1": prediction.probabilities[1],
+            "2": prediction.probabilities[2],
+        },
+        "confidence": max(prediction.probabilities),
+        "artifact_version": prediction.artifact_version,
+    }
 
 
 @router.post(

@@ -940,6 +940,7 @@ Tüm işlev endpoint'leri `/api` prefix'i altındadır.
 | `GET` | `/api/ml/labeling-queue?limit=20` | Aktif öğrenme için en belirsiz etiketsiz tahminleri sıralar |
 | `GET` | `/api/ml/status` | Aktif artifact sürümü, kalite metrikleri ve inference sayaçlarını döndürür |
 | `POST` | `/api/ml/rollback` | `users:manage` izniyle doğrulanmış önceki model artifact'ına döner |
+| `POST` | `/api/predict/tiered` | `analysis:create` izniyle imzalı multi-tier model bundle'ı üzerinden 1X2 olasılıkları tahmin eder (artifact yoksa 503) |
 | `POST` | `/api/backtest` | Kayıtlı tahminlerde strateji simülasyonu yapar |
 | `GET` | `/api/audit` | Tahmin kalitesi ve performans metriklerini üretir |
 | `GET` | `/api/operations/data-quality` | Tarihsel veri, etiket, closing odds, provenance ve son senkronizasyon kalitesini döndürür |
