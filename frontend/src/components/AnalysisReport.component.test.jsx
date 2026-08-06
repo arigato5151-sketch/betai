@@ -49,8 +49,9 @@ describe("AnalysisReport Türkçe gösterim katmanı", () => {
 
     expect(screen.getByText("Fenerbahçe – Galatasaray")).toBeInTheDocument();
     expect(screen.getByText(/Ev Sahibi Kazanır/)).toBeInTheDocument();
-    expect(screen.getByText("Yetersiz Veri")).toBeInTheDocument();
-    expect(screen.getByText("(80/200 doğrulanmış sonuç)")).toBeInTheDocument();
+    expect(screen.getByText("ML Modeli Hazır Değil")).toBeInTheDocument();
+    expect(screen.getByText("(80/200 model eğitim örneği)")).toBeInTheDocument();
+    expect(screen.getByText(/Poisson \/ Dixon-Coles/)).toBeInTheDocument();
     expect(screen.getByText(/DEĞERLİ ORAN BULUNDU/)).toBeInTheDocument();
     expect(screen.queryByText("HOME_WIN")).not.toBeInTheDocument();
     expect(screen.queryByText("INSUFFICIENT_DATA")).not.toBeInTheDocument();
@@ -94,5 +95,44 @@ describe("AnalysisReport Türkçe gösterim katmanı", () => {
 
     expect(screen.getByText("Sürpriz Adayı")).toBeInTheDocument();
     expect(screen.getByText(/ML %55 · olasılık farkı %15/)).toBeInTheDocument();
+  });
+
+  it("ABSTAIN çıktısında değerli bahis mesajını bastırır", () => {
+    render(
+      <AnalysisReport
+        match={{
+          ...match,
+          data_quality: {
+            prediction_eligibility: {
+              status: "abstain",
+              reasons: ["market_unavailable", "home_history_insufficient"],
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Sınırlı veriyle istatistik analizi")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Güncel 1X2 oranları bulunamadı/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("VERİ YETERSİZ — DEĞER HESABI KULLANILMAMALI"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/DEĞERLİ ORAN BULUNDU/)).not.toBeInTheDocument();
+  });
+
+  it("manuel feature değişikliğini senaryo olarak işaretler", () => {
+    render(
+      <AnalysisReport
+        match={{
+          ...match,
+          provenance: { analysis_origin: "scenario" },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Senaryo analizi")).toBeInTheDocument();
+    expect(screen.getByText(/eğitim ve performans hesaplarına katılmaz/)).toBeInTheDocument();
   });
 });

@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     MODEL_DRIFT_WINDOW_SIZE: int = Field(default=100, ge=20, le=2000)
     MODEL_DRIFT_MIN_SAMPLES: int = Field(default=30, ge=10, le=1000)
     MODEL_DRIFT_BRIER_THRESHOLD: float = Field(default=0.04, gt=0, le=1)
+    AUDIT_MIN_RELIABLE_SAMPLES: int = Field(default=30, ge=10, le=1000)
+    AUDIT_BOOTSTRAP_ITERATIONS: int = Field(default=2000, ge=200, le=10000)
     JWT_ALGORITHM: Literal["HS256", "HS384", "HS512"] = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, ge=1, le=1440)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, ge=1, le=90)
@@ -72,6 +74,11 @@ class Settings(BaseSettings):
     LOG_FORMAT: Literal["text", "json"] = "text"
     FOOTBALL_DATA_BASE_URL: str = "https://www.football-data.co.uk"
     FOOTBALL_DATA_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
+    OPENFOOTBALL_ENABLED: bool = True
+    OPENFOOTBALL_BASE_URL: str = (
+        "https://raw.githubusercontent.com/openfootball/football.json/master"
+    )
+    OPENFOOTBALL_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=120)
     FOOTBALL_DATA_ORG_ENABLED: bool = False
     FOOTBALL_DATA_ORG_API_KEY: str = ""
     FOOTBALL_DATA_ORG_BASE_URL: str = "https://api.football-data.org/v4"
@@ -150,6 +157,31 @@ class Settings(BaseSettings):
     LINEUP_COLLECTOR_MAX_FIXTURES: int = Field(default=30, ge=1, le=100)
     LINEUP_COLLECTOR_WINDOW_MINUTES: int = Field(default=120, ge=30, le=360)
     LINEUP_COLLECTOR_CONCURRENCY: int = Field(default=2, ge=1, le=10)
+    AUTO_PREDICTION_ENABLED: bool = True
+    AUTO_PREDICTION_RUN_INTERVAL_SECONDS: int = Field(
+        default=21600,
+        ge=900,
+        le=86400,
+    )
+    AUTO_PREDICTION_HORIZON_DAYS: int = Field(default=7, ge=1, le=14)
+    AUTO_PREDICTION_MAX_FIXTURES: int = Field(default=25, ge=1, le=200)
+    AUTO_PREDICTION_MIN_LEAD_MINUTES: int = Field(default=30, ge=5, le=1440)
+    AUTO_PREDICTION_CONCURRENCY: int = Field(default=2, ge=1, le=5)
+    AUTO_PREDICTION_MIN_DATA_QUALITY_SCORE: float = Field(
+        default=60.0,
+        ge=0,
+        le=100,
+        allow_inf_nan=False,
+    )
+    AUTO_PREDICTION_REQUIRE_MARKET: bool = True
+    AUTO_PREDICTION_REQUIRE_SUFFICIENT_HISTORY: bool = True
+    FIXTURE_CONTEXT_SNAPSHOT_TTL_SECONDS: int = Field(
+        default=300,
+        ge=60,
+        le=3600,
+    )
+    AUTO_PREDICTION_LOCK_TTL_SECONDS: int = Field(default=3600, ge=60, le=21600)
+    MODEL_TRAINING_LOCK_TTL_SECONDS: int = Field(default=21600, ge=600, le=86400)
     AUTO_TEAM_LOCATION_ENABLED: bool = True
     WIKIDATA_LOCATION_ENABLED: bool = True
     WIKIDATA_API_URL: str = "https://www.wikidata.org/w/api.php"
@@ -514,6 +546,26 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "STATSBOMB_OPEN_DATA_BASE_URL must point to the official StatsBomb open-data repository"
+            )
+        return normalized
+
+    @field_validator("OPENFOOTBALL_BASE_URL")
+    @classmethod
+    def validate_openfootball_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "raw.githubusercontent.com"
+            or parsed.path != "/openfootball/football.json/master"
+            or parsed.username
+            or parsed.password
+            or parsed.port
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "OPENFOOTBALL_BASE_URL must point to the official OpenFootball repository"
             )
         return normalized
 

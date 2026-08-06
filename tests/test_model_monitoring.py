@@ -9,6 +9,8 @@ from app.services.model_monitoring import ModelMonitoringService
 def _prediction(index: int, *, correct: bool) -> MatchPrediction:
     return MatchPrediction(
         fixture_id=index,
+        training_eligible=True,
+        result_verification_status="verified",
         actual_result="HOME_WIN",
         prob_home=80.0 if correct else 5.0,
         prob_draw=10.0 if correct else 10.0,

@@ -158,6 +158,41 @@ def test_insufficient_ml_response_reports_sample_gap() -> None:
     )
 
 
+def test_ready_ml_response_reports_active_model_training_samples() -> None:
+    response = _build_analysis_response(
+        record_id=1,
+        home_team="Home",
+        away_team="Away",
+        analysis={
+            "prediction": "HOME_WIN",
+            "probability": 55.0,
+            "all_probabilities": {
+                "HOME_WIN": 55.0,
+                "DRAW": 25.0,
+                "AWAY_WIN": 20.0,
+            },
+        },
+        value_data={"value_bet": False},
+        ml_result={
+            "ready": True,
+            "prediction": "HOME_WIN",
+            "all_probabilities": {
+                "HOME_WIN": 55.0,
+                "DRAW": 25.0,
+                "AWAY_WIN": 20.0,
+            },
+            "training_samples": 12_473,
+        },
+        insights=[],
+        labeled_samples_count=0,
+        data_quality={"score": 70.0},
+    )
+
+    assert response["ml_samples"] == 12_473
+    assert response["ml_sample_source"] == "active_model_training_set"
+    assert response["remaining_to_threshold"] == 0
+
+
 def test_ml_safety_uses_market_disagreement_for_upset_labels() -> None:
     assessment = _assess_ml_safety(
         ml_result={

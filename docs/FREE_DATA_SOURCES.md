@@ -10,7 +10,8 @@ kalitesi nedeniyle tahmin girdisine alınmayan adayları kaydeder.
 | API-Football | Fikstür, sonuç, oran, kadro, sakatlık, istatistik | Ücretsiz planın erişebildiği ligler | Kota ve abonelik kapsamı |
 | FixtureDownload | Gelecek fikstür, UEFA tarihsel sonuç | Desteklenen sezon feed'leri | Her 15 dakikada cache |
 | OpenLigaDB | Bundesliga, 2. Bundesliga ve UCL fikstürü | Anahtarsız resmî API | ODbL; arayüzde atıf |
-| football-data.co.uk | Sonuç, şut, kart, korner ve tarihsel oran | 14 ulusal lig | Ücretsiz CSV arşivi |
+| football-data.co.uk | Sonuç, şut, kart, korner ve tarihsel oran | 18 ulusal lig; İskoçya, Avusturya, İsviçre ve Danimarka dahil | Ücretsiz CSV arşivi |
+| OpenFootball | Yunanistan Süper Ligi fikstür ve sonuçları | Sezonluk CC0 JSON; günlük idempotent sync | Public domain / CC0 |
 | Understat | Gözlemlenmiş maç xG | Avrupa'nın büyük beş ligi | İstek aralığı ve günlük sync |
 | ClubElo | Takım güç puanı | İsim ve tarih eşlemesi | Günlük cache |
 | Sportmonks | Oyuncu rating, kadro ve sakatlık | Yapılandırılmış ücretsiz plan kapsamı | Token ve abonelik kapsamı |

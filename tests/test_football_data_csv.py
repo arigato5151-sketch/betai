@@ -5,6 +5,7 @@ import pytest
 
 from app.core.team_identity import normalize_team_name, stable_team_name_key
 from app.services.football_data_csv import (
+    FOOTBALL_DATA_LEAGUE_IDS,
     FootballDataCSVClient,
     FootballDataDownloadError,
     FootballDataFormatError,
@@ -173,6 +174,61 @@ async def test_rolling_russian_feed_filters_the_requested_season() -> None:
         ("Sochi", "Akhmat Grozny")
     ]
     assert imported.fixtures[0]["actual_result"] == "DRAW"
+
+
+@pytest.mark.parametrize(
+    ("league_id", "division", "country", "league_name"),
+    [
+        (218, "AUT", "Austria", "Bundesliga"),
+        (207, "SWZ", "Switzerland", "Super League"),
+        (119, "DNK", "Denmark", "Superliga"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_additional_rolling_feeds_use_their_real_league_name(
+    league_id: int,
+    division: str,
+    country: str,
+    league_name: str,
+) -> None:
+    content = (
+        "Country,League,Season,Date,Time,Home,Away,HG,AG,Res\n"
+        f"{country}, {league_name} ,2025/2026,17/05/2026,16:00,Home,Away,2,1,H\n"
+        f"{country},Other League,2025/2026,17/05/2026,16:00,Other A,Other B,1,0,H\n"
+    ).encode()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/new/{division}.csv"
+        return httpx.Response(200, content=content)
+
+    imported = await FootballDataCSVClient(
+        base_url="https://data.test",
+        transport=httpx.MockTransport(handler),
+    ).get_completed_fixtures(league_id, 2025)
+
+    assert len(imported.fixtures) == 1
+    assert imported.fixtures[0]["league_id"] == league_id
+    assert imported.fixtures[0]["actual_result"] == "HOME_WIN"
+
+
+@pytest.mark.asyncio
+async def test_scottish_premiership_uses_standard_season_feed() -> None:
+    content = (
+        "Div,Date,Time,HomeTeam,AwayTeam,FTHG,FTAG,FTR\n"
+        "SC0,16/08/2025,15:00,Celtic,Aberdeen,2,0,H\n"
+    ).encode()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/mmz4281/2526/SC0.csv"
+        return httpx.Response(200, content=content)
+
+    imported = await FootballDataCSVClient(
+        base_url="https://data.test",
+        transport=httpx.MockTransport(handler),
+    ).get_completed_fixtures(179, 2025)
+
+    assert imported.fixtures[0]["home_team"] == "Celtic"
+    assert {179, 218, 207, 119}.issubset(FOOTBALL_DATA_LEAGUE_IDS)
 
 
 @pytest.mark.asyncio

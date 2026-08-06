@@ -39,6 +39,7 @@ class FootballDataLeague:
     country: str
     timezone: str
     rolling_feed: bool = False
+    rolling_league_name: str = "Premier League"
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,31 @@ _LEAGUES = (
     FootballDataLeague(88, "N1", "Netherlands", "Europe/Amsterdam"),
     FootballDataLeague(144, "B1", "Belgium", "Europe/Brussels"),
     FootballDataLeague(235, "RUS", "Russia", "Europe/Moscow", rolling_feed=True),
+    FootballDataLeague(179, "SC0", "Scotland", "Europe/London"),
+    FootballDataLeague(
+        218,
+        "AUT",
+        "Austria",
+        "Europe/Vienna",
+        rolling_feed=True,
+        rolling_league_name="Bundesliga",
+    ),
+    FootballDataLeague(
+        207,
+        "SWZ",
+        "Switzerland",
+        "Europe/Zurich",
+        rolling_feed=True,
+        rolling_league_name="Super League",
+    ),
+    FootballDataLeague(
+        119,
+        "DNK",
+        "Denmark",
+        "Europe/Copenhagen",
+        rolling_feed=True,
+        rolling_league_name="Superliga",
+    ),
 )
 FOOTBALL_DATA_LEAGUES: Mapping[int, FootballDataLeague] = MappingProxyType(
     {league.league_id: league for league in _LEAGUES}
@@ -392,7 +418,8 @@ class FootballDataCSVClient:
         return (
             str(row.get("Country") or "").strip().casefold()
             == league.country.casefold()
-            and str(row.get("League") or "").strip().casefold() == "premier league"
+            and str(row.get("League") or "").strip().casefold()
+            == league.rolling_league_name.casefold()
             and str(row.get("Season") or "").strip() == f"{season}/{season + 1}"
         )
 

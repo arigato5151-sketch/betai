@@ -3,6 +3,7 @@ import { ArcElement, Chart as ChartJS, Tooltip } from "chart.js";
 import { Doughnut } from "react-chartjs-2";
 
 import {
+  eligibilityReasonLabel,
   matchLabel,
   mlSafetyLabel,
   mlSafetyTone,
@@ -103,6 +104,12 @@ export function buildAlternativeResults(analysis) {
 
 function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
   const safetyTone = mlSafetyTone(match.ml_safety_trigger);
+  const eligibility = match.data_quality?.prediction_eligibility;
+  const abstained = eligibility?.status === "abstain";
+  const scenario = match.provenance?.analysis_origin === "scenario";
+  const automaticAbstain =
+    abstained && match.provenance?.analysis_origin === "automatic";
+  const limitedAnalysis = abstained && !automaticAbstain && !scenario;
   const alternativeResults = useMemo(
     () => buildAlternativeResults(match.analysis),
     [match.analysis],
@@ -134,6 +141,30 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
         <h2 className="mb-4 mt-1 text-xl font-black text-white">
           {matchLabel(match.match)}
         </h2>
+
+        {(automaticAbstain || limitedAnalysis || scenario) && (
+          <div className="mb-4 rounded border border-amber-700 bg-amber-950/40 p-3 text-sm text-amber-200">
+            <strong className="block">
+              {scenario
+                ? "Senaryo analizi"
+                : automaticAbstain
+                  ? "Otomatik tahmin verilmedi (ABSTAIN)"
+                  : "Sınırlı veriyle istatistik analizi"}
+            </strong>
+            <span className="mt-1 block text-xs text-amber-300/80">
+              {scenario
+                ? "Manuel değişiklik içerir; eğitim ve performans hesaplarına katılmaz."
+                : automaticAbstain
+                  ? "Otomatik karar için gerekli veri kalitesi sağlanmadı; kayıt oluşturulmadı."
+                  : "Temel maç tahmini üretildi, ancak eksik oran/geçmiş verisi nedeniyle finansal değer hesabı kullanılmamalıdır."}
+            </span>
+            {abstained && eligibility.reasons?.length > 0 && (
+              <span className="mt-1 block text-xs text-slate-400">
+                Nedenler: {eligibility.reasons.map(eligibilityReasonLabel).join(", ")}
+              </span>
+            )}
+          </div>
+        )}
 
         <div className="space-y-3">
           <div>
@@ -170,14 +201,16 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
                   : "text-slate-400"
               }`}
             >
-              {match.value_assessment.value_bet
+              {abstained
+                ? "VERİ YETERSİZ — DEĞER HESABI KULLANILMAMALI"
+                : match.value_assessment.value_bet
                 ? `DEĞERLİ ORAN BULUNDU (+%${match.value_assessment.edge})`
                 : `Değerli Oran Bulunamadı (%${match.value_assessment.edge})`}
             </p>
           </div>
           <div>
             <span className="text-xs text-slate-400">
-              Makine Öğrenmesi Görüşü
+              Model Katmanı
             </span>
             <p className="mt-1 text-xs">
               <span
@@ -195,10 +228,16 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
               </span>
               {match.ml_samples !== undefined && (
                 <span className="ml-2 text-slate-500">
-                  ({match.ml_samples}/{match.ml_min_samples ?? 200} doğrulanmış sonuç)
+                  ({match.ml_samples}/{match.ml_min_samples ?? 200} model eğitim örneği)
                 </span>
               )}
             </p>
+            {!match.ml_ready && (
+              <p className="mt-2 rounded border border-slate-800 bg-slate-950/60 p-2 text-[11px] leading-relaxed text-slate-400">
+                ML modeli henüz aktif değil. Bu maçın analiz edilemediği anlamına gelmez;
+                yukarıdaki tahmin zaman ağırlıklı Poisson / Dixon-Coles istatistik motorundan gelir.
+              </p>
+            )}
             {match.ml_safety_details?.ml_confidence !== undefined && (
               <p className="mt-2 text-[11px] text-slate-500">
                 ML %{match.ml_safety_details.ml_confidence} · olasılık farkı %

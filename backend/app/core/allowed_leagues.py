@@ -118,6 +118,41 @@ ALLOWED_LEAGUES = [
         "tier": "2. Lig",
         "dixon_coles_rho": -0.13,
     },
+    {
+        "id": 179,
+        "name": "Scottish Premiership",
+        "country": "Scotland",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.12,
+    },
+    {
+        "id": 218,
+        "name": "Austrian Bundesliga",
+        "country": "Austria",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.12,
+    },
+    {
+        "id": 207,
+        "name": "Swiss Super League",
+        "country": "Switzerland",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.12,
+    },
+    {
+        "id": 197,
+        "name": "Super League 1",
+        "country": "Greece",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.12,
+    },
+    {
+        "id": 119,
+        "name": "Superliga",
+        "country": "Denmark",
+        "tier": "1. Lig",
+        "dixon_coles_rho": -0.12,
+    },
 ]
 
 ALLOWED_LEAGUE_IDS = {league["id"] for league in ALLOWED_LEAGUES}

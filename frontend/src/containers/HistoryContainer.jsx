@@ -53,6 +53,8 @@ export function historyItemToSelectedMatch(rawDbItem) {
     ml_ready: !mlInsufficient,
     record_id: rawDbItem.id,
     actual_result: rawDbItem.actual_result,
+    result_verification_status: rawDbItem.result_verification_status,
+    result_source: rawDbItem.result_source,
     data_quality: rawDbItem.data_quality,
     provenance: {
       model_name: rawDbItem.model_name,

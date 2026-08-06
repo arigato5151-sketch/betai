@@ -23,6 +23,8 @@ def build_repository() -> tuple[Session, MatchPredictionRepository]:
                 is_value_bet=1,
                 edge=8.2,
                 odd=2.1,
+                training_eligible=True,
+                result_verification_status="pending",
                 created_at=now,
             ),
             MatchPrediction(
@@ -32,6 +34,8 @@ def build_repository() -> tuple[Session, MatchPredictionRepository]:
                 is_value_bet=0,
                 edge=1.2,
                 odd=3.4,
+                training_eligible=True,
+                result_verification_status="verified",
                 created_at=now + timedelta(minutes=1),
             ),
             MatchPrediction(
@@ -41,6 +45,8 @@ def build_repository() -> tuple[Session, MatchPredictionRepository]:
                 is_value_bet=None,
                 edge=3.5,
                 odd=2.9,
+                training_eligible=True,
+                result_verification_status="verified",
                 created_at=now + timedelta(minutes=2),
             ),
         ]
@@ -153,6 +159,29 @@ def test_repository_lists_labeled_unlabeled_and_counts() -> None:
         session.close()
 
 
+def test_repository_excludes_scenarios_from_training_and_audit() -> None:
+    session, repository = build_repository()
+    try:
+        session.add(
+            MatchPrediction(
+                home_team="Scenario Home",
+                away_team="Scenario Away",
+                actual_result="HOME_WIN",
+                analysis_origin="scenario",
+                eligibility_status="abstain",
+                training_eligible=False,
+            )
+        )
+        session.commit()
+
+        assert repository.count_labeled() == 2
+        assert len(repository.get_all_labeled()) == 2
+        assert len(repository.get_all_auditable()) == 3
+        assert len(repository.get_all()) == 4
+    finally:
+        session.close()
+
+
 def test_update_result_updates_optional_metrics_and_missing_record() -> None:
     session, repository = build_repository()
     try:
@@ -165,6 +194,9 @@ def test_update_result_updates_optional_metrics_and_missing_record() -> None:
             roi=-1.0,
             clv=0.03,
             closing_odds=2.05,
+            verification_status="verified",
+            result_source="api_football",
+            result_provider_fixture_id="123",
         )
 
         assert updated is not None
@@ -174,6 +206,9 @@ def test_update_result_updates_optional_metrics_and_missing_record() -> None:
         assert updated.roi == -1.0
         assert updated.clv == 0.03
         assert updated.closing_odds == 2.05
+        assert updated.result_verification_status == "verified"
+        assert updated.result_source == "api_football"
+        assert updated.result_verified_at is not None
         assert repository.update_result(9999, "DRAW") is None
     finally:
         session.close()
@@ -192,3 +227,26 @@ def test_failed_commit_rolls_back_transaction() -> None:
         raise AssertionError("SQLAlchemyError should be propagated")
 
     session.rollback.assert_called_once_with()
+
+
+def test_conflicting_verified_result_is_quarantined_without_overwrite() -> None:
+    session, repository = build_repository()
+    try:
+        record = repository.get_all()[1]
+        updated = repository.update_result(
+            record.id,
+            "AWAY_WIN",
+            actual_score_home=0,
+            actual_score_away=1,
+            verification_status="verified",
+            result_source="api_football",
+            result_provider_fixture_id="123",
+        )
+
+        assert updated is not None
+        assert updated.actual_result == "HOME_WIN"
+        assert updated.result_verification_status == "conflict"
+        assert updated.training_eligible is False
+        assert repository.count_labeled() == 1
+    finally:
+        session.close()

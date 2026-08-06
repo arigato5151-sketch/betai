@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from sqlalchemy import func
@@ -25,8 +25,23 @@ def _valid_starting_xi(value: object) -> bool:
         isinstance(value, list)
         and len(value) == 11
         and len(set(value)) == 11
-        and all(isinstance(player_id, int) and player_id > 0 for player_id in value)
+        and all(
+            isinstance(player_id, int)
+            and not isinstance(player_id, bool)
+            and player_id != 0
+            for player_id in value
+        )
     )
+
+
+def _expected_current_season_fixtures(current_time: datetime) -> int:
+    """Require gradual evidence early in a season without demanding a full season."""
+    season_start = datetime(current_time.year, 8, 1, tzinfo=UTC)
+    if current_time < season_start:
+        return 1
+    elapsed_days = max(0, (current_time - season_start).days)
+    elapsed_weeks = elapsed_days // 7 + 1
+    return min(30, max(1, elapsed_weeks * 5))
 
 
 class DataQualityService:
@@ -70,42 +85,86 @@ class DataQualityService:
         current_season = (
             current_time.year if current_time.month >= 7 else current_time.year - 1
         )
-        current_season_counts = {
-            int(league_id): int(count)
-            for league_id, count in self.db.query(
+        current_season_rows = {
+            int(league_id): (int(count), _utc(latest_kickoff))
+            for league_id, count, latest_kickoff in self.db.query(
                 HistoricalFixture.league_id,
                 func.count(HistoricalFixture.id),
+                func.max(HistoricalFixture.kickoff),
             )
             .filter(HistoricalFixture.season == current_season)
             .group_by(HistoricalFixture.league_id)
             .all()
         }
-        league_coverage = [
-            {
-                "league_id": cast(int, league["id"]),
-                "league_name": str(league["name"]),
-                "fixtures": current_season_counts.get(cast(int, league["id"]), 0),
-                "covered": current_season_counts.get(cast(int, league["id"]), 0) > 0,
-            }
-            for league in ALLOWED_LEAGUES
-        ]
+        expected_fixtures = _expected_current_season_fixtures(current_time)
+        freshness_cutoff = current_time - timedelta(days=21)
+        league_coverage: list[dict[str, object]] = []
+        for league in ALLOWED_LEAGUES:
+            league_id = cast(int, league["id"])
+            fixture_count, latest_kickoff = current_season_rows.get(
+                league_id, (0, None)
+            )
+            is_fresh = latest_kickoff is not None and latest_kickoff >= freshness_cutoff
+            league_coverage.append(
+                {
+                    "league_id": league_id,
+                    "league_name": str(league["name"]),
+                    "fixtures": fixture_count,
+                    "latest_kickoff": latest_kickoff,
+                    "expected_minimum_fixtures": expected_fixtures,
+                    "available": fixture_count > 0,
+                    "fresh": is_fresh,
+                    "covered": fixture_count >= expected_fixtures and is_fresh,
+                }
+            )
 
-        prediction_total = self.db.query(func.count(MatchPrediction.id)).scalar() or 0
+        production_filter = MatchPrediction.training_eligible.is_(True)
+        prediction_total = (
+            self.db.query(func.count(MatchPrediction.id))
+            .filter(production_filter)
+            .scalar()
+            or 0
+        )
+        excluded_prediction_total = (
+            self.db.query(func.count(MatchPrediction.id))
+            .filter(MatchPrediction.training_eligible.is_(False))
+            .scalar()
+            or 0
+        )
         labeled_total = (
             self.db.query(func.count(MatchPrediction.id))
-            .filter(MatchPrediction.actual_result.isnot(None))
+            .filter(
+                production_filter,
+                MatchPrediction.actual_result.isnot(None),
+                MatchPrediction.result_verification_status == "verified",
+            )
+            .scalar()
+            or 0
+        )
+        quarantined_result_total = (
+            self.db.query(func.count(MatchPrediction.id))
+            .filter(
+                MatchPrediction.result_verification_status.in_(
+                    ("manual", "conflict", "rejected")
+                )
+            )
             .scalar()
             or 0
         )
         closing_total = (
             self.db.query(func.count(MatchPrediction.id))
-            .filter(MatchPrediction.closing_odds.isnot(None))
+            .filter(
+                production_filter,
+                MatchPrediction.result_verification_status == "verified",
+                MatchPrediction.closing_odds.isnot(None),
+            )
             .scalar()
             or 0
         )
         provenance_total = (
             self.db.query(func.count(MatchPrediction.id))
             .filter(
+                production_filter,
                 MatchPrediction.feature_schema_version.isnot(None),
                 MatchPrediction.ensemble_version.isnot(None),
                 MatchPrediction.analyzed_at.isnot(None),
@@ -171,6 +230,8 @@ class DataQualityService:
             },
             "predictions": {
                 "total": prediction_total,
+                "excluded_from_training": excluded_prediction_total,
+                "quarantined_results": quarantined_result_total,
                 "labeled": labeled_total,
                 "labeled_coverage_pct": labeled_coverage,
                 "closing_odds_coverage_pct": closing_coverage,

@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   backtestReasonLabel,
   dataQualityStatusLabel,
+  eligibilityReasonLabel,
   leagueLabel,
   matchLabel,
   mlSafetyLabel,
@@ -33,8 +34,8 @@ test("model güveni ve operasyon durumlarını Türkçeleştirir", () => {
   assert.equal(mlSafetyLabel("MEDIUM_CONFIDENCE"), "Orta Güven");
   assert.equal(mlSafetyLabel("UPSET_CANDIDATE"), "Sürpriz Adayı");
   assert.equal(mlSafetyLabel("RISKY_UPSET"), "Riskli Sürpriz");
-  assert.equal(mlSafetyLabel("INSUFFICIENT_DATA"), "Yetersiz Veri");
-  assert.equal(mlSafetyLabel("YETERLI VERI YOK"), "Yetersiz Veri");
+  assert.equal(mlSafetyLabel("INSUFFICIENT_DATA"), "ML Modeli Hazır Değil");
+  assert.equal(mlSafetyLabel("YETERLI VERI YOK"), "ML Modeli Hazır Değil");
   assert.equal(mlSafetyTone("HIGH_CONFIDENCE"), "positive");
   assert.equal(mlSafetyTone("INSUFFICIENT_DATA"), "neutral");
   assert.equal(mlSafetyTone("UPSET_CANDIDATE"), "warning");
@@ -43,6 +44,17 @@ test("model güveni ve operasyon durumlarını Türkçeleştirir", () => {
   assert.equal(syncStatusLabel("succeeded"), "Başarılı");
   assert.equal(syncStatusLabel(undefined), "Senkron Yok");
   assert.equal(syncStatusLabel("unknown"), "Senkron Yok");
+});
+
+test("ABSTAIN nedenlerini kullanıcıya Türkçe açıklar", () => {
+  assert.equal(
+    eligibilityReasonLabel("home_history_insufficient"),
+    "Ev sahibinin yakın dönem maç geçmişi yetersiz",
+  );
+  assert.equal(
+    eligibilityReasonLabel("market_unavailable"),
+    "Güncel 1X2 oranları bulunamadı",
+  );
 });
 
 test("rol, yetki, model ve test nedenlerini Türkçeleştirir", () => {
@@ -71,6 +83,26 @@ test("UEFA liglerini arayüzde güncel Türkçe adlarıyla gösterir", () => {
     "UEFA Konferans Ligi",
   );
   assert.equal(leagueLabel({ id: 39, name: "Premier League" }), "Premier League");
+  assert.equal(
+    leagueLabel({ id: 179, name: "Scottish Premiership" }),
+    "İskoçya Premiership",
+  );
+  assert.equal(
+    leagueLabel({ id: 218, name: "Austrian Bundesliga" }),
+    "Avusturya Bundesliga",
+  );
+  assert.equal(
+    leagueLabel({ id: 207, name: "Swiss Super League" }),
+    "İsviçre Süper Ligi",
+  );
+  assert.equal(
+    leagueLabel({ id: 197, name: "Super League 1" }),
+    "Yunanistan Süper Ligi",
+  );
+  assert.equal(
+    leagueLabel({ id: 119, name: "Superliga" }),
+    "Danimarka Süper Ligi",
+  );
   assert.equal(leagueLabel(null), "Bilinmeyen Lig");
 });
 

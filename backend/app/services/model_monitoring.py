@@ -36,7 +36,11 @@ class ModelMonitoringService:
     def snapshot(self) -> dict[str, Any]:
         rows = (
             self.db.query(MatchPrediction)
-            .filter(MatchPrediction.actual_result.isnot(None))
+            .filter(
+                MatchPrediction.actual_result.isnot(None),
+                MatchPrediction.training_eligible.is_(True),
+                MatchPrediction.result_verification_status == "verified",
+            )
             .order_by(MatchPrediction.id.desc())
             .limit(settings.MODEL_DRIFT_WINDOW_SIZE * 2)
             .all()

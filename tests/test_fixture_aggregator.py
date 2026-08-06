@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from unittest.mock import AsyncMock
 
 import httpx
@@ -64,6 +64,22 @@ def test_canonical_league_mapping_disambiguates_premier_leagues() -> None:
     assert canonical_league_id("Premier League", "England") == 39
     assert canonical_league_id("Premier League", "Russia") == 235
     assert canonical_league_id("UEFA Europa Conference League") == 848
+
+
+@pytest.mark.parametrize(
+    ("name", "country", "expected_id"),
+    [
+        ("Scottish Premiership", "Scotland", 179),
+        ("Bundesliga", "Austria", 218),
+        ("Super League", "Switzerland", 207),
+        ("Super League 1", "Greece", 197),
+        ("Superliga", "Denmark", 119),
+    ],
+)
+def test_canonical_mapping_supports_new_domestic_leagues(
+    name: str, country: str, expected_id: int
+) -> None:
+    assert canonical_league_id(name, country) == expected_id
 
 
 def test_fixture_download_normalization_uses_safe_positive_ids() -> None:
@@ -190,7 +206,11 @@ async def test_the_sports_db_normalizes_fixture() -> None:
 async def test_aggregator_merges_duplicates_and_isolates_source_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    kickoff = future_kickoff()
+    kickoff = datetime.combine(
+        datetime.now(ISTANBUL).date() + timedelta(days=1),
+        time(12),
+        tzinfo=ISTANBUL,
+    )
     primary = fixture(101, "api_football", kickoff=kickoff)
     duplicate = fixture(
         1_500_000_202,
@@ -253,5 +273,6 @@ async def test_alternative_fixture_prefill_uses_safe_neutral_defaults(
 
     assert payload is not None
     assert payload["home_stats"] == {"form": 50, "attack": 50, "defense": 50, "xg": 1.2}
+    assert payload["fixture"]["provider_fixture_id"] == "789"
     assert payload["data_quality"] == "fixture_source_fallback"
     api.get_fixture_prefill.assert_not_awaited()

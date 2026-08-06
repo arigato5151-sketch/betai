@@ -54,9 +54,17 @@ def test_celery_connection_recovery_and_delivery_guards_are_enabled() -> None:
     assert celery_app.conf.task_acks_late is True
     assert celery_app.conf.task_reject_on_worker_lost is True
     assert celery_app.conf.worker_cancel_long_running_tasks_on_connection_loss is True
+    assert celery_app.conf.task_track_started is True
+    assert celery_app.conf.task_publish_retry is True
+    assert celery_app.conf.worker_prefetch_multiplier == 1
+    assert celery_app.conf.task_annotations["app.tasks.jobs.retrain_ml_model_task"] == {
+        "soft_time_limit": 19800,
+        "time_limit": 21600,
+    }
     assert set(celery_app.conf.beat_schedule) == {
         "collect-upcoming-lineups",
         "collect-upcoming-odds",
+        "generate-upcoming-predictions",
         "derive-historical-xg-daily",
         "sync-football-data-fixtures-daily",
         "sync-understat-xg-daily",
@@ -67,9 +75,19 @@ def test_celery_connection_recovery_and_delivery_guards_are_enabled() -> None:
         "sync-uefa-fixtures-daily",
         "sync-statsbomb-open-daily",
         "sync-open-meteo-weather-daily",
+        "sync-openfootball-fixtures-daily",
         "sync-wikidata-team-locations-weekly",
         "sync-free-team-locations-weekly",
     }
+
+
+def test_tasks_retry_only_transient_failures() -> None:
+    from app.tasks import jobs
+
+    assert ConnectionError in jobs.generate_upcoming_predictions_task.autoretry_for
+    assert TimeoutError in jobs.retrain_ml_model_task.autoretry_for
+    assert ValueError in jobs.retrain_ml_model_task.dont_autoretry_for
+    assert jobs.retrain_ml_model_task.max_retries == 3
 
 
 def test_retraining_task_calibrates_ensemble_before_training(monkeypatch) -> None:
@@ -113,6 +131,21 @@ def test_retraining_task_calibrates_ensemble_before_training(monkeypatch) -> Non
         "build",
         build,
     )
+
+    class AcquiredLock:
+        acquired = True
+        available = True
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+    monkeypatch.setattr(jobs, "DistributedTaskLock", AcquiredLock)
 
     result = jobs.retrain_ml_model_task.run()
 

@@ -6,6 +6,7 @@ import uuid
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Float,
@@ -162,16 +163,49 @@ class RefreshSession(Base):
 
 class MatchPrediction(Base):
     __tablename__ = "match_predictions"
+    __table_args__ = (
+        UniqueConstraint(
+            "fixture_source",
+            "provider_fixture_id",
+            name="uq_match_predictions_provider_fixture",
+        ),
+        CheckConstraint(
+            "analysis_origin IN ('legacy', 'manual', 'fixture_user', 'automatic', 'scenario')",
+            name="ck_match_predictions_analysis_origin",
+        ),
+        CheckConstraint(
+            "eligibility_status IN ('eligible', 'abstain', 'unverified')",
+            name="ck_match_predictions_eligibility_status",
+        ),
+        CheckConstraint(
+            "result_verification_status IN "
+            "('pending', 'verified', 'manual', 'conflict', 'rejected')",
+            name="ck_match_predictions_result_verification_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     fixture_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True, unique=True, index=True
     )
+    fixture_source: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, index=True
+    )
+    provider_fixture_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     home_team: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     away_team: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     home_team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     away_team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     league_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    analysis_origin: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="legacy", server_default="legacy"
+    )
+    eligibility_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="unverified", server_default="unverified"
+    )
+    training_eligible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false(), index=True
+    )
 
     home_xg: Mapped[float | None] = mapped_column(Float, nullable=True)
     away_xg: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -227,6 +261,23 @@ class MatchPrediction(Base):
     actual_result: Mapped[str | None] = mapped_column(String, nullable=True)
     actual_score_home: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actual_score_away: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result_verification_status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+        index=True,
+    )
+    result_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    result_provider_fixture_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    result_verified_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    result_verification_note: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
 
     roi: Mapped[float | None] = mapped_column(Float, nullable=True)
     closing_odds: Mapped[float | None] = mapped_column(Float, nullable=True)

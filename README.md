@@ -262,9 +262,14 @@ yalnız yayımlanmayan lig bir önceki sezona düşer. API-Football ve CSV takı
 (`FC/FK`, `Moskva/Moscow` gibi); eşsiz eşleşme bulunamazsa yanlış takıma veri
 bağlamak yerine alan eksik bırakılır.
 
-Uygulama toplam 17 organizasyonu destekler. Yerel liglere ek olarak API-Football
+Uygulama toplam 22 organizasyonu destekler. Yerel liglere ek olarak İskoçya
+Premiership, Avusturya Bundesliga, İsviçre Süper Ligi, Yunanistan Süper Ligi ve
+Danimarka Süper Ligi de fikstür ve tarihsel backfill kapsamındadır. API-Football
 kimlikleri `2`, `3` ve `848` olan UEFA Şampiyonlar Ligi, UEFA Avrupa Ligi ve UEFA
 Konferans Ligi yaklaşan fikstür, manuel analiz ve tarihsel backfill kapsamındadır.
+Yunanistan'ın tamamlanmış maçları günlük olarak OpenFootball'ın CC0 sezonluk JSON
+verisinden idempotent biçimde alınır; böylece ücretli API sezon erişimine bağımlı
+kalınmaz.
 UEFA turnuvaları Football-Data CSV kaynağında bulunmadığından tamamlanmış maç
 sonuçları günlük olarak Fixture Download JSON akışından alınır. Bu açık veri
 kaynağı kullanılamazsa plan erişimi bulunan sezonlarda API-Football backfill'i
@@ -275,6 +280,13 @@ kaynağı kullanılamazsa plan erişimi bulunan sezonlarda API-Football backfill
 ```powershell
 cd backend
 python -c "from app.tasks.jobs import sync_football_data_fixtures_task; print(sync_football_data_fixtures_task.run([2025]))"
+```
+
+Yunanistan 2025/26 sezonunu açık kaynaktan tekrar içe aktarmak için:
+
+```powershell
+cd backend
+python -c "from app.tasks.jobs import sync_openfootball_fixtures_task; print(sync_openfootball_fixtures_task.run([2025]))"
 ```
 
 API-Football'ın plan kapsamında erişilebilen eski sezonlarını backfill etmek için:
@@ -361,6 +373,39 @@ Celery Beat ayrıca `collect_upcoming_lineups_task` ile yaklaşan maçların res
 yanıtlar 15 dakika sonra yeniden denenebilir. Tarama yalnızca iki günlük penceredeki
 en fazla 30 gerçek maçı kapsar, demo fikstürlerini atlar ve
 `LINEUP_COLLECTOR_*` ortam değişkenleriyle ayarlanabilir.
+
+Celery Beat, `generate_upcoming_predictions_task` ile birleştirilmiş fikstür
+kaynaklarındaki yeni maçları varsayılan altı saatte bir tarar. Yedi günlük pencerede
+en fazla 25 gerçek maç işlenir; daha önce tahmin edilmiş, demo, geçersiz veya
+başlamasına 30 dakikadan az kalmış fikstürler atlanır. Her maç bağımsız işlendiği için
+tek sağlayıcı hatası tüm partiyi durdurmaz. Döngü `AUTO_PREDICTION_*` değişkenleriyle
+ayarlanabilir ve `AUTO_PREDICTION_ENABLED=false` ile kapatılabilir. Sonuçlanan kayıtlar
+mevcut sonuç senkronizasyonu tarafından gerçek skor, tahmin doğruluğu, Brier, ROI ve
+tahmin edilen sonuca ait kapanış oranı üzerinden CLV ile denetlenir. Lig bazlı sonuçlar
+`GET /api/audit/leagues` uç noktasında ve operasyon panelinde gösterilir.
+
+Otomatik tahminler fail-closed veri uygunluk politikasından geçer. Market, iki takım
+için yeterli geçmiş veya `AUTO_PREDICTION_MIN_DATA_QUALITY_SCORE` eşiği eksikse sistem
+tahmin kaydetmek yerine `ABSTAIN` üretir. Fixture prefill verisi kısa ömürlü, zaman
+damgalı `fixture_context_v1` snapshot'ında birleştirilerek aynı maç için tekrarlanan
+sağlayıcı çağrıları önlenir. Otomatik tahmin ve model eğitimi Redis sahiplik token'lı
+dağıtık kilitlerle tek worker'a sınırlandırılır. Audit çıktıları en az
+`AUDIT_MIN_RELIABLE_SAMPLES` örnek oluşana kadar karar düzeyi sayılmaz; doğruluk için
+Wilson, ROI için deterministik bootstrap %95 güven aralıkları döndürülür.
+
+Her tahmin `analysis_origin`, `eligibility_status`, `training_eligible`,
+`fixture_source` ve `provider_fixture_id` alanlarıyla izlenir. Gerçek sonuçlar ayrıca
+`result_verification_status`, `result_source`, `result_provider_fixture_id` ve
+`result_verified_at` provenance alanlarını taşır. Sonuç görevi kaynağı global ID
+aralığından tahmin etmez; önce aynı namespaced fixture kimliğindeki yerel tarihsel
+kaydı, gerekirse provider kimliğiyle canlı çağrıyı kullanır ve fixture, lig,
+ev/deplasman takımı ile skor tutarlılığını doğrular. Manuel, çelişkili veya reddedilen etiketler
+geçmişte görünür fakat eğitim ve performans ölçümüne alınmaz. Manuel feature değişikliği
+içeren senaryolar ve uygunluk kapısından geçmeyen analizler geçmişte görünmeye devam
+eder ancak model eğitimi, drift izleme, backtest ve audit hesaplarına alınmaz. Celery
+görevleri yalnızca bağlantı/zaman aşımı gibi geçici hataları sınırlı exponential
+backoff ile tekrarlar; doğrulama hatalarını tekrarlamaz ve görev türüne göre soft/hard
+zaman sınırları uygular.
 
 Model eğitimi, doğrulanmış tahmin snapshot'larına ek olarak `historical_fixtures`
 kayıtlarından üretilen nokta-zamanlı örnekleri kullanır. Bir tarihsel maçın feature
@@ -903,7 +948,7 @@ Analiz, geçmiş, backtest ve audit endpoint'leri geçerli access cookie gerekti
 
 ### Aktif öğrenme etiketleme kuyruğu
 
-`GET /api/ml/labeling-queue?limit=20`, sonucu henüz girilmemiş tahminleri normalize entropy ve ilk iki sınıf arasındaki margin ile sıralar. Yüksek `uncertainty_score`, kaydın insan tarafından önce etiketlenmesinin modele daha fazla bilgi kazandırabileceğini belirtir. Endpoint `history:update_result` permission'ı gerektirir; otomatik/pseudo etiket üretmez.
+`GET /api/ml/labeling-queue?limit=20`, sonucu henüz girilmemiş tahminleri normalize entropy ve ilk iki sınıf arasındaki margin ile sıralar. Yüksek `uncertainty_score`, kaydın önce incelenmesi gerektiğini belirtir. İnsan tarafından girilen sonuç `manual` provenance ile saklanır ve bağımsız provider doğrulaması olmadan eğitim etiketi sayılmaz. Endpoint `history:update_result` permission'ı gerektirir; otomatik/pseudo etiket üretmez.
 
 ```json
 {

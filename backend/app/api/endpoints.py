@@ -35,6 +35,7 @@ from app.db.player_context_repository import PlayerContextRepository
 from app.db.models import HistoricalFixture
 from app.services.api_football import APIFootballClient
 from app.services.fixture_aggregator import FixtureAggregator
+from app.services.fixture_context import fixture_context_service
 from app.services.data_quality import DataQualityService
 from app.services.external_features import external_feature_service
 from app.services.odds_history import odds_history_service
@@ -56,6 +57,10 @@ from app.prediction.ml.historical import (
     PlayerRatingValue,
 )
 from app.prediction.player_impact import PlayerImpactCalculator
+from app.prediction.eligibility import (
+    PredictionEligibilityPolicy,
+    PredictionIneligibleError,
+)
 from app.prediction.input_catalog import AnalysisInputCatalog
 from app.prediction.ml.explain import ExplainabilityService
 from app.prediction.ml.active_learning import ActiveLearningSelector
@@ -323,6 +328,8 @@ class AnalysisRequest(BaseModel):
     opening_odds_at: Optional[datetime] = None
     current_odds_at: Optional[datetime] = None
     fixture_id: Optional[int] = Field(None, gt=0, description="API Football fixture ID")
+    fixture_source: Optional[str] = Field(None, min_length=1, max_length=50)
+    provider_fixture_id: Optional[str] = Field(None, min_length=1, max_length=100)
     home_team_id: Optional[int] = Field(
         None, gt=0, description="API Football home team ID"
     )
@@ -488,6 +495,8 @@ def _build_payload_from_prefill(prefill: Dict[str, Any]) -> AnalysisRequest:
         opening_odds_at=prefill.get("opening_odds_at"),
         current_odds_at=prefill.get("current_odds_at"),
         fixture_id=fixture.get("fixture_id"),
+        fixture_source=fixture.get("source"),
+        provider_fixture_id=fixture.get("provider_fixture_id"),
         home_team_id=fixture.get("home_team_id"),
         away_team_id=fixture.get("away_team_id"),
         league_id=fixture.get("league_id"),
@@ -597,6 +606,8 @@ def _build_analysis_response(
     }
 
     ml_assessment = _assess_ml_safety(ml_result, analysis, data_quality)
+    model_training_samples = int(ml_result.get("training_samples", 0) or 0)
+    reported_ml_samples = max(labeled_samples_count, model_training_samples)
     return {
         "id": record_id,
         "match": f"{home_team} vs {away_team}",
@@ -613,11 +624,16 @@ def _build_analysis_response(
             ml_result.get("probability", 0.0) if ml_result.get("ready") else 0.0
         ),
         "ml_ready": ml_result.get("ready", False),
-        "ml_samples": labeled_samples_count,
+        "ml_samples": reported_ml_samples,
         "ml_min_samples": settings.MIN_TRAINING_SAMPLES,
+        "ml_sample_source": (
+            "active_model_training_set"
+            if model_training_samples > 0
+            else "verified_prediction_results"
+        ),
         "labeled_samples_count": labeled_samples_count,
         "remaining_to_threshold": max(
-            0, settings.MIN_TRAINING_SAMPLES - labeled_samples_count
+            0, settings.MIN_TRAINING_SAMPLES - reported_ml_samples
         ),
         "insights": insights,
     }
@@ -1138,6 +1154,8 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     away_lineup = lineups.get("away_starting_xi") if isinstance(lineups, dict) else None
     quality_checks = {
         "fixture_identified": payload.fixture_id is not None,
+        "fixture_source_identified": bool(payload.fixture_source),
+        "provider_fixture_identified": bool(payload.provider_fixture_id),
         "league_identified": payload.league_id is not None,
         "kickoff_known": payload.kickoff is not None,
         "market_available": payload.market_1x2 is not None,
@@ -1296,6 +1314,9 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         },
     }
     data_quality["ml_assessment"] = _assess_ml_safety(ml_result, analysis, data_quality)
+    data_quality["prediction_eligibility"] = PredictionEligibilityPolicy.evaluate(
+        data_quality
+    ).as_dict()
 
     return {
         "analysis": analysis,
@@ -1308,7 +1329,13 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
     }
 
 
-def _persist_analysis(payload: AnalysisRequest, computed: dict):
+def _persist_analysis(
+    payload: AnalysisRequest,
+    computed: dict,
+    *,
+    analysis_origin: str,
+    training_eligible: bool,
+):
     analysis = computed["analysis"]
     value_data = computed["value_data"]
     ml_result = computed["ml_result"]
@@ -1328,11 +1355,16 @@ def _persist_analysis(payload: AnalysisRequest, computed: dict):
 
     record_data = {
         "fixture_id": payload.fixture_id,
+        "fixture_source": payload.fixture_source,
+        "provider_fixture_id": payload.provider_fixture_id,
         "home_team": payload.home_team,
         "away_team": payload.away_team,
         "home_team_id": payload.home_team_id,
         "away_team_id": payload.away_team_id,
         "league_id": payload.league_id,
+        "analysis_origin": analysis_origin,
+        "eligibility_status": ("eligible" if training_eligible else "abstain"),
+        "training_eligible": training_eligible,
         "home_xg": payload.home_stats.xg,
         "away_xg": payload.away_stats.xg,
         "home_form": payload.home_stats.form,
@@ -1375,9 +1407,28 @@ def _persist_analysis(payload: AnalysisRequest, computed: dict):
         return record, repo.count_labeled()
 
 
-async def _run_analysis(payload: AnalysisRequest) -> dict:
+async def _run_analysis(
+    payload: AnalysisRequest,
+    *,
+    require_eligible: bool = False,
+    analysis_origin: str = "manual",
+) -> dict:
     computed = await _compute_analysis(payload)
-    db_record, labeled_samples_count = _persist_analysis(payload, computed)
+    eligibility = PredictionEligibilityPolicy.evaluate(computed["data_quality"])
+    computed["data_quality"]["prediction_eligibility"] = eligibility.as_dict()
+    if require_eligible and not eligibility.eligible:
+        raise PredictionIneligibleError(eligibility)
+    training_eligible = (
+        eligibility.eligible
+        and not payload.feature_overrides
+        and analysis_origin != "scenario"
+    )
+    db_record, labeled_samples_count = _persist_analysis(
+        payload,
+        computed,
+        analysis_origin=analysis_origin,
+        training_eligible=training_eligible,
+    )
 
     response = _build_analysis_response(
         db_record.id,
@@ -1402,6 +1453,9 @@ async def _run_analysis(payload: AnalysisRequest) -> dict:
         "analyzed_at": db_record.analyzed_at,
         "kickoff": db_record.kickoff,
         "analysis_lead_minutes": db_record.analysis_lead_minutes,
+        "analysis_origin": db_record.analysis_origin,
+        "eligibility_status": db_record.eligibility_status,
+        "training_eligible": db_record.training_eligible,
     }
     return response
 
@@ -1421,16 +1475,23 @@ async def list_upcoming_fixtures(
 
 @router.get("/fixtures/{fixture_id}/prefill")
 async def fixture_prefill(fixture_id: int):
-    payload = await fixture_aggregator.get_fixture_prefill(fixture_id)
+    payload = await fixture_context_service.get_or_create(
+        fixture_id,
+        loader=fixture_aggregator.get_fixture_prefill,
+        enricher=odds_history_service.enrich_prefill,
+    )
     if not payload:
         raise HTTPException(status_code=404, detail="Maç bulunamadı.")
-    return odds_history_service.enrich_prefill(payload)
+    return payload
 
 
 @router.post("/analyze", dependencies=[Depends(require_permission("analysis:create"))])
 async def analyze_manual(payload: AnalysisRequest):
     try:
-        return await _run_analysis(payload)
+        return await _run_analysis(
+            payload,
+            analysis_origin="scenario" if payload.feature_overrides else "manual",
+        )
     except SQLAlchemyError as exc:
         logger.exception("Veritabanı hatası (manuel analiz)")
         raise HTTPException(status_code=500, detail="Veritabanı hatası.") from exc
@@ -1473,10 +1534,13 @@ async def preview_analysis_inputs(payload: AnalysisRequest):
     dependencies=[Depends(require_permission("analysis:create"))],
 )
 async def analyze_fixture(fixture_id: int):
-    prefill = await fixture_aggregator.get_fixture_prefill(fixture_id)
+    prefill = await fixture_context_service.get_or_create(
+        fixture_id,
+        loader=fixture_aggregator.get_fixture_prefill,
+        enricher=odds_history_service.enrich_prefill,
+    )
     if not prefill:
         raise HTTPException(status_code=404, detail="Maç bulunamadı.")
-    prefill = odds_history_service.enrich_prefill(prefill)
 
     try:
         payload = _build_payload_from_prefill(prefill)
@@ -1484,14 +1548,14 @@ async def analyze_fixture(fixture_id: int):
         raise HTTPException(status_code=422, detail="Geçersiz maç verisi.") from exc
 
     try:
-        result = await _run_analysis(payload)
+        result = await _run_analysis(payload, analysis_origin="fixture_user")
     except SQLAlchemyError as exc:
         logger.exception("Veritabanı hatası (fixture_id=%s)", fixture_id)
         raise HTTPException(status_code=500, detail="Veritabanı hatası.") from exc
 
     result["prefill"] = prefill
     result["data_methodology"] = prefill.get("data_methodology")
-    result["data_quality"] = prefill.get("data_quality")
+    result["prefill_data_quality"] = prefill.get("data_quality")
     return result
 
 
@@ -1604,12 +1668,15 @@ def update_actual_result(
         record.prediction, body.actual_result, record.odd
     )
 
-    repo.update_result(
+    updated = repo.update_result(
         record_id=record_id,
         actual_result=body.actual_result,
         actual_score_home=body.actual_score_home,
         actual_score_away=body.actual_score_away,
         roi=roi,
+        verification_status="manual",
+        result_source="manual_admin",
+        verification_note="Manually entered result; excluded from model training",
     )
 
     labeled_samples_count = repo.count_labeled()
@@ -1630,7 +1697,10 @@ def update_actual_result(
     return {
         "ok": True,
         "id": record_id,
-        "actual_result": body.actual_result,
+        "actual_result": updated.actual_result if updated else body.actual_result,
+        "result_verification_status": (
+            updated.result_verification_status if updated else "manual"
+        ),
         "labeled_samples_count": labeled_samples_count,
         "remaining_to_threshold": max(
             0, settings.MIN_TRAINING_SAMPLES - labeled_samples_count
@@ -1642,7 +1712,7 @@ def update_actual_result(
 @router.post("/backtest", dependencies=[Depends(require_permission("backtest:run"))])
 def run_backtest(body: BacktestRequest, db: Session = Depends(get_db)):
     repo = MatchPredictionRepository(db)
-    predictions = repo.get_all()
+    predictions = repo.get_all_auditable()
 
     return BacktestEngine.run_simulation(
         predictions=predictions,
@@ -1662,7 +1732,16 @@ def run_backtest(body: BacktestRequest, db: Session = Depends(get_db)):
 @router.get("/audit", dependencies=[Depends(require_permission("audit:read"))])
 def run_audit(db: Session = Depends(get_db)):
     repo = MatchPredictionRepository(db)
-    return PredictionAuditor.audit_predictions(repo.get_all())
+    return PredictionAuditor.audit_predictions(repo.get_all_auditable())
+
+
+@router.get(
+    "/audit/leagues",
+    dependencies=[Depends(require_permission("audit:read"))],
+)
+def run_league_audit(db: Session = Depends(get_db)):
+    repo = MatchPredictionRepository(db)
+    return PredictionAuditor.audit_by_league(repo.get_all_auditable())
 
 
 @router.get(

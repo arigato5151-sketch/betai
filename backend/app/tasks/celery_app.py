@@ -23,11 +23,49 @@ celery_app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     worker_cancel_long_running_tasks_on_connection_loss=True,
+    task_track_started=True,
+    task_publish_retry=True,
+    task_publish_retry_policy={
+        "max_retries": 5,
+        "interval_start": 0,
+        "interval_step": 1,
+        "interval_max": 10,
+    },
+    result_expires=86400,
+    worker_prefetch_multiplier=1,
+    task_soft_time_limit=3300,
+    task_time_limit=3600,
+    task_annotations={
+        "app.tasks.jobs.generate_upcoming_predictions_task": {
+            "soft_time_limit": 1500,
+            "time_limit": 1800,
+        },
+        "app.tasks.jobs.collect_upcoming_odds_task": {
+            "soft_time_limit": 480,
+            "time_limit": 600,
+        },
+        "app.tasks.jobs.collect_upcoming_lineups_task": {
+            "soft_time_limit": 480,
+            "time_limit": 600,
+        },
+        "app.tasks.jobs.retrain_ml_model_task": {
+            "soft_time_limit": 19800,
+            "time_limit": 21600,
+        },
+        "app.tasks.jobs.sync_completed_matches_task": {
+            "soft_time_limit": 1500,
+            "time_limit": 1800,
+        },
+    },
     # Celery Beat schedules
     beat_schedule={
         "sync-football-data-fixtures-daily": {
             "task": "app.tasks.jobs.sync_football_data_fixtures_task",
             "schedule": 86400.0,  # 24 hours
+        },
+        "sync-openfootball-fixtures-daily": {
+            "task": "app.tasks.jobs.sync_openfootball_fixtures_task",
+            "schedule": 86400.0,
         },
         "sync-understat-xg-daily": {
             "task": "app.tasks.jobs.sync_understat_xg_task",
@@ -74,6 +112,10 @@ celery_app.conf.update(
         "collect-upcoming-lineups": {
             "task": "app.tasks.jobs.collect_upcoming_lineups_task",
             "schedule": float(settings.LINEUP_COLLECTOR_RUN_INTERVAL_SECONDS),
+        },
+        "generate-upcoming-predictions": {
+            "task": "app.tasks.jobs.generate_upcoming_predictions_task",
+            "schedule": float(settings.AUTO_PREDICTION_RUN_INTERVAL_SECONDS),
         },
         "retrain-ml-model-weekly": {
             "task": "app.tasks.jobs.retrain_ml_model_task",

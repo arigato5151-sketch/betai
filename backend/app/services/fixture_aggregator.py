@@ -12,6 +12,7 @@ import httpx
 from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS, LEAGUE_PRIORITY
 from app.core.config import settings
 from app.core.team_identity import stable_team_name_key
+from app.providers.openligadb import ID_OFFSET as OPENLIGADB_ID_OFFSET
 from app.providers.openligadb import OpenLigaDBClient
 from app.services.api_football import APIFootballClient
 from app.services.cache import cache
@@ -65,6 +66,19 @@ LEAGUE_ALIASES: dict[tuple[str, str], int] = {
     ("jupiler pro league", "belgium"): 144,
     ("russian premier league", ""): 235,
     ("premier league", "russia"): 235,
+    ("scottish premiership", ""): 179,
+    ("scottish premier league", ""): 179,
+    ("premiership", "scotland"): 179,
+    ("austrian bundesliga", ""): 218,
+    ("bundesliga", "austria"): 218,
+    ("swiss super league", ""): 207,
+    ("super league", "switzerland"): 207,
+    ("greek super league", ""): 197,
+    ("super league 1", ""): 197,
+    ("super league", "greece"): 197,
+    ("danish superliga", ""): 119,
+    ("superliga", "denmark"): 119,
+    ("superligaen", "denmark"): 119,
 }
 
 FOOTBALL_DATA_CODES = {
@@ -95,6 +109,11 @@ LEAGUE_NAMES = {
     94: "Liga Portugal",
     203: "Süper Lig",
     88: "Eredivisie",
+    179: "Scottish Premiership",
+    218: "Austrian Bundesliga",
+    207: "Swiss Super League",
+    197: "Super League 1",
+    119: "Danish Superliga",
 }
 
 
@@ -139,6 +158,20 @@ def _hashed_provider_id(value: object, source: str) -> int | None:
     except (TypeError, ValueError):
         return None
     return _positive_id((raw_id % MAX_PROVIDER_ID) or 1, source)
+
+
+def _provider_fixture_id(fixture_id: object, source: object) -> str | None:
+    try:
+        namespaced_id = int(str(fixture_id))
+    except (TypeError, ValueError):
+        return None
+    source_name = str(source or "")
+    if source_name == "openligadb":
+        return str(namespaced_id - OPENLIGADB_ID_OFFSET)
+    offset = SOURCE_ID_OFFSETS.get(source_name)
+    if offset is not None:
+        return str(namespaced_id - offset)
+    return str(namespaced_id)
 
 
 class _HTTPFixtureSource:
@@ -242,6 +275,7 @@ class TheSportsDBFixtureSource(_HTTPFixtureSource):
             return {}
         return _fixture_row(
             fixture_id=fixture_id,
+            provider_fixture_id=event.get("idEvent"),
             league_id=league_id,
             league=str(event.get("strLeague") or ""),
             home=home,
@@ -314,6 +348,7 @@ class FootballDataOrgFixtureSource(_HTTPFixtureSource):
             return {}
         return _fixture_row(
             fixture_id=fixture_id,
+            provider_fixture_id=match.get("id"),
             league_id=league_id,
             league=str(competition.get("name") or ""),
             home=home,
@@ -379,6 +414,7 @@ class SportmonksFixtureSource(_HTTPFixtureSource):
             return {}
         return _fixture_row(
             fixture_id=fixture_id,
+            provider_fixture_id=item.get("id"),
             league_id=league_id,
             league=str(league.get("name") or ""),
             home=home[1],
@@ -455,6 +491,7 @@ class FixtureDownloadFixtureSource:
             return {}
         return _fixture_row(
             fixture_id=fixture_id,
+            provider_fixture_id=item.get("fixture_id"),
             league_id=league_id,
             league=LEAGUE_NAMES.get(league_id, ""),
             home=home,
@@ -482,6 +519,7 @@ def _sportmonks_participant(
 def _fixture_row(
     *,
     fixture_id: int,
+    provider_fixture_id: object,
     league_id: int,
     league: str,
     home: str,
@@ -493,6 +531,7 @@ def _fixture_row(
 ) -> dict[str, Any]:
     return {
         "fixture_id": fixture_id,
+        "provider_fixture_id": str(provider_fixture_id),
         "league": league,
         "home_team": home,
         "away_team": away,
@@ -533,7 +572,8 @@ class FixtureAggregator:
     async def get_upcoming_fixtures(
         self, days: int = 7, limit: int = 100
     ) -> list[dict[str, Any]]:
-        cache_key = f"merged-upcoming:v3:{days}:{limit}"
+        # Versioned cache prevents a stale pre-expansion league allowlist result.
+        cache_key = f"merged-upcoming:v5:{days}:{limit}"
         cached = await cache.get("fixtures", cache_key)
         if isinstance(cached, list):
             return cached
@@ -576,7 +616,12 @@ class FixtureAggregator:
             if source == "api_football":
                 demo_rows = [row for row in rows if row.get("is_demo")]
                 rows = [
-                    {**row, "source": "api_football", "sources": ["api_football"]}
+                    {
+                        **row,
+                        "provider_fixture_id": str(row.get("fixture_id")),
+                        "source": "api_football",
+                        "sources": ["api_football"],
+                    }
                     for row in rows
                     if not row.get("is_demo")
                 ]
@@ -584,6 +629,8 @@ class FixtureAggregator:
                 rows = [
                     _fixture_row(
                         fixture_id=int(row["fixture_id"]),
+                        provider_fixture_id=int(row["fixture_id"])
+                        - OPENLIGADB_ID_OFFSET,
                         league_id=int(row["league_id"]),
                         league=str(row["league"]),
                         home=str(row["home_team"]),
@@ -617,9 +664,14 @@ class FixtureAggregator:
                 None,
             )
         if not isinstance(fixture, dict):
-            return await self.api_football.get_fixture_prefill(fixture_id)
+            return await self._api_football_prefill(fixture_id)
         if fixture.get("source") == "api_football":
-            return await self.api_football.get_fixture_prefill(fixture_id)
+            return await self._api_football_prefill(fixture_id)
+        fixture = {
+            **fixture,
+            "provider_fixture_id": fixture.get("provider_fixture_id")
+            or _provider_fixture_id(fixture_id, fixture.get("source")),
+        }
         return {
             "fixture": fixture,
             "home_team": fixture["home_team"],
@@ -636,6 +688,20 @@ class FixtureAggregator:
                 "model": "Poisson + Dixon-Coles + ML ensemble",
             },
         }
+
+    async def _api_football_prefill(self, fixture_id: int) -> dict[str, Any] | None:
+        payload = await self.api_football.get_fixture_prefill(fixture_id)
+        if not isinstance(payload, dict):
+            return None
+        fixture = payload.get("fixture")
+        if isinstance(fixture, dict):
+            payload["fixture"] = {
+                **fixture,
+                "source": "api_football",
+                "sources": ["api_football"],
+                "provider_fixture_id": str(fixture_id),
+            }
+        return payload
 
     @staticmethod
     def _merge(

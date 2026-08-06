@@ -3,8 +3,8 @@ import logging
 import time
 from collections import Counter
 from collections.abc import Mapping
-from datetime import UTC, date, datetime
-from typing import Any, cast
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, Awaitable, Callable, Literal, cast
 from celery import shared_task
 from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS, ALLOWED_LEAGUES
 from app.core.config import settings
@@ -22,9 +22,10 @@ from app.services.football_data_csv import (
     FootballDataCSVClient,
     FootballDataDownloadError,
 )
+from app.services.openfootball_json import OpenFootballJSONClient
 from app.services.fixture_download import FixtureDownloadClient, UEFA_FEEDS
 from app.providers.understat import UnderstatClient
-from app.providers.openligadb import OpenLigaDBClient, is_openligadb_fixture_id
+from app.providers.openligadb import OpenLigaDBClient
 from app.providers.statsbomb_open import StatsBombOpenDataClient, database_row
 from app.providers.open_meteo import OpenMeteoClient
 from app.providers.wikidata import WikidataError, WikidataTeamLocationClient
@@ -35,9 +36,19 @@ from app.prediction.ml.model import ml_pipeline
 from app.prediction.ml.training_data import HistoricalTrainingDataBuilder
 from app.prediction.ensemble_weights import ensemble_weight_manager
 from app.prediction.audit import PredictionAuditor
+from app.prediction.eligibility import PredictionIneligibleError
 from app.services.data_quality import DataQualityService
 from app.services.derived_xg import DerivedXGService
 from app.services.model_monitoring import ModelMonitoringService
+from app.services.fixture_aggregator import FixtureAggregator
+from app.services.fixture_context import fixture_context_service
+from app.services.task_lock import DistributedTaskLock
+from app.services.result_verification import (
+    ResultVerificationService,
+    canonical_result_source,
+    provider_request_fixture_id,
+)
+from app.tasks.base import TransientTask
 
 logger = logging.getLogger("bet-ai-pro.tasks")
 
@@ -66,6 +77,146 @@ def _fixture_kickoff(value: object) -> datetime | None:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         return None
     return parsed.astimezone(UTC)
+
+
+async def _generate_upcoming_predictions(
+    aggregator: FixtureAggregator,
+    analyzer: Callable[[int], Awaitable[object]],
+    existing_fixture_ids: set[int],
+    *,
+    observed_at: datetime | None = None,
+) -> dict[str, object]:
+    """Generate one prediction per eligible fixture while keeping reruns idempotent."""
+    started_at = (observed_at or datetime.now(UTC)).astimezone(UTC)
+    fixtures = await aggregator.get_upcoming_fixtures(
+        days=settings.AUTO_PREDICTION_HORIZON_DAYS,
+        limit=settings.AUTO_PREDICTION_MAX_FIXTURES,
+    )
+    earliest_kickoff = started_at + timedelta(
+        minutes=settings.AUTO_PREDICTION_MIN_LEAD_MINUTES
+    )
+    candidates: list[int] = []
+    skipped_existing = 0
+    skipped_invalid = 0
+    for fixture in fixtures:
+        fixture_id = fixture.get("fixture_id")
+        kickoff = _fixture_kickoff(fixture.get("kickoff"))
+        if (
+            isinstance(fixture_id, bool)
+            or not isinstance(fixture_id, int)
+            or fixture_id <= 0
+            or kickoff is None
+            or kickoff <= earliest_kickoff
+            or fixture.get("is_demo") is True
+        ):
+            skipped_invalid += 1
+            continue
+        if fixture_id in existing_fixture_ids:
+            skipped_existing += 1
+            continue
+        candidates.append(fixture_id)
+
+    semaphore = asyncio.Semaphore(settings.AUTO_PREDICTION_CONCURRENCY)
+
+    async def analyze(fixture_id: int) -> str:
+        try:
+            async with semaphore:
+                await analyzer(fixture_id)
+            return "generated"
+        except PredictionIneligibleError as exc:
+            logger.info(
+                "Automatic prediction abstained for fixture_id=%s reasons=%s",
+                fixture_id,
+                exc.decision.reasons,
+            )
+            return "abstained"
+        except Exception:
+            logger.exception(
+                "Automatic prediction failed for fixture_id=%s", fixture_id
+            )
+            return "failed"
+
+    outcomes = await asyncio.gather(*(analyze(fixture_id) for fixture_id in candidates))
+    counts = Counter(outcomes)
+    return {
+        "status": "partial" if counts["failed"] else "succeeded",
+        "fixtures_seen": len(fixtures),
+        "eligible_fixtures": len(candidates),
+        "predictions_generated": counts["generated"],
+        "abstained": counts["abstained"],
+        "failed": counts["failed"],
+        "skipped_existing": skipped_existing,
+        "skipped_invalid": skipped_invalid,
+        "started_at": started_at.isoformat(),
+    }
+
+
+async def _analyze_upcoming_fixture(
+    aggregator: FixtureAggregator,
+    fixture_id: int,
+) -> object:
+    # Local import prevents the task module and API router from importing each other.
+    from app.api.endpoints import _build_payload_from_prefill, _run_analysis
+
+    prefill = await fixture_context_service.get_or_create(
+        fixture_id,
+        loader=aggregator.get_fixture_prefill,
+        enricher=odds_history_service.enrich_prefill,
+    )
+    if not isinstance(prefill, dict):
+        raise ValueError("Fixture prefill is unavailable")
+    payload = _build_payload_from_prefill(prefill)
+    return await _run_analysis(
+        payload,
+        require_eligible=True,
+        analysis_origin="automatic",
+    )
+
+
+def _run_upcoming_prediction_batch() -> dict[str, object]:
+    if not settings.AUTO_PREDICTION_ENABLED:
+        return {"status": "disabled"}
+
+    with SessionLocal() as db:
+        existing_fixture_ids = {
+            fixture_id
+            for (fixture_id,) in db.query(MatchPrediction.fixture_id)
+            .filter(MatchPrediction.fixture_id.isnot(None))
+            .all()
+        }
+
+    aggregator = FixtureAggregator()
+
+    async def analyzer(fixture_id: int) -> object:
+        return await _analyze_upcoming_fixture(aggregator, fixture_id)
+
+    result = _run_async(
+        _generate_upcoming_predictions(
+            aggregator,
+            analyzer,
+            existing_fixture_ids,
+        )
+    )
+    logger.info("Automatic prediction generation completed: %s", result)
+    return cast(dict[str, object], result)
+
+
+@shared_task(
+    name="app.tasks.jobs.generate_upcoming_predictions_task", base=TransientTask
+)
+def generate_upcoming_predictions_task() -> dict[str, object]:
+    """Periodically analyze new upcoming fixtures and persist their predictions."""
+    with DistributedTaskLock(
+        "generate_upcoming_predictions",
+        ttl_seconds=settings.AUTO_PREDICTION_LOCK_TTL_SECONDS,
+    ) as task_lock:
+        if not task_lock.acquired:
+            return {
+                "status": (
+                    "lock_unavailable" if not task_lock.available else "already_running"
+                )
+            }
+        return _run_upcoming_prediction_batch()
 
 
 async def _collect_upcoming_odds(
@@ -139,7 +290,7 @@ async def _collect_upcoming_odds(
     }
 
 
-@shared_task(name="app.tasks.jobs.collect_upcoming_odds_task")
+@shared_task(name="app.tasks.jobs.collect_upcoming_odds_task", base=TransientTask)
 def collect_upcoming_odds_task() -> dict[str, object]:
     """Periodically build opening/current 1X2 pairs for upcoming fixtures."""
     if not settings.ODDS_COLLECTOR_ENABLED:
@@ -240,7 +391,7 @@ async def _collect_upcoming_lineups(
     }
 
 
-@shared_task(name="app.tasks.jobs.collect_upcoming_lineups_task")
+@shared_task(name="app.tasks.jobs.collect_upcoming_lineups_task", base=TransientTask)
 def collect_upcoming_lineups_task() -> dict[str, object]:
     """Periodically cache official lineups shortly before kickoff."""
     if not settings.LINEUP_COLLECTOR_ENABLED:
@@ -345,7 +496,7 @@ async def _enrich_historical_player_context(
     return sum(not succeeded for succeeded in results)
 
 
-@shared_task(name="app.tasks.jobs.sync_historical_fixtures_task")
+@shared_task(name="app.tasks.jobs.sync_historical_fixtures_task", base=TransientTask)
 def sync_historical_fixtures_task(
     seasons: list[int] | None = None,
     league_ids: list[int] | None = None,
@@ -460,7 +611,7 @@ def sync_historical_fixtures_task(
     return result
 
 
-@shared_task(name="app.tasks.jobs.sync_football_data_fixtures_task")
+@shared_task(name="app.tasks.jobs.sync_football_data_fixtures_task", base=TransientTask)
 def sync_football_data_fixtures_task(seasons: list[int] | None = None) -> dict:
     """Import completed league fixtures from the public Football-Data CSV feeds."""
     automatic_season = seasons is None
@@ -556,7 +707,71 @@ def sync_football_data_fixtures_task(seasons: list[int] | None = None) -> dict:
     return result
 
 
-@shared_task(name="app.tasks.jobs.sync_understat_xg_task")
+@shared_task(name="app.tasks.jobs.sync_openfootball_fixtures_task", base=TransientTask)
+def sync_openfootball_fixtures_task(seasons: list[int] | None = None) -> dict:
+    """Import completed fixtures from the public-domain OpenFootball datasets."""
+    if not settings.OPENFOOTBALL_ENABLED:
+        return {"status": "disabled", "fixtures_processed": 0}
+
+    target_seasons = sorted(
+        set(seasons if seasons is not None else [_current_football_season()])
+    )
+    client = OpenFootballJSONClient()
+    with SessionLocal() as db:
+        sync_run_id = (
+            DataQualityService(db).start_sync("openfootball_json", target_seasons).id
+        )
+
+    fixture_rows: list[dict[str, object]] = []
+    failures: list[dict[str, int | str]] = []
+    for league_id in sorted(client.supported_league_ids):
+        for season in target_seasons:
+            try:
+                fixture_rows.extend(
+                    _run_async(client.get_completed_fixtures(league_id, season))
+                )
+            except Exception as exc:
+                logger.exception(
+                    "OpenFootball fetch failed for league=%s season=%s",
+                    league_id,
+                    season,
+                )
+                failures.append(
+                    {
+                        "league_id": league_id,
+                        "season": season,
+                        "error": type(exc).__name__,
+                    }
+                )
+
+    try:
+        with SessionLocal() as db:
+            processed = HistoricalFixtureRepository(db).upsert_many(fixture_rows)
+            DataQualityService(db).finish_sync(
+                sync_run_id,
+                processed=processed,
+                failures=cast(list[dict[str, object]], failures),
+            )
+    except Exception as exc:
+        with SessionLocal() as db:
+            DataQualityService(db).finish_sync(
+                sync_run_id,
+                processed=0,
+                failures=cast(list[dict[str, object]], failures),
+                error_type=type(exc).__name__,
+            )
+        raise
+
+    result: dict[str, object] = {
+        "seasons": target_seasons,
+        "fixtures_processed": processed,
+        "failed_league_seasons": failures,
+    }
+    logger.info("OpenFootball fixture synchronization completed: %s", result)
+    return result
+
+
+@shared_task(name="app.tasks.jobs.sync_understat_xg_task", base=TransientTask)
 def sync_understat_xg_task(seasons: list[int] | None = None) -> dict[str, object]:
     """Enrich top-five-league historical fixtures with match-level xG."""
     if not settings.UNDERSTAT_ENABLED:
@@ -644,7 +859,7 @@ def sync_understat_xg_task(seasons: list[int] | None = None) -> dict[str, object
     return result
 
 
-@shared_task(name="app.tasks.jobs.derive_historical_xg_task")
+@shared_task(name="app.tasks.jobs.derive_historical_xg_task", base=TransientTask)
 def derive_historical_xg_task() -> dict[str, object]:
     """Fill non-observed xG only after the holdout quality gate passes."""
     if not settings.DERIVED_XG_ENABLED:
@@ -727,7 +942,9 @@ async def _sync_wikidata_team_locations(
     return rows, len(teams) - len(rows)
 
 
-@shared_task(name="app.tasks.jobs.sync_wikidata_team_locations_task")
+@shared_task(
+    name="app.tasks.jobs.sync_wikidata_team_locations_task", base=TransientTask
+)
 def sync_wikidata_team_locations_task(
     seasons: list[int] | None = None,
 ) -> dict[str, object]:
@@ -798,7 +1015,7 @@ def sync_wikidata_team_locations_task(
     return result
 
 
-@shared_task(name="app.tasks.jobs.sync_free_team_locations_task")
+@shared_task(name="app.tasks.jobs.sync_free_team_locations_task", base=TransientTask)
 def sync_free_team_locations_task(
     seasons: list[int] | None = None,
     offset: int | None = None,
@@ -930,7 +1147,7 @@ def sync_free_team_locations_task(
     return result
 
 
-@shared_task(name="app.tasks.jobs.sync_uefa_fixtures_task")
+@shared_task(name="app.tasks.jobs.sync_uefa_fixtures_task", base=TransientTask)
 def sync_uefa_fixtures_task(seasons: list[int] | None = None) -> dict[str, object]:
     """Import completed UEFA fixtures from the public JSON result feeds."""
     target_seasons = sorted(
@@ -992,7 +1209,7 @@ def sync_uefa_fixtures_task(seasons: list[int] | None = None) -> dict[str, objec
     return result
 
 
-@shared_task(name="app.tasks.jobs.sync_statsbomb_open_data_task")
+@shared_task(name="app.tasks.jobs.sync_statsbomb_open_data_task", base=TransientTask)
 def sync_statsbomb_open_data_task() -> dict[str, object]:
     """Import public match metadata, then incrementally enrich events and xG."""
     if not settings.STATSBOMB_OPEN_DATA_ENABLED:
@@ -1080,7 +1297,7 @@ def sync_statsbomb_open_data_task() -> dict[str, object]:
     return result
 
 
-@shared_task(name="app.tasks.jobs.sync_open_meteo_weather_task")
+@shared_task(name="app.tasks.jobs.sync_open_meteo_weather_task", base=TransientTask)
 def sync_open_meteo_weather_task() -> dict[str, object]:
     """Incrementally add match-time weather where a home venue is known."""
     if not settings.OPEN_METEO_ENABLED:
@@ -1162,15 +1379,14 @@ def sync_open_meteo_weather_task() -> dict[str, object]:
     return result
 
 
-@shared_task(name="app.tasks.jobs.retrain_ml_model_task")
-def retrain_ml_model_task() -> str:
-    """Asynchronously triggers model retraining on Celery workers."""
+def _run_model_retraining() -> str:
     logger.info("Initializing background ML model retraining job...")
 
     with SessionLocal() as db:
         repo = MatchPredictionRepository(db)
+        historical_repo = HistoricalFixtureRepository(db)
         labeled_rows = repo.get_all_labeled()
-        historical_fixtures = HistoricalFixtureRepository(db).get_all()
+        historical_fixtures = historical_repo.get_all()
         player_context_repo = PlayerContextRepository(db)
         historical_rows = HistoricalTrainingDataBuilder().build(
             historical_fixtures,
@@ -1204,7 +1420,23 @@ def retrain_ml_model_task() -> str:
             return "Retraining failed."
 
 
-@shared_task(name="app.tasks.jobs.monitor_model_drift_task")
+@shared_task(name="app.tasks.jobs.retrain_ml_model_task", base=TransientTask)
+def retrain_ml_model_task() -> str:
+    """Asynchronously trigger a single model retraining job across all workers."""
+    with DistributedTaskLock(
+        "model_retraining",
+        ttl_seconds=settings.MODEL_TRAINING_LOCK_TTL_SECONDS,
+    ) as task_lock:
+        if not task_lock.acquired:
+            return (
+                "Retraining lock unavailable."
+                if not task_lock.available
+                else "Retraining already running."
+            )
+        return _run_model_retraining()
+
+
+@shared_task(name="app.tasks.jobs.monitor_model_drift_task", base=TransientTask)
 def monitor_model_drift_task() -> dict[str, object]:
     """Queue a challenger training run when recent calibration materially degrades."""
     with SessionLocal() as db:
@@ -1215,8 +1447,8 @@ def monitor_model_drift_task() -> dict[str, object]:
     return {**status, "retraining_queued": retraining_queued}
 
 
-@shared_task(name="app.tasks.jobs.sync_completed_matches_task")
-def sync_completed_matches_task() -> str:
+@shared_task(name="app.tasks.jobs.sync_completed_matches_task", base=TransientTask)
+def sync_completed_matches_task() -> dict[str, object]:
     """
     Synchronizes past prediction records with actual outcomes.
     Calculates audited ROI and CLV.
@@ -1225,13 +1457,29 @@ def sync_completed_matches_task() -> str:
     api_client = APIFootballClient()
     openligadb_client = OpenLigaDBClient()
 
+    with DistributedTaskLock("sync-completed-matches", ttl_seconds=1800) as lock:
+        if not lock.acquired:
+            logger.info("Completed match synchronization already running; skipped.")
+            return {"status": "locked", "verified": 0}
+
+        return _sync_completed_matches(api_client, openligadb_client)
+
+
+def _sync_completed_matches(
+    api_client: APIFootballClient,
+    openligadb_client: OpenLigaDBClient,
+) -> dict[str, object]:
     with SessionLocal() as db:
         repo = MatchPredictionRepository(db)
+        historical_repo = HistoricalFixtureRepository(db)
 
         # Get all predictions where actual outcome is not resolved yet
         predictions = (
             db.query(MatchPrediction)
-            .filter(MatchPrediction.actual_result.is_(None))
+            .filter(
+                MatchPrediction.actual_result.is_(None),
+                MatchPrediction.training_eligible.is_(True),
+            )
             .order_by(MatchPrediction.id.desc())
             .limit(100)
             .all()
@@ -1239,78 +1487,90 @@ def sync_completed_matches_task() -> str:
 
         if not predictions:
             logger.info("No unresolved predictions found to sync.")
-            return "No predictions to sync."
+            return {"status": "ready", "verified": 0, "pending": 0}
 
-        count = 0
+        counters: Counter[str] = Counter()
         for pred in predictions:
-            if not pred.fixture_id:
-                continue
-
             try:
-                # Retrieve actual fixture status from API asynchronously
-                is_openligadb = is_openligadb_fixture_id(pred.fixture_id)
-                fixture = _run_async(
-                    openligadb_client.get_fixture_by_id(pred.fixture_id)
-                    if is_openligadb
-                    else api_client.get_fixture_by_id(pred.fixture_id)
+                source = canonical_result_source(pred.fixture_source)
+                request_id = provider_request_fixture_id(pred)
+                historical_fixture = (
+                    historical_repo.get_by_fixture_id(pred.fixture_id)
+                    if pred.fixture_id is not None
+                    else None
                 )
-
-                if not fixture or fixture.get("status") not in {"FT", "AET", "PEN"}:
+                decision = ResultVerificationService.verify_historical(
+                    pred, historical_fixture
+                )
+                if decision.status == "pending":
+                    fixture = None
+                    if request_id is not None and source == "openligadb":
+                        fixture = _run_async(
+                            openligadb_client.get_fixture_by_id(request_id)
+                        )
+                    elif request_id is not None and source == "api_football":
+                        fixture = _run_async(api_client.get_fixture_by_id(request_id))
+                    decision = ResultVerificationService.verify(pred, fixture)
+                counters[decision.status] += 1
+                if decision.status != "verified" or decision.result is None:
+                    if decision.status in {"conflict", "rejected"}:
+                        quarantine_status: Literal["conflict", "rejected"] = (
+                            "conflict" if decision.status == "conflict" else "rejected"
+                        )
+                        repo.mark_result_verification(
+                            pred.id,
+                            status=quarantine_status,
+                            note=decision.reason or "result_verification_failed",
+                        )
                     continue
-
-                # Parse score
-                score_str = fixture.get("score")  # Ex: "2 - 1"
-                if not score_str:
-                    continue
-
-                parts = score_str.split("-")
-                home_score = int(parts[0].strip())
-                away_score = int(parts[1].strip())
-
-                # Determine actual outcome
-                if home_score > away_score:
-                    result = "HOME_WIN"
-                elif home_score < away_score:
-                    result = "AWAY_WIN"
-                else:
-                    result = "DRAW"
+                verified = decision.result
 
                 # Calculate auditing metrics
                 roi = PredictionAuditor.calculate_bet_roi(
-                    pred.prediction, result, pred.odd
+                    pred.prediction, verified.actual_result, pred.odd
                 )
 
                 # Fetch closing odds dynamically if available to compute CLV
                 market = (
                     None
-                    if is_openligadb
-                    else _run_async(api_client.get_fixture_market(pred.fixture_id))
+                    if source != "api_football" or request_id is None
+                    else _run_async(api_client.get_fixture_market(request_id))
                 )
-                closing_odd = market["raw_odds"]["HOME_WIN"] if market else pred.odd
-                clv = PredictionAuditor.calculate_clv(pred.odd, closing_odd)
+                closing_odd = PredictionAuditor.select_closing_odd(
+                    market, pred.prediction
+                )
+                clv = (
+                    PredictionAuditor.calculate_clv(pred.odd, closing_odd)
+                    if closing_odd is not None
+                    else None
+                )
 
                 # Persist verified audit metrics to db
                 repo.update_result(
                     record_id=pred.id,
-                    actual_result=result,
-                    actual_score_home=home_score,
-                    actual_score_away=away_score,
+                    actual_result=verified.actual_result,
+                    actual_score_home=verified.home_score,
+                    actual_score_away=verified.away_score,
                     roi=roi,
                     clv=clv,
                     closing_odds=closing_odd,
+                    verification_status="verified",
+                    result_source=verified.source,
+                    result_provider_fixture_id=verified.provider_fixture_id,
                 )
-                count += 1
 
             except Exception as e:
                 logger.error(f"Failed syncing outcome for prediction ID {pred.id}: {e}")
+                counters["errors"] += 1
 
         logger.info(
-            f"Synchronized outcomes for {count} resolved predictions successfully."
+            "Completed match synchronization result: %s",
+            dict(counters),
         )
 
         # Trigger ML retraining if new samples synced successfully
-        if count > 0:
+        if counters["verified"] > 0:
             logger.info("Sync completed. Triggering ML model update...")
             retrain_ml_model_task.delay()
 
-        return f"Synced {count} predictions."
+        return {"status": "ready", **dict(counters)}

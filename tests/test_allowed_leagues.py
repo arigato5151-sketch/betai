@@ -11,6 +11,14 @@ UEFA_COMPETITIONS = {
     848: "UEFA Conference League",
 }
 
+NEW_DOMESTIC_LEAGUES = {
+    179: ("Scottish Premiership", "Scotland"),
+    218: ("Austrian Bundesliga", "Austria"),
+    207: ("Swiss Super League", "Switzerland"),
+    197: ("Super League 1", "Greece"),
+    119: ("Superliga", "Denmark"),
+}
+
 
 def test_uefa_competitions_are_allowed_with_high_priority() -> None:
     leagues_by_id = {league["id"]: league for league in ALLOWED_LEAGUES}
@@ -36,3 +44,16 @@ def test_uncalibrated_uefa_competitions_use_global_dixon_coles_default() -> None
             settings.DEFAULT_DIXON_COLES_RHO,
         )
         assert rho == settings.DEFAULT_DIXON_COLES_RHO
+
+
+def test_new_domestic_leagues_are_allowed_with_safe_global_calibration() -> None:
+    leagues_by_id = {league["id"]: league for league in ALLOWED_LEAGUES}
+
+    assert set(NEW_DOMESTIC_LEAGUES).issubset(ALLOWED_LEAGUE_IDS)
+    for league_id, (expected_name, expected_country) in NEW_DOMESTIC_LEAGUES.items():
+        league = leagues_by_id[league_id]
+        assert league["name"] == expected_name
+        assert league["country"] == expected_country
+        assert league["tier"] == "1. Lig"
+        assert league["dixon_coles_rho"] == settings.DEFAULT_DIXON_COLES_RHO
+        assert league_id not in settings.LEAGUE_DIXON_COLES_RHO

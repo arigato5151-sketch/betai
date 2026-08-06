@@ -960,6 +960,15 @@ class MLModelPipeline:
         prediction = max(result_probs, key=lambda outcome: result_probs[outcome])
         self.runtime_stats["inference_success"] += 1
 
+        raw_training_samples = self.metrics.get("samples", 0)
+        training_samples = (
+            int(raw_training_samples)
+            if isinstance(raw_training_samples, (int, float))
+            and not isinstance(raw_training_samples, bool)
+            and math.isfinite(raw_training_samples)
+            and raw_training_samples >= 0
+            else 0
+        )
         return {
             "ready": True,
             "prediction": prediction,
@@ -967,6 +976,7 @@ class MLModelPipeline:
             "all_probabilities": result_probs,
             "model_name": self.active_model_name,
             "artifact_version": self.artifact_version,
+            "training_samples": training_samples,
         }
 
 

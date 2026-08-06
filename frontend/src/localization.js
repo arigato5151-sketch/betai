@@ -17,9 +17,9 @@ const ML_SAFETY_LABELS = Object.freeze({
   UPSET_CANDIDATE: "Sürpriz Adayı",
   RISKY_UPSET: "Riskli Sürpriz",
   RISKY_UNDERDOG: "Riskli Sürpriz",
-  INSUFFICIENT_DATA: "Yetersiz Veri",
-  "YETERLI VERI YOK": "Yetersiz Veri",
-  "YETERLİ VERİ YOK": "Yetersiz Veri",
+  INSUFFICIENT_DATA: "ML Modeli Hazır Değil",
+  "YETERLI VERI YOK": "ML Modeli Hazır Değil",
+  "YETERLİ VERİ YOK": "ML Modeli Hazır Değil",
 });
 
 const ROLE_LABELS = Object.freeze({
@@ -32,6 +32,11 @@ const LEAGUE_LABELS = Object.freeze({
   2: "UEFA Şampiyonlar Ligi",
   3: "UEFA Avrupa Ligi",
   848: "UEFA Konferans Ligi",
+  179: "İskoçya Premiership",
+  218: "Avusturya Bundesliga",
+  207: "İsviçre Süper Ligi",
+  197: "Yunanistan Süper Ligi",
+  119: "Danimarka Süper Ligi",
 });
 
 const PERMISSION_LABELS = Object.freeze({
@@ -71,6 +76,19 @@ const BACKTEST_REASON_LABELS = Object.freeze({
   invalid_odds: "Geçersiz oran",
   missing_closing_odds: "Kapanış oranı eksik",
   daily_exposure_limit: "Günlük risk sınırı",
+});
+
+const ELIGIBILITY_REASON_LABELS = Object.freeze({
+  missing_fixture_identified: "Fikstür kimliği eksik",
+  missing_fixture_source_identified: "Fikstür veri kaynağı eksik",
+  missing_provider_fixture_identified: "Sağlayıcı maç kimliği eksik",
+  missing_league_identified: "Lig bilgisi eksik",
+  missing_kickoff_known: "Maç başlangıç zamanı eksik",
+  market_unavailable: "Güncel 1X2 oranları bulunamadı",
+  home_history_insufficient: "Ev sahibinin yakın dönem maç geçmişi yetersiz",
+  away_history_insufficient: "Deplasman takımının yakın dönem maç geçmişi yetersiz",
+  data_quality_below_threshold: "Genel veri kalite skoru eşik altında",
+  manual_override_not_automatic: "Manuel değişiklik içeren senaryo analizi",
 });
 
 const hasValue = (value) =>
@@ -137,6 +155,9 @@ export const modelNameLabel = (value) =>
 
 export const backtestReasonLabel = (value) =>
   lookupClosedSet(BACKTEST_REASON_LABELS, value, "Bilinmeyen neden");
+
+export const eligibilityReasonLabel = (value) =>
+  lookupClosedSet(ELIGIBILITY_REASON_LABELS, value, "Bilinmeyen veri eksiği");
 
 export const matchLabel = (value) =>
   hasValue(value)

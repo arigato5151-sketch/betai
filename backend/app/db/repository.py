@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from sqlalchemy import or_
@@ -164,7 +165,11 @@ class MatchPredictionRepository:
         """Fetch all records that have a verified actual_result (used for ML training)."""
         return (
             self.db.query(MatchPrediction)
-            .filter(MatchPrediction.actual_result.isnot(None))
+            .filter(
+                MatchPrediction.actual_result.isnot(None),
+                MatchPrediction.training_eligible.is_(True),
+                MatchPrediction.result_verification_status == "verified",
+            )
             .order_by(MatchPrediction.id.asc())
             .all()
         )
@@ -173,7 +178,10 @@ class MatchPredictionRepository:
         """Fetch recent predictions that still need a verified match result."""
         return (
             self.db.query(MatchPrediction)
-            .filter(MatchPrediction.actual_result.is_(None))
+            .filter(
+                MatchPrediction.actual_result.is_(None),
+                MatchPrediction.training_eligible.is_(True),
+            )
             .order_by(MatchPrediction.id.desc())
             .limit(limit)
             .all()
@@ -182,8 +190,27 @@ class MatchPredictionRepository:
     def count_labeled(self) -> int:
         return (
             self.db.query(MatchPrediction)
-            .filter(MatchPrediction.actual_result.isnot(None))
+            .filter(
+                MatchPrediction.actual_result.isnot(None),
+                MatchPrediction.training_eligible.is_(True),
+                MatchPrediction.result_verification_status == "verified",
+            )
             .count()
+        )
+
+    def get_all_auditable(self) -> List[MatchPrediction]:
+        """Return only forecasts admitted by the production eligibility policy."""
+        return (
+            self.db.query(MatchPrediction)
+            .filter(
+                MatchPrediction.training_eligible.is_(True),
+                or_(
+                    MatchPrediction.actual_result.is_(None),
+                    MatchPrediction.result_verification_status == "verified",
+                ),
+            )
+            .order_by(MatchPrediction.id.asc())
+            .all()
         )
 
     def update_result(
@@ -195,10 +222,45 @@ class MatchPredictionRepository:
         roi: Optional[float] = None,
         clv: Optional[float] = None,
         closing_odds: Optional[float] = None,
+        verification_status: str = "manual",
+        result_source: Optional[str] = None,
+        result_provider_fixture_id: Optional[str] = None,
+        verification_note: Optional[str] = None,
     ) -> Optional[MatchPrediction]:
         record = self.get_by_id(record_id)
         if not record:
             return None
+
+        if actual_result not in {"HOME_WIN", "DRAW", "AWAY_WIN"}:
+            raise ValueError("actual_result must be a valid 1X2 outcome")
+        if verification_status not in {"verified", "manual", "conflict", "rejected"}:
+            raise ValueError("invalid result verification status")
+        if (actual_score_home is None) != (actual_score_away is None):
+            raise ValueError("both score values must be supplied together")
+        if actual_score_home is not None and actual_score_away is not None:
+            if actual_score_home < 0 or actual_score_away < 0:
+                raise ValueError("score values cannot be negative")
+            score_result = (
+                "HOME_WIN"
+                if actual_score_home > actual_score_away
+                else "AWAY_WIN" if actual_score_home < actual_score_away else "DRAW"
+            )
+            if score_result != actual_result:
+                raise ValueError("actual_result conflicts with the supplied score")
+
+        if (
+            record.result_verification_status == "verified"
+            and record.actual_result is not None
+            and record.actual_result != actual_result
+        ):
+            record.result_verification_status = "conflict"
+            record.training_eligible = False
+            record.result_verification_note = (
+                verification_note or "A later result conflicts with the verified label"
+            )[:255]
+            self._commit()
+            self.db.refresh(record)
+            return record
 
         record.actual_result = actual_result
         if actual_score_home is not None:
@@ -211,7 +273,36 @@ class MatchPredictionRepository:
             record.clv = clv
         if closing_odds is not None:
             record.closing_odds = closing_odds
+        record.result_verification_status = verification_status
+        record.result_source = result_source[:50] if result_source else None
+        record.result_provider_fixture_id = (
+            result_provider_fixture_id[:100] if result_provider_fixture_id else None
+        )
+        record.result_verified_at = (
+            datetime.now(timezone.utc) if verification_status == "verified" else None
+        )
+        record.result_verification_note = (
+            verification_note[:255] if verification_note else None
+        )
 
+        self._commit()
+        self.db.refresh(record)
+        return record
+
+    def mark_result_verification(
+        self,
+        record_id: int,
+        *,
+        status: Literal["pending", "conflict", "rejected"],
+        note: str,
+    ) -> Optional[MatchPrediction]:
+        record = self.get_by_id(record_id)
+        if record is None:
+            return None
+        record.result_verification_status = status
+        record.result_verification_note = note[:255]
+        if status in {"conflict", "rejected"}:
+            record.training_eligible = False
         self._commit()
         self.db.refresh(record)
         return record

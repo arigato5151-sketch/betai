@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import DataQualityCard from "../components/DataQualityCard.jsx";
+import LeaguePerformanceCard from "../components/LeaguePerformanceCard.jsx";
 import ModelStatusCard from "../components/ModelStatusCard.jsx";
 
 function OperationsContainer({ actions, request }) {
@@ -10,6 +11,9 @@ function OperationsContainer({ actions, request }) {
   const [modelStatus, setModelStatus] = useState(null);
   const [modelStatusLoading, setModelStatusLoading] = useState(false);
   const [modelStatusError, setModelStatusError] = useState("");
+  const [leaguePerformance, setLeaguePerformance] = useState(null);
+  const [leaguePerformanceLoading, setLeaguePerformanceLoading] = useState(false);
+  const [leaguePerformanceError, setLeaguePerformanceError] = useState("");
 
   const fetchDataQuality = async () => {
     if (!actions.readAudit) return;
@@ -25,6 +29,21 @@ function OperationsContainer({ actions, request }) {
       );
     } finally {
       setDataQualityLoading(false);
+    }
+  };
+
+  const fetchLeaguePerformance = async () => {
+    if (!actions.readAudit) return;
+    setLeaguePerformanceLoading(true);
+    setLeaguePerformanceError("");
+    try {
+      const response = await request("/audit/leagues");
+      if (!response.ok) throw new Error("Lig performansı alınamadı.");
+      setLeaguePerformance(await response.json());
+    } catch (error) {
+      setLeaguePerformanceError(error.message || "Lig performansı alınamadı.");
+    } finally {
+      setLeaguePerformanceLoading(false);
     }
   };
 
@@ -48,7 +67,10 @@ function OperationsContainer({ actions, request }) {
   };
 
   useEffect(() => {
-    if (actions.readAudit) fetchDataQuality();
+    if (actions.readAudit) {
+      fetchDataQuality();
+      fetchLeaguePerformance();
+    }
   }, [actions.readAudit]);
 
   useEffect(() => {
@@ -58,12 +80,20 @@ function OperationsContainer({ actions, request }) {
   return (
     <>
       {actions.readAudit && (
-        <DataQualityCard
-          data={dataQuality}
-          error={dataQualityError}
-          loading={dataQualityLoading}
-          onRefresh={fetchDataQuality}
-        />
+        <>
+          <DataQualityCard
+            data={dataQuality}
+            error={dataQualityError}
+            loading={dataQualityLoading}
+            onRefresh={fetchDataQuality}
+          />
+          <LeaguePerformanceCard
+            data={leaguePerformance}
+            error={leaguePerformanceError}
+            loading={leaguePerformanceLoading}
+            onRefresh={fetchLeaguePerformance}
+          />
+        </>
       )}
 
       {actions.readHistory && (

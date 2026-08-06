@@ -1,5 +1,52 @@
 import { resultLabel } from "../localization.js";
 
+const hasScore = (value) =>
+  Number.isInteger(value) && value >= 0;
+
+export function getPredictionResult(item) {
+  if (!item.actual_result) return null;
+
+  const isCorrect = item.prediction === item.actual_result;
+  const hasFullScore =
+    hasScore(item.actual_score_home) && hasScore(item.actual_score_away);
+
+  return {
+    isCorrect,
+    resultText: hasFullScore
+      ? `${item.actual_score_home} – ${item.actual_score_away}`
+      : resultLabel(item.actual_result),
+    verdictText: isCorrect ? "Tahmin doğru" : "Tahmin yanlış",
+  };
+}
+
+export function getResultVerificationBadge(item) {
+  if (!item.actual_result) return null;
+
+  const badges = {
+    verified: {
+      text: "Provider sonucu doğrulandı",
+      className: "border-sky-800 bg-sky-950/50 text-sky-300",
+    },
+    manual: {
+      text: "Manuel sonuç · eğitim dışı",
+      className: "border-amber-800 bg-amber-950/50 text-amber-300",
+    },
+    conflict: {
+      text: "Sonuç çelişkili · karantinada",
+      className: "border-red-800 bg-red-950/50 text-red-300",
+    },
+    rejected: {
+      text: "Sonuç doğrulanamadı · karantinada",
+      className: "border-red-800 bg-red-950/50 text-red-300",
+    },
+  };
+
+  return badges[item.result_verification_status] ?? {
+    text: "Sonuç kaynağı doğrulanmamış",
+    className: "border-slate-700 bg-slate-900 text-slate-400",
+  };
+}
+
 function HistoryTable({
   filters,
   history,
@@ -57,18 +104,53 @@ function HistoryTable({
         </label>
       </div>
       <div className="space-y-2">
-        {history.map((item) => (
-          <button key={item.id} type="button" onClick={() => onSelectMatch(item)} className="flex w-full cursor-pointer items-center justify-between rounded-lg border border-slate-800 bg-slate-950 p-3 text-left transition hover:border-slate-600">
-            <span className="text-sm font-medium text-slate-200">
-              {item.home_team} – {item.away_team}
-              {item.actual_result && <span className="ml-2 text-xs text-emerald-500">({resultLabel(item.actual_result)})</span>}
-            </span>
-            <div className="flex items-center gap-2">
-              <span className="rounded bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-400">Oran: {item.odd}</span>
-              <span className={`h-2 w-2 rounded-full ${item.is_value_bet === 1 ? "animate-pulse bg-amber-400" : "bg-slate-700"}`}></span>
-            </div>
-          </button>
-        ))}
+        {history.map((item) => {
+          const predictionResult = getPredictionResult(item);
+          const verificationBadge = getResultVerificationBadge(item);
+
+          return (
+            <button key={item.id} type="button" onClick={() => onSelectMatch(item)} className="flex w-full cursor-pointer flex-col gap-2 rounded-lg border border-slate-800 bg-slate-950 p-3 text-left transition hover:border-slate-600 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-sm font-medium text-slate-200">
+                {item.home_team} – {item.away_team}
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {item.analysis_origin === "scenario" && (
+                  <span className="rounded border border-violet-800 bg-violet-950/50 px-2 py-1 text-xs font-semibold text-violet-300">
+                    Senaryo · eğitim dışı
+                  </span>
+                )}
+                {item.eligibility_status === "abstain" && item.analysis_origin !== "scenario" && (
+                  <span className="rounded border border-amber-800 bg-amber-950/50 px-2 py-1 text-xs font-semibold text-amber-300">
+                    Veri yetersiz · eğitim dışı
+                  </span>
+                )}
+                {item.eligibility_status === "unverified" && (
+                  <span className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400">
+                    Eski kayıt · doğrulanmamış
+                  </span>
+                )}
+                {verificationBadge && (
+                  <span className={`rounded border px-2 py-1 text-xs font-semibold ${verificationBadge.className}`}>
+                    {verificationBadge.text}
+                  </span>
+                )}
+                {predictionResult && (
+                  <span
+                    className={`rounded border px-2 py-1 text-xs font-semibold ${
+                      predictionResult.isCorrect
+                        ? "border-emerald-800 bg-emerald-950/60 text-emerald-400"
+                        : "border-red-800 bg-red-950/60 text-red-400"
+                    }`}
+                  >
+                    Maç sonucu: {predictionResult.resultText} · {predictionResult.verdictText}
+                  </span>
+                )}
+                <span className="rounded bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-400">Oran: {item.odd}</span>
+                <span className={`h-2 w-2 rounded-full ${item.is_value_bet === 1 ? "animate-pulse bg-amber-400" : "bg-slate-700"}`}></span>
+              </div>
+            </button>
+          );
+        })}
         {historyLoading && <p className="p-3 text-sm text-slate-500">Geçmiş yükleniyor…</p>}
         {historyError && <p className="rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">{historyError}</p>}
         {!historyLoading && !historyError && history.length === 0 && (
