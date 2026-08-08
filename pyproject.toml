@@ -14,7 +14,7 @@ keywords = ["fastapi", "ml", "betting", "saas", "postgresql", "redis"]
 dependencies = [
   "fastapi==0.139.0",
   "starlette==1.3.1",
-  "uvicorn==0.28.0",
+  "uvicorn==0.52.1",
   "python-dotenv==1.2.2",
   "httpx==0.28.1",
   "sqlalchemy==2.0.28",
