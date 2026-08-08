@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 import numpy as np
 import pandas as pd
@@ -21,6 +21,8 @@ from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, f1_score, log_loss
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, RobustScaler
+
+from app.core.config import settings
 
 Outcome: TypeAlias = Literal[0, 1, 2]
 EstimatorBackend: TypeAlias = Literal["lightgbm", "sklearn"]
@@ -326,9 +328,38 @@ class _BaseTierModel:
         self.backend = backend
         self.random_state = random_state
         self.pipeline: Pipeline | None = None
+        self.calibration_method = settings.TIERED_CALIBRATION_METHOD
+        self._calibrator: Any | None = None
+        self.calibration_applied: bool = False
+        self.calibration_samples: int = 0
 
     def train(self, X: pd.DataFrame, y: Sequence[int] | pd.Series) -> "_BaseTierModel":
         frame, target = self._validate_training_data(X, y)
+        if (
+            self.calibration_method != "none"
+            and len(frame) >= settings.MIN_TIERED_CALIBRATION_SAMPLES
+        ):
+            calibration_size = max(
+                3, int(len(frame) * settings.TIERED_CALIBRATION_HOLDOUT_FRACTION)
+            )
+            fit_end = len(frame) - calibration_size
+            if fit_end >= 9:
+                self._train_pipeline(frame.iloc[:fit_end], target[:fit_end])
+                self._fit_calibrator(frame.iloc[fit_end:], target[fit_end:])
+                if self.calibration_applied:
+                    return self
+            self._train_pipeline(frame, target)
+            self._calibrator = None
+            self.calibration_applied = False
+            self.calibration_samples = 0
+            return self
+        self._train_pipeline(frame, target)
+        self._calibrator = None
+        self.calibration_applied = False
+        self.calibration_samples = 0
+        return self
+
+    def _train_pipeline(self, frame: pd.DataFrame, target: np.ndarray) -> None:
         self.pipeline = Pipeline(
             steps=[
                 ("preprocessor", self._preprocessor()),
@@ -336,7 +367,54 @@ class _BaseTierModel:
             ]
         )
         self.pipeline.fit(frame, target)
-        return self
+
+    def _fit_calibrator(self, frame: pd.DataFrame, target: np.ndarray) -> None:
+        """Fit one-vs-rest calibration on a dedicated holdout, applying it only when
+        it improves holdout log loss; training stays leak-free because the holdout was
+        never consumed by the base classifier. With ``calibration_method="auto"`` both
+        isotonic and Platt variants are tried and the better performer is kept."""
+        from app.prediction.ml.calibrate import MultiClassCalibrator
+
+        self._calibrator = None
+        self.calibration_applied = False
+        self.calibration_samples = 0
+        fit_size = max(3, len(frame) // 2)
+        if len(frame) - fit_size < 3:
+            return
+        fit_frame, fit_target = frame.iloc[:fit_size], target[:fit_size]
+        val_frame, val_target = frame.iloc[fit_size:], target[fit_size:]
+        if len(np.unique(fit_target)) != 3 or len(np.unique(val_target)) != 3:
+            return
+
+        methods = (
+            ("isotonic", "platt")
+            if self.calibration_method == "auto"
+            else (self.calibration_method,)
+        )
+        raw_probabilities = self.predict_proba(val_frame)
+        raw_loss = float(
+            log_loss(val_target, raw_probabilities, labels=[AWAY_WIN, DRAW, HOME_WIN])
+        )
+        best_calibrator = None
+        best_loss = raw_loss
+        for method in methods:
+            calibrator = MultiClassCalibrator(self, method=method)
+            calibrator.fit(fit_frame, fit_target)
+            calibrated_loss = float(
+                log_loss(
+                    val_target,
+                    calibrator.apply(raw_probabilities),
+                    labels=[AWAY_WIN, DRAW, HOME_WIN],
+                )
+            )
+            if calibrated_loss < best_loss:
+                best_loss = calibrated_loss
+                best_calibrator = calibrator
+        if best_calibrator is not None:
+            self._calibrator = best_calibrator
+            self.calibration_applied = True
+            self.calibration_method = best_calibrator.method
+            self.calibration_samples = len(fit_frame)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         if self.pipeline is None:
@@ -348,15 +426,17 @@ class _BaseTierModel:
         )
         aligned = np.zeros((len(frame), 3), dtype=float)
         aligned[:, classes] = probabilities
+        if self._calibrator is not None:
+            aligned = self._calibrator.apply(aligned)
         return aligned
 
     def evaluate(
         self, X_test: pd.DataFrame, y_test: Sequence[int] | pd.Series
-    ) -> dict[str, float | int]:
+    ) -> dict[str, Any]:
         target = self._validate_target(y_test, expected_length=len(X_test))
         probabilities = self.predict_proba(X_test)
         predictions = probabilities.argmax(axis=1)
-        return {
+        metrics: dict[str, Any] = {
             "samples": len(target),
             "accuracy": float(accuracy_score(target, predictions)),
             "f1_macro": float(
@@ -369,7 +449,11 @@ class _BaseTierModel:
                 )
             ),
             "log_loss": float(log_loss(target, probabilities, labels=[0, 1, 2])),
+            "calibration_applied": self.calibration_applied,
+            "calibration_method": self.calibration_method,
+            "calibration_samples": float(self.calibration_samples),
         }
+        return metrics
 
     def _preprocessor(self) -> ColumnTransformer:
         numeric = [

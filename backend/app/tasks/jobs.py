@@ -170,6 +170,7 @@ async def _analyze_upcoming_fixture(
         payload,
         require_eligible=True,
         analysis_origin="automatic",
+        interactive=False,
     )
 
 

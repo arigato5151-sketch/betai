@@ -174,6 +174,47 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
               {match.analysis.probability})
             </p>
           </div>
+          {match.actual_result && (() => {
+            const hasScore = (value) => Number.isInteger(value) && value >= 0;
+            const resultCorrect = match.actual_result === match.analysis.prediction;
+            const scoreKnown =
+              hasScore(match.actual_score_home) &&
+              hasScore(match.actual_score_away);
+            const roi = Number.isFinite(Number(match.roi))
+              ? Number(match.roi)
+              : null;
+            return (
+              <div
+                className={`rounded border p-3 ${
+                  resultCorrect
+                    ? "border-emerald-800 bg-emerald-950/60"
+                    : "border-red-800 bg-red-950/60"
+                }`}
+              >
+                <span className="text-xs uppercase tracking-wide text-slate-400">
+                  Maç Sonucu
+                </span>
+                <p className="text-lg font-black text-white">
+                  {scoreKnown
+                    ? `${match.actual_score_home} – ${match.actual_score_away}`
+                    : resultLabel(match.actual_result)}
+                </p>
+                <p
+                  className={`mt-1 text-xs font-semibold ${
+                    resultCorrect ? "text-emerald-400" : "text-red-400"
+                  }`}
+                >
+                  {resultCorrect ? "Tahmin doğru ✓" : "Tahmin yanlış ✗"}
+                  {roi !== null && ` · ROI %${roi.toFixed(2)}`}
+                </p>
+                {match.result_source && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Sonuç kaynağı: {String(match.result_source)}
+                  </p>
+                )}
+              </div>
+            );
+          })()}
           {match.data_quality && (
             <div className="rounded border border-slate-800 bg-slate-950/60 p-3 text-xs">
               <span className="text-slate-500">Analiz veri skoru</span>

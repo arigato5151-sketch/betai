@@ -1,0 +1,51 @@
+{
+  "generated_at": "2026-08-08T17:47:12.869624+00:00",
+  "dataset": {
+    "fixtures": 17864,
+    "samples": 17082,
+    "league_count": 19,
+    "seasons": [
+      2022,
+      2023,
+      2024
+    ],
+    "start": "2022-07-15T15:00:00+00:00",
+    "end": "2025-06-01T14:00:00+00:00",
+    "odds_season": 2024,
+    "odds_samples": 4927
+  },
+  "method": {
+    "grid_factors": [
+      0.8,
+      0.9,
+      1.0,
+      1.1,
+      1.2
+    ],
+    "brier": "mean multiclass Brier; binary Brier for double chance",
+    "roi": "BacktestEngine flat stake, 3% minimum edge, closing-odds proxy",
+    "leakage_control": "point-in-time rolling team windows; simultaneous fixtures share the same pre-kickoff state"
+  },
+  "results": [
+    {
+      "name": "LEAGUE_BASELINE_GOALS",
+      "status": "validated",
+      "route": "rich_profile_1x2",
+      "current": 1.32,
+      "recommended_factor_range": [
+        1.1,
+        1.2
+      ],
+      "current_brier": 0.6239640184293818,
+      "current_roi_pct": -51.86,
+      "best_factor": 1.2,
+      "best_value": 1.584,
+      "best_brier": 0.6220236144256902,
+      "best_roi_pct": -43.04,
+      "samples": 17082,
+      "odds_samples": 4927,
+      "brier_improvement": 0.0019404,
+      "out_of_time": null
+    }
+  ]
+}

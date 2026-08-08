@@ -11,6 +11,7 @@ export function historyItemToSelectedMatch(rawDbItem) {
     rawDbItem.ml_cluster === null || rawDbItem.ml_cluster === undefined;
   const storedAssessment = rawDbItem.data_quality?.ml_assessment;
   const storedAnalysisOutputs = rawDbItem.data_quality?.analysis_outputs ?? {};
+  const hasScore = (value) => Number.isInteger(value) && value >= 0;
 
   return {
     match: `${rawDbItem.home_team} – ${rawDbItem.away_team}`,
@@ -53,6 +54,13 @@ export function historyItemToSelectedMatch(rawDbItem) {
     ml_ready: !mlInsufficient,
     record_id: rawDbItem.id,
     actual_result: rawDbItem.actual_result,
+    actual_score_home: hasScore(rawDbItem.actual_score_home)
+      ? rawDbItem.actual_score_home
+      : null,
+    actual_score_away: hasScore(rawDbItem.actual_score_away)
+      ? rawDbItem.actual_score_away
+      : null,
+    roi: rawDbItem.roi,
     result_verification_status: rawDbItem.result_verification_status,
     result_source: rawDbItem.result_source,
     data_quality: rawDbItem.data_quality,

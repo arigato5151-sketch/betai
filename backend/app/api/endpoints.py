@@ -359,6 +359,9 @@ class AnalysisRequest(BaseModel):
         ),
     )
     feature_overrides: Dict[str, float] = Field(default_factory=dict)
+    kelly_fraction: float = Field(
+        0.25, gt=0, le=1.0, description="Fractional Kelly stake multiplier (0-1)"
+    )
 
     @field_validator("home_team", "away_team")
     @classmethod
@@ -1030,8 +1033,36 @@ async def _fetch_match_weather(
         return None
 
 
-async def _compute_analysis(payload: AnalysisRequest) -> dict:
+_INTERACTIVE_EXCLUDED_CHECKS = frozenset(
+    {
+        "fixture_identified",
+        "fixture_source_identified",
+        "provider_fixture_identified",
+        "market_available",
+    }
+)
+
+
+async def _ensure_live_market(payload: AnalysisRequest) -> AnalysisRequest:
+    """Fetch the fixture's 1X2 market on demand when the collector missed it."""
+    if payload.market_1x2 is not None:
+        return payload
+    fixture_id = payload.fixture_id
+    if not isinstance(fixture_id, int) or fixture_id <= 0:
+        return payload
+    from app.services.api_football import APIFootballClient
+
+    market = await APIFootballClient().get_fixture_market(fixture_id)
+    if not isinstance(market, dict) or not market.get("fair_probability"):
+        return payload
+    return payload.model_copy(update={"market_1x2": market})
+
+
+async def _compute_analysis(
+    payload: AnalysisRequest, *, interactive: bool = False
+) -> dict:
     """Run analysis with external inputs and a short point-in-time history read."""
+    payload = await _ensure_live_market(payload)
     home_stats = payload.home_stats.model_dump()
     away_stats = payload.away_stats.model_dump()
 
@@ -1156,7 +1187,10 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         league_id=payload.league_id,
     )
     value_data = ValueCalc.calculate_professional(
-        analysis, payload.market_1x2, fallback_odd=payload.odd
+        analysis,
+        payload.market_1x2,
+        fallback_odd=payload.odd,
+        kelly_fraction=payload.kelly_fraction,
     )
     if payload.market_1x2:
         value_data["data_methodology"] = {
@@ -1334,8 +1368,20 @@ async def _compute_analysis(payload: AnalysisRequest) -> dict:
         },
     }
     data_quality["ml_assessment"] = _assess_ml_safety(ml_result, analysis, data_quality)
+    if interactive:
+        interactive_checks = {
+            name: passed
+            for name, passed in quality_checks.items()
+            if name not in _INTERACTIVE_EXCLUDED_CHECKS
+        }
+        data_quality["interactive_score"] = round(
+            100.0
+            * sum(1 for passed in interactive_checks.values() if passed)
+            / len(interactive_checks),
+            2,
+        )
     data_quality["prediction_eligibility"] = PredictionEligibilityPolicy.evaluate(
-        data_quality
+        data_quality, interactive=interactive
     ).as_dict()
 
     return {
@@ -1432,14 +1478,20 @@ async def _run_analysis(
     *,
     require_eligible: bool = False,
     analysis_origin: str = "manual",
+    interactive: bool = False,
 ) -> dict:
-    computed = await _compute_analysis(payload)
-    eligibility = PredictionEligibilityPolicy.evaluate(computed["data_quality"])
+    computed = await _compute_analysis(payload, interactive=interactive)
+    eligibility = PredictionEligibilityPolicy.evaluate(
+        computed["data_quality"], interactive=interactive
+    )
     computed["data_quality"]["prediction_eligibility"] = eligibility.as_dict()
-    if require_eligible and not eligibility.eligible:
-        raise PredictionIneligibleError(eligibility)
+    strict_decision = PredictionEligibilityPolicy.evaluate(
+        computed["data_quality"], interactive=False
+    )
+    if require_eligible and not strict_decision.eligible:
+        raise PredictionIneligibleError(strict_decision)
     training_eligible = (
-        eligibility.eligible
+        strict_decision.eligible
         and not payload.feature_overrides
         and analysis_origin != "scenario"
     )
@@ -1512,6 +1564,7 @@ async def analyze_manual(payload: AnalysisRequest):
         return await _run_analysis(
             payload,
             analysis_origin="scenario" if payload.feature_overrides else "manual",
+            interactive=True,
         )
     except SQLAlchemyError as exc:
         logger.exception("Veritabanı hatası (manuel analiz)")
@@ -1567,7 +1620,7 @@ def predict_with_tiered_model(
 async def preview_analysis_inputs(payload: AnalysisRequest):
     """Return every point-in-time model input without persisting a prediction."""
     try:
-        computed = await _compute_analysis(payload)
+        computed = await _compute_analysis(payload, interactive=True)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1611,7 +1664,9 @@ async def analyze_fixture(fixture_id: int):
         raise HTTPException(status_code=422, detail="Geçersiz maç verisi.") from exc
 
     try:
-        result = await _run_analysis(payload, analysis_origin="fixture_user")
+        result = await _run_analysis(
+            payload, analysis_origin="fixture_user", interactive=True
+        )
     except SQLAlchemyError as exc:
         logger.exception("Veritabanı hatası (fixture_id=%s)", fixture_id)
         raise HTTPException(status_code=500, detail="Veritabanı hatası.") from exc

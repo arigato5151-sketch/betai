@@ -36,28 +36,38 @@ class PredictionEligibilityPolicy:
         "kickoff_known",
     )
 
+    # Interactive (user-typed) analyses have no provider metadata by design;
+    # the forecast itself is still produced for the two named teams.
+    INTERACTIVE_CONTEXT_CHECKS = (
+        "fixture_identified",
+        "league_identified",
+        "kickoff_known",
+    )
+
     @classmethod
     def evaluate(
         cls,
         data_quality: Mapping[str, object],
+        *,
+        interactive: bool = False,
     ) -> PredictionEligibilityDecision:
         raw_checks = data_quality.get("checks")
         checks = raw_checks if isinstance(raw_checks, Mapping) else {}
-        raw_quality_score = data_quality.get("score", 0.0)
-        quality_score = (
-            float(raw_quality_score)
-            if isinstance(raw_quality_score, (int, float))
-            and not isinstance(raw_quality_score, bool)
-            else 0.0
-        )
+        quality_score = cls._quality_score(data_quality, interactive=interactive)
 
+        required_checks = (
+            cls.INTERACTIVE_CONTEXT_CHECKS
+            if interactive
+            else cls.REQUIRED_CONTEXT_CHECKS
+        )
         reasons: list[str] = []
-        for check in cls.REQUIRED_CONTEXT_CHECKS:
+        for check in required_checks:
             if checks.get(check) is not True:
                 reasons.append(f"missing_{check}")
 
         if (
-            settings.AUTO_PREDICTION_REQUIRE_MARKET
+            not interactive
+            and settings.AUTO_PREDICTION_REQUIRE_MARKET
             and checks.get("market_available") is not True
         ):
             reasons.append("market_unavailable")
@@ -78,4 +88,25 @@ class PredictionEligibilityPolicy:
             status="eligible" if eligible else "abstain",
             reasons=unique_reasons,
             data_quality_score=quality_score,
+        )
+
+    @classmethod
+    def _quality_score(
+        cls,
+        data_quality: Mapping[str, object],
+        *,
+        interactive: bool,
+    ) -> float:
+        if interactive:
+            interactive_score = data_quality.get("interactive_score")
+            if isinstance(interactive_score, (int, float)) and not isinstance(
+                interactive_score, bool
+            ):
+                return float(interactive_score)
+        raw_quality_score = data_quality.get("score", 0.0)
+        return (
+            float(raw_quality_score)
+            if isinstance(raw_quality_score, (int, float))
+            and not isinstance(raw_quality_score, bool)
+            else 0.0
         )

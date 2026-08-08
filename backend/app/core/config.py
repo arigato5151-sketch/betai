@@ -373,6 +373,30 @@ class Settings(BaseSettings):
     MAX_MODEL_CHAMPION_BRIER_REGRESSION: float = Field(default=0.01, ge=0, le=1)
     MIN_CALIBRATION_LOG_LOSS_IMPROVEMENT: float = Field(default=0.001, ge=0, le=1)
     MIN_ISOTONIC_CALIBRATION_SAMPLES: int = Field(default=500, ge=30)
+    TIERED_CALIBRATION_METHOD: str = Field(
+        default="auto",
+        pattern="^(isotonic|platt|auto|none)$",
+        description=(
+            "Probability calibration for tiered 1X2 models: isotonic, platt, "
+            "auto (best of both on a temporal holdout), or none."
+        ),
+    )
+    MIN_TIERED_CALIBRATION_SAMPLES: int = Field(default=60, ge=30)
+    TIERED_CALIBRATION_HOLDOUT_FRACTION: float = Field(default=0.15, ge=0.05, le=0.4)
+    MIN_VALUE_EV_POINTS: float = Field(
+        default=0.05,
+        ge=0,
+        le=1,
+        allow_inf_nan=False,
+        description=(
+            "Minimum absolute probability edge (p_model - p_implied, as a "
+            "fraction; 0.05 equals 5 percentage points) required before a 1X2 "
+            "bet is suggested."
+        ),
+    )
+    KELLY_FRACTION: float = Field(
+        default=0.25, gt=0, le=1, description="Fractional Kelly stake multiplier"
+    )
     MAX_MODEL_BRIER_SCORE: float = Field(default=0.8, gt=0, le=2)
     MAX_MODEL_LOG_LOSS: float = Field(default=1.5, gt=0)
     MAX_MODEL_CALIBRATION_ERROR: float = Field(default=0.2, ge=0, le=1)

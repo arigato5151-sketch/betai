@@ -135,4 +135,48 @@ describe("AnalysisReport Türkçe gösterim katmanı", () => {
     expect(screen.getByText("Senaryo analizi")).toBeInTheDocument();
     expect(screen.getByText(/eğitim ve performans hesaplarına katılmaz/)).toBeInTheDocument();
   });
+
+  it("sonuçlanmış maçta skor ve doğruluk bilgisini gösterir", () => {
+    render(
+      <AnalysisReport
+        match={{
+          ...match,
+          actual_result: "HOME_WIN",
+          actual_score_home: 2,
+          actual_score_away: 0,
+          roi: 12.5,
+          result_source: "api_football",
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Maç Sonucu")).toBeInTheDocument();
+    expect(screen.getByText("2 – 0")).toBeInTheDocument();
+    expect(screen.getByText(/Tahmin doğru ✓/)).toBeInTheDocument();
+    expect(screen.getByText(/ROI %12\.50/)).toBeInTheDocument();
+    expect(screen.getByText("Sonuç kaynağı: api_football")).toBeInTheDocument();
+  });
+
+  it("yanlış tahminde kırmızı doğruluk etiketini gösterir", () => {
+    render(
+      <AnalysisReport
+        match={{
+          ...match,
+          actual_result: "AWAY_WIN",
+          actual_score_home: 0,
+          actual_score_away: 1,
+          roi: -35.0,
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/Tahmin yanlış ✗/)).toBeInTheDocument();
+    expect(screen.getByText(/ROI %-35\.00/)).toBeInTheDocument();
+  });
+
+  it("sonuç yokken sonuç panelini göstermez", () => {
+    render(<AnalysisReport match={match} />);
+
+    expect(screen.queryByText("Maç Sonucu")).not.toBeInTheDocument();
+  });
 });

@@ -156,6 +156,50 @@ def test_value_threshold_boundary_is_deterministic() -> None:
     assert ValueCalc._is_value_bet(float("nan"), 50.0) is False
 
 
+def test_absolute_ev_filter_suppresses_sub_5_percentage_point_suggestions() -> None:
+    market = ValueCalc.devig_1x2(1.95, 3.6, 4.2)
+
+    below = ValueCalc.calculate_professional(
+        {"all_probabilities": {"HOME_WIN": 54.0, "DRAW": 25.0, "AWAY_WIN": 21.0}},
+        market,
+    )
+    at_or_above = ValueCalc.calculate_professional(
+        {"all_probabilities": {"HOME_WIN": 57.0, "DRAW": 23.0, "AWAY_WIN": 20.0}},
+        market,
+    )
+
+    assert below["value_bet"] is False
+    assert below["best_pick"] is None
+    # Home implied for odd 1.95 is ~51.3%; 57.0 - 51.3 = 5.7 percentage points.
+    assert at_or_above["value_bet"] is True
+    assert at_or_above["best_pick"] is not None
+    assert at_or_above["best_pick"]["outcome"] == "HOME_WIN"
+    assert at_or_above["best_pick"]["ev_points"] >= 5.0
+    assert at_or_above["ev_points"] == at_or_above["best_pick"]["ev_points"]
+
+
+def test_ev_points_surfaced_on_items_and_top_level() -> None:
+    analysis = {"all_probabilities": {"HOME_WIN": 60.0, "DRAW": 20.0, "AWAY_WIN": 20.0}}
+    market = ValueCalc.devig_1x2(2.0, 3.5, 4.0)
+
+    evaluated = ValueCalc.calculate_professional(analysis, market)
+
+    assert evaluated["ev_points"] == 10.0
+    assert evaluated["ev"] == 0.1
+    assert evaluated["best_pick"]["ev_points"] == 10.0
+    assert evaluated["best_pick"]["ev"] == 0.1
+
+
+def test_kelly_fraction_parameter_scales_stake_before_caps() -> None:
+    # Full Kelly for p=0.70 at odd 1.5 is 0.10 -> 10%; the 0.25 fraction yields 2.5%.
+    assert ValueCalc._kelly_stake(70.0, 1.5, 0.25) == 2.5
+    assert ValueCalc._kelly_stake(70.0, 1.5, 0.1) == 1.0
+    # Default still applies the configured fractional Kelly of 0.25.
+    assert ValueCalc._kelly_stake(70.0, 1.5) == 2.5
+    with pytest.raises(ValueError):
+        ValueCalc._kelly_stake(70.0, 1.5, 1.5)
+
+
 def test_professional_evaluation_selects_best_value_and_single_odd_fallback() -> None:
     analysis = {"all_probabilities": {"HOME_WIN": 60.0, "DRAW": 20.0, "AWAY_WIN": 20.0}}
     market = ValueCalc.devig_1x2(2.0, 3.5, 4.0)

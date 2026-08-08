@@ -62,3 +62,61 @@ def test_low_quality_and_manual_override_force_abstention(monkeypatch) -> None:
     assert decision.eligible is False
     assert "data_quality_below_threshold" in decision.reasons
     assert "manual_override_not_automatic" in decision.reasons
+
+
+def test_interactive_analysis_ignores_provider_and_market_gaps() -> None:
+    decision = PredictionEligibilityPolicy.evaluate(
+        quality_payload(
+            fixture_source_identified=False,
+            provider_fixture_identified=False,
+            market_available=False,
+        ),
+        interactive=True,
+    )
+
+    assert decision.eligible is True
+    assert decision.status == "eligible"
+    assert "missing_provider_fixture_identified" not in decision.reasons
+    assert "market_unavailable" not in decision.reasons
+
+
+def test_interactive_analysis_still_requires_history() -> None:
+    decision = PredictionEligibilityPolicy.evaluate(
+        quality_payload(
+            home_history_sufficient=False,
+            market_available=False,
+        ),
+        interactive=True,
+    )
+
+    assert decision.eligible is False
+    assert "home_history_insufficient" in decision.reasons
+    assert "market_unavailable" not in decision.reasons
+
+
+def test_interactive_analysis_uses_interactive_score(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "AUTO_PREDICTION_MIN_DATA_QUALITY_SCORE", 90.0)
+    payload = quality_payload(market_available=False)
+    payload["score"] = 40.0
+    payload["interactive_score"] = 95.0
+
+    decision = PredictionEligibilityPolicy.evaluate(
+        payload,
+        interactive=True,
+    )
+
+    assert decision.eligible is True
+    assert "data_quality_below_threshold" not in decision.reasons
+    assert decision.data_quality_score == 95.0
+
+
+def test_strict_decision_ignores_interactive_score() -> None:
+    payload = quality_payload(market_available=False)
+    payload["score"] = 40.0
+    payload["interactive_score"] = 95.0
+
+    decision = PredictionEligibilityPolicy.evaluate(payload, interactive=False)
+
+    assert decision.eligible is False
+    assert "data_quality_below_threshold" in decision.reasons
+    assert decision.data_quality_score == 40.0

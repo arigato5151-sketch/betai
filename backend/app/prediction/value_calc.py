@@ -1,9 +1,13 @@
 import math
 from typing import Dict, List, Optional
 
+from app.core.config import settings
+
 
 class ValueCalc:
-    KELLY_FRACTION = 0.25
+    KELLY_FRACTION = float(getattr(settings, "KELLY_FRACTION", 0.25))
+    # Absolute probability edge: p_model - p_implied, as a fraction (0.05 = 5pp).
+    MINIMUM_EV = float(getattr(settings, "MIN_VALUE_EV_POINTS", 0.05))
     OUTCOME_KEYS = ("HOME_WIN", "DRAW", "AWAY_WIN")
     API_VALUES = {"Home": "HOME_WIN", "Draw": "DRAW", "Away": "AWAY_WIN"}
 
@@ -176,16 +180,21 @@ class ValueCalc:
         analysis: dict,
         market: Optional[Dict],
         fallback_odd: Optional[float] = None,
+        kelly_fraction: Optional[float] = None,
     ) -> dict:
         model_probs = analysis["all_probabilities"]
 
         if market and market.get("fair_probability"):
-            return ValueCalc._evaluate_with_market(model_probs, market)
+            return ValueCalc._evaluate_with_market(
+                model_probs, market, kelly_fraction=kelly_fraction
+            )
 
         if fallback_odd and fallback_odd > 1.0:
             synthetic = ValueCalc.default_market(fallback_odd, model_probs=model_probs)
             synthetic["raw_odds"]["HOME_WIN"] = fallback_odd
-            result = ValueCalc._evaluate_with_market(model_probs, synthetic)
+            result = ValueCalc._evaluate_with_market(
+                model_probs, synthetic, kelly_fraction=kelly_fraction
+            )
             result["market"] = "SINGLE_ODD"
             return result
 
@@ -200,7 +209,11 @@ class ValueCalc:
         }
 
     @staticmethod
-    def _evaluate_with_market(model_probs: Dict[str, float], market: Dict) -> dict:
+    def _evaluate_with_market(
+        model_probs: Dict[str, float],
+        market: Dict,
+        kelly_fraction: Optional[float] = None,
+    ) -> dict:
         fair_probs = market["fair_probability"]
         raw_odds = market.get("raw_odds", {})
         candidates: List[dict] = []
@@ -216,6 +229,8 @@ class ValueCalc:
             edge_pct = round(edge * 100.0, 2)
 
             implied_p = (100.0 / odd) if odd > 1.0 else 0.0
+            ev = (model_p - implied_p) / 100.0
+            ev_points = ev * 100.0
 
             item = {
                 "outcome": outcome,
@@ -223,14 +238,20 @@ class ValueCalc:
                 "probability": model_p,
                 "market_probability": fair_probs.get(outcome, 0.0),
                 "edge": edge_pct,
+                "ev": round(ev, 4),
+                "ev_points": round(ev_points, 2),
                 "implied_probability": round(implied_p, 2),
                 "fair_odd": market.get("fair_odds", {}).get(outcome, 0.0),
                 "raw_odd": odd,
                 "value_bet": (
-                    ValueCalc._is_value_bet(edge_pct, implied_p) if odd > 1.0 else False
+                    odd > 1.0
+                    and ev >= ValueCalc.MINIMUM_EV
+                    and ValueCalc._is_value_bet(edge_pct, implied_p)
                 ),
                 "kelly_stake_pct": (
-                    ValueCalc._kelly_stake(model_p, odd) if odd > 1.0 else 0.0
+                    ValueCalc._kelly_stake(model_p, odd, kelly_fraction)
+                    if odd > 1.0
+                    else 0.0
                 ),
             }
             if item["value_bet"]:
@@ -246,10 +267,19 @@ class ValueCalc:
             else 0.0
         )
         main_implied = (100.0 / main_odd) if main_odd > 1.0 else 0.0
+        main_ev = (
+            (model_probs[main_outcome] - main_implied) / 100.0
+            if main_odd > 1.0
+            else 0.0
+        )
 
         return {
             "value_bet": bool(best_pick),
             "edge": best_pick["edge"] if best_pick else round(main_edge * 100, 2),
+            "ev": best_pick["ev"] if best_pick else round(main_ev, 4),
+            "ev_points": (
+                best_pick["ev_points"] if best_pick else round(main_ev * 100, 2)
+            ),
             "implied_probability": round(main_implied, 2),
             "fair_odd": market.get("fair_odds", {}).get(main_outcome, 0.0),
             "best_pick": best_pick,
@@ -264,11 +294,20 @@ class ValueCalc:
         }
 
     @staticmethod
-    def _kelly_stake(model_prob_pct: float, odd: float) -> float:
+    def _kelly_stake(
+        model_prob_pct: float,
+        odd: float,
+        kelly_fraction: Optional[float] = None,
+    ) -> float:
         if not math.isfinite(model_prob_pct) or not 0 <= model_prob_pct <= 100:
             raise ValueError("Model probability must be between 0 and 100")
         if not math.isfinite(odd):
             raise ValueError("Odd must be finite")
+        fraction = (
+            ValueCalc.KELLY_FRACTION if kelly_fraction is None else kelly_fraction
+        )
+        if not math.isfinite(fraction) or not 0 < fraction <= 1:
+            raise ValueError("kelly_fraction must be between 0 and 1")
         p = model_prob_pct / 100.0
         b = odd - 1.0
         if b <= 0 or p <= 0:
@@ -277,5 +316,5 @@ class ValueCalc:
         kelly = (b * p - q) / b
         if kelly <= 0:
             return 0.0
-        stake = kelly * ValueCalc.KELLY_FRACTION * 100
+        stake = kelly * fraction * 100
         return round(min(ValueCalc._max_kelly_pct(odd), stake), 2)

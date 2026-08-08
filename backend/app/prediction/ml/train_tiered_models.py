@@ -230,6 +230,7 @@ def train_tiered_models(
     *,
     artifact_store: TieredModelArtifactStore | None = None,
     backend: EstimatorBackend = "lightgbm",
+    calibration_method: str | None = None,
     seasons: Sequence[str] | None = None,
     leagues: Sequence[str] | None = None,
     pipeline_fetcher: object | None = None,
@@ -254,12 +255,13 @@ def train_tiered_models(
         datasets.tier2_features, datasets.tier2_target
     )
 
-    tier1 = cast(
-        Tier1Model, Tier1Model(backend=backend).train(tier1_train_x, tier1_train_y)
-    )
-    tier2 = cast(
-        Tier2Model, Tier2Model(backend=backend).train(tier2_train_x, tier2_train_y)
-    )
+    tier1 = cast(Tier1Model, Tier1Model(backend=backend))
+    tier2 = cast(Tier2Model, Tier2Model(backend=backend))
+    if calibration_method in ("isotonic", "platt", "auto", "none"):
+        tier1.calibration_method = calibration_method
+        tier2.calibration_method = calibration_method
+    tier1 = cast(Tier1Model, tier1.train(tier1_train_x, tier1_train_y))
+    tier2 = cast(Tier2Model, tier2.train(tier2_train_x, tier2_train_y))
     tier1_metrics = tier1.evaluate(tier1_test_x, tier1_test_y)
     tier2_metrics = tier2.evaluate(tier2_test_x, tier2_test_y)
     store = artifact_store or TieredModelArtifactStore()
@@ -272,6 +274,7 @@ def train_tiered_models(
         metadata={
             "training_source": source,
             "training_backend": backend,
+            "calibration_method": tier1.calibration_method,
             "tier1_training_samples": len(tier1_train_x),
             "tier2_training_samples": len(tier2_train_x),
             "tier1_test_samples": len(tier1_test_x),
@@ -320,6 +323,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Estimator backend for both tiers.",
     )
     parser.add_argument(
+        "--calibration-method",
+        choices=("isotonic", "platt", "auto", "none"),
+        default=None,
+        help="Probability calibration method; defaults to the configured setting.",
+    )
+    parser.add_argument(
         "--artifacts-dir",
         default=None,
         help="Override the tiered artifact storage directory.",
@@ -338,12 +347,17 @@ def main(argv: Sequence[str] | None = None) -> None:
         result = train_tiered_models(
             artifact_store=store,
             backend=args.backend,
+            calibration_method=args.calibration_method,
             seasons=args.seasons,
             leagues=args.leagues,
             enrich_odds=None if args.no_odds else build_odds_provider_from_database(),
         )
     else:
-        result = train_tiered_models(artifact_store=store, backend=args.backend)
+        result = train_tiered_models(
+            artifact_store=store,
+            backend=args.backend,
+            calibration_method=args.calibration_method,
+        )
     print(json.dumps(result, ensure_ascii=False, default=str))
 
 

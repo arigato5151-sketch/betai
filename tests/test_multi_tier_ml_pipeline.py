@@ -88,7 +88,45 @@ def test_tier_models_train_predict_and_evaluate_three_outcomes(
 
     assert probabilities.shape == (2, 3)
     assert np.allclose(probabilities.sum(axis=1), 1.0)
-    assert set(metrics) == {"samples", "accuracy", "f1_macro", "log_loss"}
+    assert set(metrics) == {
+        "samples",
+        "accuracy",
+        "f1_macro",
+        "log_loss",
+        "calibration_applied",
+        "calibration_method",
+        "calibration_samples",
+    }
+    # 12 rows is below the calibration holdout minimum; no calibration is expected.
+    assert metrics["calibration_applied"] is False
+
+
+def test_tier_calibration_flow_runs_over_threshold_holdout() -> None:
+    model = Tier2Model(backend="sklearn")
+    rows = []
+    for index in range(96):
+        row: dict[str, object] = {}
+        for feature in model.FEATURES:
+            if feature in model.CATEGORICAL_FEATURES:
+                row[feature] = f"{feature}-{index % 3}"
+            else:
+                row[feature] = float(index % 5 + 1)
+        rows.append(row)
+    features = pd.DataFrame(rows)
+    target = np.array([AWAY_WIN, DRAW, HOME_WIN] * 32)
+
+    model.calibration_method = "isotonic"
+    model.train(features, target)
+
+    probabilities = model.predict_proba(features.iloc[:4])
+    metrics = model.evaluate(features.iloc[:6], target[:6])
+
+    assert probabilities.shape == (4, 3)
+    assert np.allclose(probabilities.sum(axis=1), 1.0)
+    assert "calibration_applied" in metrics
+    assert "calibration_method" in metrics
+    if metrics["calibration_applied"]:
+        assert model._calibrator is not None
 
 
 def test_training_rejects_missing_outcome_class() -> None:
