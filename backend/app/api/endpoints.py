@@ -1437,7 +1437,12 @@ def _persist_analysis(
         "away_team_id": payload.away_team_id,
         "league_id": payload.league_id,
         "analysis_origin": analysis_origin,
-        "eligibility_status": ("eligible" if training_eligible else "abstain"),
+        "eligibility_status": (
+            "eligible"
+            if (data_quality.get("prediction_eligibility") or {}).get("status")
+            == "eligible"
+            else "abstain"
+        ),
         "training_eligible": training_eligible,
         "home_xg": payload.home_stats.xg,
         "away_xg": payload.away_stats.xg,

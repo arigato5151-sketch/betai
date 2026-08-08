@@ -124,4 +124,28 @@ describe("HistoryTable Türkçe arayüzü", () => {
 
     expect(screen.getByText("Senaryo · eğitim dışı")).toBeInTheDocument();
   });
+
+  it("sınırlı analiz ile sağlıklı ama eğitim dışı kayıtları ayrı gösterir", () => {
+    render(
+      <HistoryTable
+        {...defaultProps}
+        history={[
+          {
+            ...defaultProps.history[0],
+            eligibility_status: "abstain",
+            training_eligible: false,
+          },
+          {
+            ...defaultProps.history[0],
+            id: 2,
+            eligibility_status: "eligible",
+            training_eligible: false,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Sınırlı veri")).toBeInTheDocument();
+    expect(screen.getByText("Eğitim dışı")).toBeInTheDocument();
+  });
 });

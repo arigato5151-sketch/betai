@@ -121,9 +121,16 @@ function HistoryTable({
                 )}
                 {item.eligibility_status === "abstain" && item.analysis_origin !== "scenario" && (
                   <span className="rounded border border-amber-800 bg-amber-950/50 px-2 py-1 text-xs font-semibold text-amber-300">
-                    Veri yetersiz · eğitim dışı
+                    Sınırlı veri
                   </span>
                 )}
+                {item.eligibility_status === "eligible" &&
+                  item.training_eligible === false &&
+                  item.analysis_origin !== "scenario" && (
+                    <span className="rounded border border-slate-700 px-2 py-1 text-xs font-semibold text-slate-400">
+                      Eğitim dışı
+                    </span>
+                  )}
                 {item.eligibility_status === "unverified" && (
                   <span className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400">
                     Eski kayıt · doğrulanmamış
