@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import math
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Mapping
+from urllib.error import HTTPError, URLError
 
 import httpx
 
@@ -25,6 +27,43 @@ _EXCLUDED_DESCRIPTIONS = (
     "academy",
     "supporters",
 )
+
+
+class _UrllibTransport(httpx.AsyncBaseTransport):
+    """Perform real requests with urllib because Wikidata blocks httpx's TLS
+    fingerprint via its robot policy while tolerating urllib/requests clients.
+
+    Tests keep injecting ``httpx.MockTransport`` and are unaffected.
+    """
+
+    def __init__(self, timeout_seconds: float) -> None:
+        self.timeout_seconds = timeout_seconds
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        try:
+            http_request = urllib.request.Request(
+                str(request.url),
+                method=request.method,
+                headers=dict(request.headers),
+            )
+            with urllib.request.urlopen(
+                http_request, timeout=self.timeout_seconds
+            ) as response:
+                return httpx.Response(
+                    status_code=response.status,
+                    headers=list(response.headers.items()),
+                    content=response.read(),
+                    request=request,
+                )
+        except HTTPError as exc:
+            return httpx.Response(
+                status_code=exc.code,
+                headers=list(exc.headers.items()) if exc.headers else [],
+                content=exc.read() if exc.headers else b"",
+                request=request,
+            )
+        except URLError as exc:
+            raise httpx.ConnectError(str(exc)) from exc
 
 
 class WikidataError(RuntimeError):
@@ -146,12 +185,17 @@ class WikidataTeamLocationClient:
 
     async def _request(self, params: dict[str, str]) -> dict[str, Any]:
         response: httpx.Response | None = None
+        transport = (
+            self.transport
+            if self.transport is not None
+            else _UrllibTransport(self.timeout_seconds)
+        )
         for attempt in range(5):
             try:
                 async with httpx.AsyncClient(
                     timeout=self.timeout_seconds,
                     follow_redirects=False,
-                    transport=self.transport,
+                    transport=transport,
                     headers={
                         "Accept": "application/json",
                         "User-Agent": "BetAIPlatform/1.0 (Wikidata location resolver)",
