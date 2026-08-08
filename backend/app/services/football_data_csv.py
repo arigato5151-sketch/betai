@@ -62,6 +62,12 @@ _LEAGUES = (
     FootballDataLeague(203, "T1", "Turkey", "Europe/Istanbul"),
     FootballDataLeague(88, "N1", "Netherlands", "Europe/Amsterdam"),
     FootballDataLeague(144, "B1", "Belgium", "Europe/Brussels"),
+    FootballDataLeague(
+        197,
+        "G1",
+        "Greece",
+        "Europe/Athens",
+    ),
     FootballDataLeague(235, "RUS", "Russia", "Europe/Moscow", rolling_feed=True),
     FootballDataLeague(179, "SC0", "Scotland", "Europe/London"),
     FootballDataLeague(

@@ -18,13 +18,20 @@ class FootballDataFetcher:
     BASE_URL: str = "https://www.football-data.co.uk/mmz4281"
     LEAGUE_MAP: dict[str, str] = {
         "Premier_League": "E0",
+        "Championship": "E1",
         "La_Liga": "SP1",
         "Serie_A": "I1",
+        "Serie_B": "I2",
         "Bundesliga": "D1",
+        "Bundesliga_2": "D2",
         "Ligue_1": "F1",
+        "Ligue_2": "F2",
         "Super_Lig": "T1",
         "Eredivisie": "N1",
         "Liga_Portugal": "P1",
+        "Jupiler_Pro_League": "B1",
+        "Scottish_Premiership": "SC0",
+        "Greek_Super_League": "G1",
     }
     REQUIRED_COLUMNS: tuple[str, ...] = (
         "Date",

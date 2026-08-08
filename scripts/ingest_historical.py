@@ -44,13 +44,20 @@ _FTR_TO_RESULT = {"H": "HOME_WIN", "D": "DRAW", "A": "AWAY_WIN"}
 
 LEAGUE_IDS: dict[str, int] = {
     "Premier_League": 39,
+    "Championship": 40,
     "La_Liga": 140,
     "Serie_A": 135,
+    "Serie_B": 136,
     "Bundesliga": 78,
+    "Bundesliga_2": 79,
     "Ligue_1": 61,
+    "Ligue_2": 62,
     "Super_Lig": 203,
     "Eredivisie": 88,
     "Liga_Portugal": 94,
+    "Jupiler_Pro_League": 144,
+    "Scottish_Premiership": 179,
+    "Greek_Super_League": 197,
 }
 
 _STAT_COLUMNS = (
