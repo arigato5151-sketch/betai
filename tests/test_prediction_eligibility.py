@@ -120,3 +120,24 @@ def test_strict_decision_ignores_interactive_score() -> None:
     assert decision.eligible is False
     assert "data_quality_below_threshold" in decision.reasons
     assert decision.data_quality_score == 40.0
+
+
+def test_interactive_excludes_pre_match_only_modules() -> None:
+    from app.api import endpoints
+
+    excluded = endpoints._INTERACTIVE_EXCLUDED_CHECKS
+    for check in (
+        "lineups_available",
+        "availability_available",
+        "home_player_impact_available",
+        "away_player_impact_available",
+        "odds_movement_available",
+        "weather_available",
+    ):
+        assert check in excluded
+    for check in (
+        "home_history_sufficient",
+        "away_history_sufficient",
+        "h2h_available",
+    ):
+        assert check not in excluded

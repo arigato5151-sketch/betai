@@ -1039,6 +1039,14 @@ _INTERACTIVE_EXCLUDED_CHECKS = frozenset(
         "fixture_source_identified",
         "provider_fixture_identified",
         "market_available",
+        # Pre-match modules are naturally absent before kickoff; excluding them
+        # from the interactive score keeps "Sınırlı veri" honest.
+        "availability_available",
+        "lineups_available",
+        "home_player_impact_available",
+        "away_player_impact_available",
+        "odds_movement_available",
+        "weather_available",
     }
 )
 

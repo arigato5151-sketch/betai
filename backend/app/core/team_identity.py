@@ -65,8 +65,24 @@ def normalize_team_name(value: str) -> str:
     """Return an alias-aware key for matching names across providers."""
     normalized = stable_team_name_key(value)
     normalized = _TEAM_ALIASES.get(normalized, normalized)
-    tokens = normalized.split()
+    tokens = _strip_club_year_tokens(normalized.split())
     if tokens and tokens[0] in {"fc", "fk"}:
         # API-Football and CSV feeds use FC/FK interchangeably for some clubs.
         tokens[0] = "fc"
     return " ".join(_TEAM_TOKEN_ALIASES.get(token, token) for token in tokens)
+
+
+def _strip_club_year_tokens(tokens: list[str]) -> list[str]:
+    """Drop trailing founding-year digits ("Hannover 96" -> "Hannover").
+
+    Leading years identify separate clubs (e.g. "1860 Munich") and are kept so
+    they never collapse onto the senior namesake club. A leading "1" prefix
+    ("1. FC Köln") is pure ordinal and safe to remove.
+    """
+    if not tokens:
+        return tokens
+    while tokens and tokens[-1].isdigit():
+        tokens = tokens[:-1]
+    if tokens and tokens[0] == "1":
+        tokens = tokens[1:]
+    return tokens
