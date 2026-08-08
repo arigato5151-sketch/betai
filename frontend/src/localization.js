@@ -78,6 +78,17 @@ const BACKTEST_REASON_LABELS = Object.freeze({
   daily_exposure_limit: "Günlük risk sınırı",
 });
 
+const TIER_LABELS = Object.freeze({
+  "Tier 1": "Katman 1 – Zengin Veri",
+  "Tier 2": "Katman 2 – Standart Veri",
+});
+
+const TIER_OUTCOME_LABELS = Object.freeze([
+  "Deplasman",
+  "Beraberlik",
+  "Ev Sahibi",
+]);
+
 const ELIGIBILITY_REASON_LABELS = Object.freeze({
   missing_fixture_identified: "Fikstür kimliği eksik",
   missing_fixture_source_identified: "Fikstür veri kaynağı eksik",
@@ -158,6 +169,11 @@ export const backtestReasonLabel = (value) =>
 
 export const eligibilityReasonLabel = (value) =>
   lookupClosedSet(ELIGIBILITY_REASON_LABELS, value, "Bilinmeyen veri eksiği");
+
+export const tierLabel = (value) =>
+  lookupClosedSet(TIER_LABELS, value, "Katman Modeli Yüklü Değil");
+
+export const tierOutcomeLabels = () => TIER_OUTCOME_LABELS;
 
 export const matchLabel = (value) =>
   hasValue(value)

@@ -51,6 +51,7 @@ from app.prediction.ensemble import ProbabilityEnsembler
 from app.prediction.value_calc import ValueCalc
 from app.prediction.ml.model import ml_pipeline
 from app.prediction.ml.model_router import (
+    Predictor,
     TieredArtifactIntegrityError,
     get_active_tiered_predictor,
 )
@@ -1476,6 +1477,7 @@ async def _run_analysis(
         "eligibility_status": db_record.eligibility_status,
         "training_eligible": db_record.training_eligible,
     }
+    response["feature_snapshot"] = computed["feature_vector"]
     return response
 
 
@@ -1516,14 +1518,21 @@ async def analyze_manual(payload: AnalysisRequest):
         raise HTTPException(status_code=500, detail="Veritabanı hatası.") from exc
 
 
+def get_tiered_predictor() -> Predictor:
+    """Return the currently active signed tiered predictor (singleton cache)."""
+    return get_active_tiered_predictor()
+
+
 @router.post(
     "/predict/tiered",
     dependencies=[Depends(require_permission("analysis:create"))],
 )
-def predict_with_tiered_model(payload: TieredPredictionRequest) -> dict[str, object]:
+def predict_with_tiered_model(
+    payload: TieredPredictionRequest,
+    predictor: Predictor = Depends(get_tiered_predictor),
+) -> dict[str, object]:
     """Predict via the current signed tier bundle without changing legacy analysis."""
     try:
-        predictor = get_active_tiered_predictor()
         prediction = predictor.predict(
             {"league_id": payload.league_id, **payload.features}
         )

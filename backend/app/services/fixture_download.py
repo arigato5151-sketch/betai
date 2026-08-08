@@ -123,17 +123,13 @@ class FixtureDownloadClient:
                 response = await client.get(f"{self.base_url}/{slug}")
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise FixtureDownloadError(
-                "Fixture feed could not be downloaded"
-            ) from exc
+            raise FixtureDownloadError("Fixture feed could not be downloaded") from exc
         if len(response.content) > MAX_PAYLOAD_BYTES:
             raise FixtureDownloadFormatError("Fixture payload is too large")
         try:
             return response.json()
         except ValueError as exc:
-            raise FixtureDownloadFormatError(
-                "Fixture payload is not JSON"
-            ) from exc
+            raise FixtureDownloadFormatError("Fixture payload is not JSON") from exc
 
     @staticmethod
     def _parse(

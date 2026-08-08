@@ -4,6 +4,7 @@ import { buildBankrollSeries } from "../bankroll.js";
 import AnalysisForm from "../components/AnalysisForm.jsx";
 import AnalysisReport from "../components/AnalysisReport.jsx";
 import BankrollChart from "../components/BankrollChart.jsx";
+import TieredPredictionPanel from "../components/TieredPredictionPanel.jsx";
 
 const initialFormData = {
   home_team: "",
@@ -328,6 +329,10 @@ function AnalysisContainer({
       onSelectMatch({
         match: data.match,
         odd: formData.odd,
+        home_team: formData.home_team,
+        away_team: formData.away_team,
+        league_id: formData.league_id,
+        feature_snapshot: data.feature_snapshot,
         home_stats: formData.home_stats,
         away_stats: formData.away_stats,
         analysis: data.analysis,
@@ -399,6 +404,17 @@ function AnalysisContainer({
             canUpdateResult={actions.updateResult}
             match={selectedMatch}
             onSubmitActualResult={submitActualResult}
+          />
+        )}
+
+        {selectedMatch && actions.analyze && (
+          <TieredPredictionPanel
+            request={request}
+            leagueId={selectedMatch.league_id}
+            homeTeam={selectedMatch.home_team}
+            awayTeam={selectedMatch.away_team}
+            featureSnapshot={selectedMatch.feature_snapshot}
+            enabled
           />
         )}
 

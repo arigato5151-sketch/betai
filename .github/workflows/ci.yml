@@ -66,20 +66,30 @@ jobs:
             -r requirements.txt \
             -r requirements-dev.txt \
             "${ignore_args[@]}"
-      - name: Ruff
-        run: python -m ruff check backend/app backend/migrations tests scripts
+- name: Ruff
+        run: python -m ruff check backend/app backend/migrations tests scripts fixture_resolver.py data_enricher.py data_pipeline.py
       - name: Black
-        run: python -m black --check backend/app backend/migrations tests scripts
+        run: python -m black --check backend/app backend/migrations tests scripts fixture_resolver.py data_enricher.py data_pipeline.py
       - name: Mypy (typed domain boundary)
         run: python -m mypy backend/app
       - name: OpenAPI contract drift
         run: |
           python scripts/export_openapi.py
           git diff --exit-code -- docs/openapi.json
-      - name: Alembic migration smoke test
+- name: Alembic migration smoke test
         run: |
           python -m alembic -c backend/alembic.ini upgrade head
           python -m alembic -c backend/alembic.ini check
+      - name: Tiered model tests & signed artifact
+        run: |
+          python -m pytest -q \
+            tests/test_model_router.py \
+            tests/test_multi_tier_ml_pipeline.py \
+            tests/test_tiered_prediction_api.py \
+            tests/test_train_tiered_models.py
+          python scripts/check_tiered_artifact.py
+      - name: Resolver/enricher integration
+        run: python -m pytest -q tests/test_resolver_enricher_integration.py tests/test_fixture_resolver.py tests/test_data_enricher.py
       - name: Pytest
         run: >-
           python -m pytest tests -q

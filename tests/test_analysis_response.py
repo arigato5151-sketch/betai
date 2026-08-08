@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pandas as pd
@@ -427,6 +428,78 @@ async def test_analysis_collects_feature_snapshot_before_first_model(
         "secondary_markets": computed["analysis"]["secondary_markets"],
         "match_profile": computed["analysis"]["match_profile"],
     }
+
+
+@pytest.mark.asyncio
+async def test_analysis_response_exposes_feature_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    home_matches = pd.DataFrame(
+        [
+            {
+                "match_date": pd.Timestamp("2026-07-17T18:00:00Z"),
+                "points": 3,
+                "result": "W",
+                "clean_sheet": 1,
+                "scoring": 1,
+                "goals_for": 2,
+                "goals_against": 0,
+            }
+        ]
+    )
+    monkeypatch.setattr(endpoints.ml_pipeline, "is_ready", False)
+    monkeypatch.setattr(
+        endpoints.football_api,
+        "get_team_last_matches_df",
+        AsyncMock(side_effect=[home_matches, home_matches]),
+    )
+    monkeypatch.setattr(
+        endpoints.football_api,
+        "get_h2h",
+        AsyncMock(
+            return_value={"home_win_rate": 0.6, "draw_rate": 0.2, "home_loss_rate": 0.2}
+        ),
+    )
+
+    record_stub = SimpleNamespace(
+        id=1,
+        analyzed_at=datetime(2026, 7, 20, 19, tzinfo=UTC),
+        kickoff=datetime(2026, 7, 20, 18, tzinfo=UTC),
+        analysis_lead_minutes=60.0,
+        analysis_origin="manual",
+        eligibility_status="eligible",
+        training_eligible=True,
+        fixture_id=None,
+        fixture_source=None,
+        provider_fixture_id=None,
+    )
+    capture_persist: dict[str, object] = {}
+
+    def fake_persist(payload, computed, *, analysis_origin, training_eligible):
+        capture_persist["feature_snapshot"] = computed["feature_vector"]
+        return record_stub, 0
+
+    monkeypatch.setattr(endpoints, "_persist_analysis", fake_persist)
+
+    payload = AnalysisRequest(
+        home_team="Home",
+        away_team="Away",
+        home_team_id=1,
+        away_team_id=2,
+        kickoff="2026-07-20T18:00:00Z",
+        home_stats={"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
+        away_stats={"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        odd=2.1,
+    )
+
+    response = await endpoints._run_analysis(payload, analysis_origin="manual")
+
+    assert list(response["feature_snapshot"]) == FeatureEngine.FEATURE_NAMES
+    assert response["feature_snapshot"]["home_form_ema"] == 100.0
+    assert capture_persist["feature_snapshot"] is response["feature_snapshot"]
+    assert response["provenance"]["model_artifact_version"] is None
 
 
 @pytest.mark.asyncio
