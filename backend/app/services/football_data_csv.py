@@ -107,6 +107,7 @@ _ROLLING_COLUMNS = frozenset(
     {"Country", "League", "Season", "Date", "Home", "Away", "HG", "AG", "Res"}
 )
 _RESULTS = {"H": "HOME_WIN", "D": "DRAW", "A": "AWAY_WIN"}
+_ODDS_PLACEHOLDERS = frozenset({"#", "-"})
 _OPENING_ODDS_TRIPLETS = (
     ("B365H", "B365D", "B365A"),
     ("AvgH", "AvgD", "AvgA"),
@@ -401,8 +402,8 @@ class FootballDataCSVClient:
 
     @staticmethod
     def _optional_decimal_odd(value: object, column: str) -> float | None:
-        raw = str(value or "").strip()
-        if not raw:
+        raw = str(value or "").strip().lower()
+        if not raw or raw in _ODDS_PLACEHOLDERS:
             return None
         try:
             parsed = float(raw)
