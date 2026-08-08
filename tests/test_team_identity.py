@@ -1,3 +1,5 @@
+import pytest
+
 from app.core.team_identity import normalize_team_name, stable_team_name_key
 
 
@@ -26,3 +28,46 @@ def test_existing_alias_rules_still_apply() -> None:
 def test_stable_key_unchanged_by_year_stripping() -> None:
     assert stable_team_name_key("Hannover 96") == "hannover 96"
     assert stable_team_name_key("Hannover") == "hannover"
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("Bayern München", "Bayern Munich"),
+        ("AEK Athen", "AEK Athens"),
+        ("PSV", "PSV Eindhoven"),
+        ("Sporting CP", "Sp Lisbon"),
+        ("Sporting CP", "Sporting Lisbon"),
+        ("Sp Braga", "Braga"),
+        ("AFC Bournemouth", "Bournemouth"),
+        ("AC Ajaccio", "Ajaccio"),
+        ("FSV Mainz 05", "Mainz"),
+        ("Eintracht Frankfurt", "Ein Frankfurt"),
+        ("Eintracht Frankfurt", "Frankfurt"),
+        ("Hellas Verona", "Verona"),
+        ("Hertha Berlin", "Hertha"),
+        ("Olympiacos", "Olympiakos Piraeus"),
+        ("PAOK", "PAOK Saloniki"),
+        ("Tottenham", "Tottenham Hotspur"),
+        ("Leicester", "Leicester City"),
+        ("B. Dortmund", "Borussia Dortmund"),
+        ("B. Dortmund", "Dortmund"),
+        ("Hamburger SV", "Hamburg"),
+        ("Vitória SC", "Guimaraes"),
+    ],
+)
+def test_cross_league_name_variants_collapse(left: str, right: str) -> None:
+    assert normalize_team_name(left) == normalize_team_name(right)
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        # Distinct clubs must never merge via prefix stripping.
+        ("1860 Munich", "Bayern Munich"),
+        ("Sporting CP", "Sporting Gijón"),
+        ("Inter", "Eintracht Frankfurt"),
+    ],
+)
+def test_distinct_clubs_remain_separate(first: str, second: str) -> None:
+    assert normalize_team_name(first) != normalize_team_name(second)
