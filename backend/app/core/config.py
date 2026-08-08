@@ -182,6 +182,7 @@ class Settings(BaseSettings):
     )
     AUTO_PREDICTION_LOCK_TTL_SECONDS: int = Field(default=3600, ge=60, le=21600)
     MODEL_TRAINING_LOCK_TTL_SECONDS: int = Field(default=21600, ge=600, le=86400)
+    TIERED_RETRAIN_MIN_FIXTURES: int = Field(default=200, ge=1, le=100000)
     AUTO_TEAM_LOCATION_ENABLED: bool = True
     WIKIDATA_LOCATION_ENABLED: bool = True
     WIKIDATA_API_URL: str = "https://www.wikidata.org/w/api.php"

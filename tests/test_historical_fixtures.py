@@ -121,6 +121,31 @@ def test_historical_upsert_is_idempotent_and_updates_scores(
     assert historical_repository.db.query(stored.__class__).count() == 1
 
 
+def test_history_upsert_many_chunks_large_batches_without_sqlite_bind_limit(
+    historical_repository: HistoricalFixtureRepository,
+) -> None:
+    """A bulk import larger than SQLite's 999 bind-variable limit persists fully."""
+    kickoff = datetime(2026, 7, 1, tzinfo=UTC)
+    first_batch = [
+        fixture_row(fixture_id, kickoff + timedelta(minutes=fixture_id))
+        for fixture_id in range(1, 1201)
+    ]
+    assert historical_repository.upsert_many(first_batch) == 1200
+
+    stored = historical_repository.db.query(HistoricalFixture).count()
+    assert stored == 1200
+
+    updated_id = 700
+    updated_batch = [
+        fixture_row(updated_id, kickoff, home_goals=3, away_goals=3),
+        fixture_row(12000, kickoff + timedelta(minutes=1)),
+    ]
+    assert historical_repository.upsert_many(updated_batch) == 2
+    result = historical_repository.get_by_fixture_id(updated_id)
+    assert result is not None and result.actual_result == "DRAW"
+    assert historical_repository.db.query(HistoricalFixture).count() == 1201
+
+
 def test_history_queries_exclude_future_matches(
     historical_repository: HistoricalFixtureRepository,
 ) -> None:

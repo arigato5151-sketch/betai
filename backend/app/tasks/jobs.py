@@ -1412,8 +1412,25 @@ def _run_model_retraining() -> str:
         ml_pipeline.status()
         success = ml_pipeline.train_pipeline(training_rows)
 
+        tiered_report: dict[str, object] = {}
+        if len(historical_fixtures) >= settings.TIERED_RETRAIN_MIN_FIXTURES:
+            try:
+                # Local import keeps the tiered stack (lightgbm/sklearn) off the
+                # worker hot path until a retrain actually runs.
+                from app.prediction.ml.train_tiered_models import train_tiered_models
+
+                tiered_report = train_tiered_models(fixtures=historical_fixtures)
+                logger.info("Tiered model retraining completed: %s", tiered_report)
+            except Exception:
+                logger.exception("Tiered model retraining failed.")
+
         if success:
             logger.info("ML model retraining job completed successfully.")
+            if tiered_report:
+                logger.info(
+                    "Tiered bundle artifact_version=%s",
+                    tiered_report.get("artifact_version"),
+                )
             return "Retraining success."
         else:
             logger.warning("ML model retraining job skipped or failed.")

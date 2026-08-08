@@ -14,6 +14,10 @@ from app.db.models import HistoricalFixture, utc_now
 
 
 class HistoricalFixtureRepository:
+    """Store completed fixtures without exceeding per-statement bind limits."""
+
+    UPSERT_BATCH_SIZE: int = 250
+
     def __init__(self, db: Session):
         self.db = db
 
@@ -39,29 +43,31 @@ class HistoricalFixtureRepository:
 
         try:
             if dialect == "postgresql":
-                statement = pg_insert(HistoricalFixture).values(normalized)
-                mutable_columns = {
-                    column.name: getattr(statement.excluded, column.name)
-                    for column in HistoricalFixture.__table__.columns
-                    if column.name not in {"id", "fixture_id", "ingested_at"}
-                }
-                self.db.execute(
-                    statement.on_conflict_do_update(
-                        index_elements=["fixture_id"], set_=mutable_columns
+                for batch in self._batches(normalized):
+                    statement = pg_insert(HistoricalFixture).values(batch)
+                    mutable_columns = {
+                        column.name: getattr(statement.excluded, column.name)
+                        for column in HistoricalFixture.__table__.columns
+                        if column.name not in {"id", "fixture_id", "ingested_at"}
+                    }
+                    self.db.execute(
+                        statement.on_conflict_do_update(
+                            index_elements=["fixture_id"], set_=mutable_columns
+                        )
                     )
-                )
             elif dialect == "sqlite":
-                sqlite_statement = sqlite_insert(HistoricalFixture).values(normalized)
-                sqlite_mutable_columns = {
-                    column.name: getattr(sqlite_statement.excluded, column.name)
-                    for column in HistoricalFixture.__table__.columns
-                    if column.name not in {"id", "fixture_id", "ingested_at"}
-                }
-                self.db.execute(
-                    sqlite_statement.on_conflict_do_update(
-                        index_elements=["fixture_id"], set_=sqlite_mutable_columns
+                for batch in self._batches(normalized):
+                    sqlite_statement = sqlite_insert(HistoricalFixture).values(batch)
+                    sqlite_mutable_columns = {
+                        column.name: getattr(sqlite_statement.excluded, column.name)
+                        for column in HistoricalFixture.__table__.columns
+                        if column.name not in {"id", "fixture_id", "ingested_at"}
+                    }
+                    self.db.execute(
+                        sqlite_statement.on_conflict_do_update(
+                            index_elements=["fixture_id"], set_=sqlite_mutable_columns
+                        )
                     )
-                )
             else:
                 for row in normalized:
                     existing = self.get_by_fixture_id(row["fixture_id"])
@@ -76,6 +82,12 @@ class HistoricalFixtureRepository:
             self.db.rollback()
             raise
         return len(normalized)
+
+    @classmethod
+    def _batches(cls, rows: list[dict]) -> Iterable[list[dict]]:
+        size = cls.UPSERT_BATCH_SIZE
+        for start in range(0, len(rows), size):
+            yield rows[start : start + size]
 
     def get_by_fixture_id(self, fixture_id: int) -> HistoricalFixture | None:
         return (

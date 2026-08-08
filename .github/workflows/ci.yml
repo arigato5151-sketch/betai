@@ -89,7 +89,7 @@ jobs:
             tests/test_train_tiered_models.py
           python scripts/check_tiered_artifact.py
       - name: Resolver/enricher integration
-        run: python -m pytest -q tests/test_resolver_enricher_integration.py tests/test_fixture_resolver.py tests/test_data_enricher.py
+        run: python -m pytest -q tests/test_resolver_enricher_integration.py tests/test_fixture_resolver.py tests/test_data_enricher.py tests/test_ingest_historical.py
       - name: Pytest
         run: >-
           python -m pytest tests -q
