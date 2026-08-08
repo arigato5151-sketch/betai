@@ -894,9 +894,10 @@ async def test_stale_point_in_time_form_uses_api_fallback(
 ) -> None:
     from app.api import endpoints
 
+    monkeypatch.setattr(settings, "HISTORICAL_FORM_MAX_AGE_DAYS", 365)
     stale_frame = pd.DataFrame(
         {
-            "match_date": pd.date_range("2026-01-01", periods=5, freq="7D", tz="UTC"),
+            "match_date": pd.date_range("2023-01-01", periods=5, freq="7D", tz="UTC"),
             "points": [3.0] * 5,
         }
     )
@@ -944,6 +945,60 @@ async def test_stale_point_in_time_form_uses_api_fallback(
     assert availability is None
     assert lineups is None
     assert form_api.await_count == 2
+    h2h_api.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recent_point_in_time_uses_local_history_without_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    monkeypatch.setattr(settings, "HISTORICAL_FORM_MAX_AGE_DAYS", 365)
+    local_frame = pd.DataFrame(
+        {
+            "match_date": pd.date_range("2026-05-01", periods=5, freq="7D", tz="UTC"),
+            "points": [3.0] * 5,
+        }
+    )
+    context = HistoricalFeatureContext(
+        h2h_rates={
+            "home_win_rate": 0.4,
+            "draw_rate": 0.3,
+            "home_loss_rate": 0.3,
+        },
+        home_matches_df=local_frame,
+        away_matches_df=local_frame,
+    )
+    form_api = AsyncMock(return_value=pd.DataFrame())
+    h2h_api = AsyncMock(side_effect=AssertionError("local H2H should be used"))
+    monkeypatch.setattr(endpoints.football_api, "get_team_last_matches_df", form_api)
+    monkeypatch.setattr(endpoints.football_api, "get_h2h", h2h_api)
+    payload = AnalysisRequest(
+        home_team="Home",
+        away_team="Away",
+        home_team_id=1,
+        away_team_id=2,
+        kickoff="2026-08-15T18:00:00Z",
+        home_stats={"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
+        away_stats={"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        odd=2.1,
+    )
+
+    (
+        home_matches,
+        away_matches,
+        h2h_rates,
+        availability,
+        lineups,
+    ) = await _fetch_ml_match_data(payload, context)
+
+    assert home_matches is local_frame
+    assert away_matches is local_frame
+    assert h2h_rates is context.h2h_rates
+    assert availability is None
+    assert lineups is None
+    assert form_api.await_count == 0
     h2h_api.assert_not_awaited()
 
 
