@@ -61,6 +61,8 @@ _TEAM_ALIASES = {
     "real betis": "betis",
     "real oviedo": "oviedo",
     "real sociedad": "sociedad",
+    "fortuna sittard": "for sittard",
+    "pec zwolle": "zwolle",
     "sheffield weds": "sheffield wednesday",
     "sp braga": "braga",
     "sp lisbon": "sporting lisbon",

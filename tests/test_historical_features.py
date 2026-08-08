@@ -409,3 +409,57 @@ def test_optional_player_repository_and_missing_locations_are_neutral(
     assert no_player_repository.travel_context_available is False
     assert no_player_repository.home_player_ratings == {}
     assert no_player_repository.away_player_ratings == {}
+
+
+def _fake_fixture(*, home_team: str, away_team: str, home_id: int, away_id: int):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        home_team=home_team,
+        away_team=away_team,
+        home_team_id=home_id,
+        away_team_id=away_id,
+    )
+
+
+def test_resolve_team_id_drops_feed_prefix_variant() -> None:
+    fixtures = [
+        _fake_fixture(home_team="Zwolle", away_team="Ajax", home_id=11, away_id=22),
+        _fake_fixture(
+            home_team="Heracles", away_team="Feyenoord", home_id=33, away_id=44
+        ),
+    ]
+    resolved = HistoricalFeatureService._resolve_team_id(
+        fixtures, requested_team_id=-1_999, requested_team_name="PEC Zwolle"
+    )
+
+    assert resolved == 11
+
+
+def test_resolve_team_id_keeps_unambiguous_direct_name() -> None:
+    fixtures = [
+        _fake_fixture(home_team="Ajax", away_team="Zwolle", home_id=1, away_id=2),
+    ]
+    assert (
+        HistoricalFeatureService._resolve_team_id(
+            fixtures, requested_team_id=-1_999, requested_team_name="Ajax"
+        )
+        == 1
+    )
+
+
+def test_resolve_team_id_prefix_drop_stays_safe_when_unknown() -> None:
+    fixtures = [
+        _fake_fixture(home_team="AJAX CT", away_team="Heracles", home_id=1, away_id=2),
+        _fake_fixture(
+            home_team="Atletico Madrid", away_team="Sevilla", home_id=3, away_id=4
+        ),
+    ]
+    # A prefixed name whose remainder is not a known club must never resolve
+    # onto an arbitrary team.
+    assert (
+        HistoricalFeatureService._resolve_team_id(
+            fixtures, requested_team_id=-1_999, requested_team_name="PEC Zwolle"
+        )
+        == -1_999
+    )

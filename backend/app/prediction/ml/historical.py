@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 
 from app.core.config import settings
-from app.core.team_identity import normalize_team_name
+from app.core.team_identity import normalize_team_name, stable_team_name_key
 from app.db.historical_repository import HistoricalFixtureRepository
 from app.db.models import HistoricalFixture, HistoricalPlayerPerformance
 from app.db.player_context_repository import PlayerContextRepository
@@ -420,14 +420,31 @@ class HistoricalFeatureService:
         if requested_team_id in known_ids or not requested_team_name:
             return requested_team_id
 
+        def ids_for(normalized: str) -> set[int]:
+            matched: set[int] = set()
+            for fixture in fixtures:
+                if normalize_team_name(fixture.home_team) == normalized:
+                    matched.add(fixture.home_team_id)
+                if normalize_team_name(fixture.away_team) == normalized:
+                    matched.add(fixture.away_team_id)
+            return matched
+
         target = normalize_team_name(requested_team_name)
-        candidates: set[int] = set()
-        for fixture in fixtures:
-            if normalize_team_name(fixture.home_team) == target:
-                candidates.add(fixture.home_team_id)
-            if normalize_team_name(fixture.away_team) == target:
-                candidates.add(fixture.away_team_id)
-        return candidates.pop() if len(candidates) == 1 else requested_team_id
+        candidates = ids_for(target)
+        if len(candidates) == 1:
+            return candidates.pop()
+        if not candidates:
+            # Feed variants often prefix the city name (PEC Zwolle vs Zwolle);
+            # try resolving with the leading club-designator token dropped when
+            # the remainder maps to exactly one known club.
+            tokens = stable_team_name_key(requested_team_name).split()
+            if len(tokens) > 1:
+                stripped = normalize_team_name(" ".join(tokens[1:]))
+                if stripped != target:
+                    subset = ids_for(stripped)
+                    if len(subset) == 1:
+                        return subset.pop()
+        return requested_team_id
 
     @staticmethod
     def _elo_row(fixture: HistoricalFixture) -> dict:

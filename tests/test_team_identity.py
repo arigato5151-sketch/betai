@@ -54,6 +54,8 @@ def test_stable_key_unchanged_by_year_stripping() -> None:
         ("B. Dortmund", "Dortmund"),
         ("Hamburger SV", "Hamburg"),
         ("Vitória SC", "Guimaraes"),
+        ("PEC Zwolle", "Zwolle"),
+        ("Fortuna Sittard", "For Sittard"),
     ],
 )
 def test_cross_league_name_variants_collapse(left: str, right: str) -> None:
