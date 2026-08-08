@@ -307,7 +307,7 @@ class Settings(BaseSettings):
     # Son form feature'ları için beklenen tamamlanmış maç sayısı.
     RECENT_FORM_MATCH_COUNT: int = Field(default=5, ge=1, le=20)
     # Eski yerel snapshot yerine canlı API fallback'ine geçiş eşiği.
-    HISTORICAL_FORM_MAX_AGE_DAYS: int = Field(default=45, ge=1, le=365)
+    HISTORICAL_FORM_MAX_AGE_DAYS: int = Field(default=120, ge=1, le=365)
     # Oyuncu rating kapsamı yetersizse kadro etkisi nötr kalır.
     PLAYER_IMPACT_MIN_RATED_STARTERS: int = Field(default=7, ge=1, le=11)
     PLAYER_IMPACT_LOOKBACK_MATCHES: int = Field(default=10, ge=1, le=50)
