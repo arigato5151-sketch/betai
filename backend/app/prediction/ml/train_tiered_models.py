@@ -238,11 +238,33 @@ def _market_benchmark_metrics(
     *,
     model_probabilities: np.ndarray,
 ) -> dict[str, object]:
-    """Compare Tier 1 with the market using paired holdout loss differences."""
-    columns = ("opening_away_odd", "opening_draw_odd", "opening_home_odd")
-    odds = features.loc[:, columns].apply(pd.to_numeric, errors="coerce").to_numpy()
-    if len(odds) == 0 or not np.isfinite(odds).all() or np.any(odds <= 1.0):
-        raise ValueError("Tier 1 holdout requires valid opening 1X2 odds")
+    """Compare Tier 1 with the market using paired holdout loss differences.
+
+    The closing line is the only honest benchmark. When closing 1X2 odds are
+    present and valid they are used; otherwise the benchmark falls back to the
+    opening price and the caller can treat that as weaker evidence.
+    """
+    closing_columns = ("closing_away_odd", "closing_draw_odd", "closing_home_odd")
+    opening_columns = ("opening_away_odd", "opening_draw_odd", "opening_home_odd")
+
+    def valid_odds(columns: tuple[str, ...]) -> np.ndarray | None:
+        try:
+            odds = (
+                features.loc[:, columns].apply(pd.to_numeric, errors="coerce")
+            ).to_numpy()
+        except KeyError:
+            return None
+        if len(odds) == 0 or not np.isfinite(odds).all() or np.any(odds <= 1.0):
+            return None
+        return odds
+
+    market_line = "closing"
+    odds = valid_odds(closing_columns)
+    if odds is None:
+        market_line = "opening"
+        odds = valid_odds(opening_columns)
+    if odds is None:
+        raise ValueError("Tier 1 holdout requires valid closing or opening 1X2 odds")
 
     inverse = 1.0 / odds
     market_probabilities = inverse / inverse.sum(axis=1, keepdims=True)
@@ -313,6 +335,7 @@ def _market_benchmark_metrics(
         and brier_lower_bound > 0.0
     )
     return {
+        "market_line": market_line,
         "market_accuracy": float(
             accuracy_score(actual, market_probabilities.argmax(axis=1))
         ),
@@ -371,6 +394,36 @@ def _champion_benchmark_metrics(
     }
 
 
+def _tier2_gate(target: pd.Series) -> dict[str, object]:
+    """Judge whether a Tier 2 model has enough evidence to leave research mode.
+
+    A handful of matches cannot estimate a three-class model with confidence;
+    below the configured sample and per-class floors the forecasts stay marked
+    as research-only downstream instead of being presented as decisions.
+    """
+    training_samples = int(len(target))
+    per_class_counts = {
+        str(label): int(count) for label, count in target.value_counts().items()
+    }
+    min_per_class = int(min(per_class_counts.values(), default=0))
+    minimum_samples = settings.TIERED_MIN_TIER2_SAMPLES
+    minimum_per_class = settings.TIERED_MIN_TIER2_SAMPLES_PER_CLASS
+    reasons: list[str] = []
+    if training_samples < minimum_samples:
+        reasons.append("insufficient_tier2_samples")
+    if min_per_class < minimum_per_class:
+        reasons.append("tier2_class_imbalance")
+    return {
+        "passed": not reasons,
+        "reasons": reasons,
+        "training_samples": training_samples,
+        "minimum_samples": minimum_samples,
+        "min_per_class": min_per_class,
+        "minimum_per_class": minimum_per_class,
+        "class_distribution": per_class_counts,
+    }
+
+
 def train_tiered_models(
     fixtures: Sequence[object] | None = None,
     *,
@@ -418,6 +471,7 @@ def train_tiered_models(
         )
     )
     tier2_metrics = tier2.evaluate(tier2_test_x, tier2_test_y)
+    tier2_metrics["tier2_gate"] = _tier2_gate(tier2_train_y)
     store = artifact_store or TieredModelArtifactStore()
     active_bundle = store.load_active()
     if active_bundle is not None:
@@ -434,6 +488,10 @@ def train_tiered_models(
         promotion_failures.append("opening_market")
     if tier1_metrics["beats_active_champion"] is False:
         promotion_failures.append("active_champion")
+    # Beating the stale opening line proves nothing about the sharps. Claiming
+    # market superiority therefore requires the closing line as the benchmark.
+    if tier1_metrics.get("market_line") == "opening":
+        promotion_failures.append("opening_only_benchmark")
     tier1_metrics["promotion_failures"] = promotion_failures
     if require_market_superiority and promotion_failures:
         raise ModelPromotionRejected(tier1_metrics)

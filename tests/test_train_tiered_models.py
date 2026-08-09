@@ -318,3 +318,82 @@ def test_equal_candidate_does_not_replace_signed_active_champion(
 
     assert "active_champion" in error.value.tier1_metrics["promotion_failures"]
     assert store.load_active().artifact_version == active_version
+
+
+def test_market_benchmark_prefers_closing_line_when_available() -> None:
+    sample_count = 60
+    actual = np.arange(sample_count, dtype=int) % 3
+    features = pd.DataFrame(
+        {
+            "opening_home_odd": np.full(sample_count, 2.0),
+            "opening_draw_odd": np.full(sample_count, 3.0),
+            "opening_away_odd": np.full(sample_count, 4.0),
+            "closing_home_odd": np.full(sample_count, 3.0),
+            "closing_draw_odd": np.full(sample_count, 3.0),
+            "closing_away_odd": np.full(sample_count, 3.0),
+        }
+    )
+    strong = np.full((sample_count, 3), 0.05)
+    strong[np.arange(sample_count), actual] = 0.90
+
+    metrics = _market_benchmark_metrics(
+        features, pd.Series(actual), model_probabilities=strong
+    )
+
+    # Closing 3.0/3.0/3.0 is an even market; only the opening line differs.
+    assert metrics["market_line"] == "closing"
+    assert metrics["market_accuracy"] == pytest.approx(1 / 3)
+
+    opening_only = _market_benchmark_metrics(
+        features.drop(
+            columns=["closing_home_odd", "closing_draw_odd", "closing_away_odd"]
+        ),
+        pd.Series(actual),
+        model_probabilities=strong,
+    )
+    assert opening_only["market_line"] == "opening"
+
+
+def test_opening_only_benchmark_blocks_promotion(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixtures = [
+        *(_fixture(index, rich=True) for index in range(18)),
+        *(_fixture(index + 40, rich=False) for index in range(18)),
+    ]
+    store = TieredModelArtifactStore(artifacts_dir=tmp_path)
+    monkeypatch.setattr(
+        "app.prediction.ml.train_tiered_models._market_benchmark_metrics",
+        lambda *_args, **_kwargs: {
+            "beats_opening_market": True,
+            "market_line": "opening",
+        },
+    )
+
+    with pytest.raises(ModelPromotionRejected) as error:
+        train_tiered_models(fixtures, artifact_store=store, backend="sklearn")
+
+    assert "opening_only_benchmark" in error.value.tier1_metrics["promotion_failures"]
+
+
+def test_tier2_gate_requires_samples_and_class_balance(monkeypatch) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "TIERED_MIN_TIER2_SAMPLES", 500)
+    monkeypatch.setattr(settings, "TIERED_MIN_TIER2_SAMPLES_PER_CLASS", 20)
+    target = pd.Series(["HOME_WIN"] * 10 + ["AWAY_WIN"] * 3 + ["DRAW"] * 1)
+
+    from app.prediction.ml.train_tiered_models import _tier2_gate
+
+    gate = _tier2_gate(target)
+
+    assert gate["passed"] is False
+    assert gate["reasons"] == ["insufficient_tier2_samples", "tier2_class_imbalance"]
+    assert gate["training_samples"] == 14
+    assert gate["min_per_class"] == 1
+
+    monkeypatch.setattr(settings, "TIERED_MIN_TIER2_SAMPLES", 10)
+    monkeypatch.setattr(settings, "TIERED_MIN_TIER2_SAMPLES_PER_CLASS", 1)
+    healthy = _tier2_gate(target)
+    assert healthy["passed"] is True
+    assert healthy["reasons"] == []

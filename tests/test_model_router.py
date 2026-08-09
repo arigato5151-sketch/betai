@@ -111,3 +111,44 @@ def test_tampered_signed_bundle_is_rejected(tmp_path) -> None:
 
     with pytest.raises(TieredArtifactIntegrityError, match="HMAC"):
         store.load_active()
+
+
+def test_tier2_is_research_only_until_evidence_gate_passes() -> None:
+    features = _tier2_features()
+    rejected = Predictor(
+        StubTier1Model(),
+        StubTier2Model(),
+        tier1_league_ids=frozenset({39}),
+        tier2_gate={"passed": False, "reasons": ["insufficient_tier2_samples"]},
+    )
+    accepted = Predictor(
+        StubTier1Model(),
+        StubTier2Model(),
+        tier1_league_ids=frozenset({39}),
+        tier2_gate={"passed": True, "reasons": []},
+    )
+
+    assert rejected.predict(features).research_only is True
+    assert accepted.predict(features).research_only is False
+
+
+def test_legacy_bundle_without_gate_stays_research_only(tmp_path) -> None:
+    store = TieredModelArtifactStore(artifacts_dir=tmp_path)
+    store.export(StubTier1Model(), StubTier2Model(), tier1_metrics={}, tier2_metrics={})
+
+    predictor = Predictor.from_active_artifact(store)
+
+    assert predictor.tier2_gate is None
+    assert predictor.predict(_tier1_features()).research_only is True
+    assert predictor.predict(_tier2_features()).research_only is True
+
+
+def test_tier1_from_gated_bundle_is_not_marked_research_only() -> None:
+    predictor = Predictor(
+        StubTier1Model(),
+        StubTier2Model(),
+        tier1_league_ids=frozenset({39}),
+        tier2_gate={"passed": True, "reasons": []},
+    )
+
+    assert predictor.predict(_tier1_features()).research_only is False

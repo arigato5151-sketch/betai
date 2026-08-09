@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from types import MappingProxyType
@@ -9,6 +8,9 @@ from typing import Any, Mapping
 import httpx
 
 from app.core.config import settings
+from app.core.namespaced_ids import hashed_id
+from app.core.namespaced_ids import SOURCE_ID_OFFSETS as _SOURCE_ID_OFFSETS
+from app.core.namespaced_ids import FIXTURE_DOWNLOAD_TEAM_OFFSET
 from app.core.team_identity import stable_team_name_key
 
 MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
@@ -52,12 +54,7 @@ UPCOMING_FEEDS: Mapping[int, UEFAFeed] = MappingProxyType(
 )
 
 
-def _stable_negative_id(namespace: str, natural_key: str) -> int:
-    digest = hashlib.blake2b(
-        f"{namespace}:{natural_key}".encode(), digest_size=8
-    ).digest()
-    identifier = int.from_bytes(digest, byteorder="big") & ((1 << 63) - 1)
-    return -(identifier or 1)
+FIXTURE_DOWNLOAD_FIXTURE_OFFSET = _SOURCE_ID_OFFSETS["fixture_download"]
 
 
 class FixtureDownloadClient:
@@ -187,17 +184,23 @@ class FixtureDownloadClient:
             natural_keys.add(natural_key)
             fixtures.append(
                 {
-                    "fixture_id": _stable_negative_id(
-                        "fixture-download-fixture", natural_key
+                    "fixture_id": hashed_id(
+                        "fixture-download-fixture",
+                        natural_key,
+                        FIXTURE_DOWNLOAD_FIXTURE_OFFSET,
                     ),
                     "league_id": league_id,
                     "season": season,
                     "kickoff": kickoff,
-                    "home_team_id": _stable_negative_id(
-                        "fixture-download-team", home_key
+                    "home_team_id": hashed_id(
+                        "fixture-download-team",
+                        home_key,
+                        FIXTURE_DOWNLOAD_TEAM_OFFSET,
                     ),
-                    "away_team_id": _stable_negative_id(
-                        "fixture-download-team", away_key
+                    "away_team_id": hashed_id(
+                        "fixture-download-team",
+                        away_key,
+                        FIXTURE_DOWNLOAD_TEAM_OFFSET,
                     ),
                     "home_team": home[:100],
                     "away_team": away[:100],
@@ -259,17 +262,23 @@ class FixtureDownloadClient:
             natural_keys.add(natural_key)
             fixtures.append(
                 {
-                    "fixture_id": _stable_negative_id(
-                        "fixture-download-fixture", natural_key
+                    "fixture_id": hashed_id(
+                        "fixture-download-fixture",
+                        natural_key,
+                        FIXTURE_DOWNLOAD_FIXTURE_OFFSET,
                     ),
                     "league_id": league_id,
                     "season": season,
                     "kickoff": kickoff,
-                    "home_team_id": _stable_negative_id(
-                        "fixture-download-team", home_key
+                    "home_team_id": hashed_id(
+                        "fixture-download-team",
+                        home_key,
+                        FIXTURE_DOWNLOAD_TEAM_OFFSET,
                     ),
-                    "away_team_id": _stable_negative_id(
-                        "fixture-download-team", away_key
+                    "away_team_id": hashed_id(
+                        "fixture-download-team",
+                        away_key,
+                        FIXTURE_DOWNLOAD_TEAM_OFFSET,
                     ),
                     "home_team": home[:100],
                     "away_team": away[:100],

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import MappingProxyType
@@ -10,6 +9,11 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.core.config import settings
+from app.core.namespaced_ids import (
+    OPENFOOTBALL_FIXTURE_OFFSET,
+    OPENFOOTBALL_TEAM_OFFSET,
+    hashed_id,
+)
 from app.core.team_identity import stable_team_name_key
 
 MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
@@ -45,14 +49,6 @@ OPENFOOTBALL_LEAGUES: Mapping[int, OpenFootballLeague] = MappingProxyType(
         )
     }
 )
-
-
-def _stable_negative_id(namespace: str, natural_key: str) -> int:
-    digest = hashlib.blake2b(
-        f"{namespace}:{natural_key}".encode("utf-8"), digest_size=8
-    ).digest()
-    identifier = int.from_bytes(digest, byteorder="big") & ((1 << 63) - 1)
-    return -(identifier or 1)
 
 
 def _score_pair(value: object) -> tuple[int, int] | None:
@@ -181,14 +177,18 @@ class OpenFootballJSONClient:
             )
             fixtures.append(
                 {
-                    "fixture_id": _stable_negative_id(
-                        "openfootball-fixture", natural_key
+                    "fixture_id": hashed_id(
+                        "openfootball-fixture", natural_key, OPENFOOTBALL_FIXTURE_OFFSET
                     ),
                     "league_id": league.league_id,
                     "season": season,
                     "kickoff": kickoff,
-                    "home_team_id": _stable_negative_id("openfootball-team", home_key),
-                    "away_team_id": _stable_negative_id("openfootball-team", away_key),
+                    "home_team_id": hashed_id(
+                        "openfootball-team", home_key, OPENFOOTBALL_TEAM_OFFSET
+                    ),
+                    "away_team_id": hashed_id(
+                        "openfootball-team", away_key, OPENFOOTBALL_TEAM_OFFSET
+                    ),
                     "home_team": home[:100],
                     "away_team": away[:100],
                     "home_goals": home_score,

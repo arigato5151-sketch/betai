@@ -3,6 +3,10 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
+from app.core.namespaced_ids import (
+    FOOTBALL_DATA_FIXTURE_OFFSET,
+    FOOTBALL_DATA_TEAM_OFFSET,
+)
 from app.core.team_identity import normalize_team_name, stable_team_name_key
 from app.services.football_data_csv import (
     FOOTBALL_DATA_LEAGUE_IDS,
@@ -42,9 +46,9 @@ async def test_standard_feed_is_normalized_with_stable_external_ids() -> None:
     assert first.skipped_rows == 1
     assert len(first.fixtures) == 1
     fixture = first.fixtures[0]
-    assert fixture["fixture_id"] < -(1 << 31)
-    assert fixture["home_team_id"] < -(1 << 31)
-    assert fixture["away_team_id"] < -(1 << 31)
+    assert FOOTBALL_DATA_FIXTURE_OFFSET < fixture["fixture_id"]
+    assert FOOTBALL_DATA_TEAM_OFFSET < fixture["home_team_id"]
+    assert FOOTBALL_DATA_TEAM_OFFSET < fixture["away_team_id"]
     assert fixture["kickoff"] == datetime(2025, 8, 8, 18, 30, tzinfo=UTC)
     assert fixture["actual_result"] == "HOME_WIN"
     assert fixture["data_source"] == "football_data_csv"

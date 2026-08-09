@@ -624,7 +624,7 @@ class BacktestRequest(BaseModel):
         15.0, gt=0, le=100, description="Maximum daily bankroll exposure"
     )
     require_closing_odds: bool = Field(
-        False, description="Skip records without a valid closing price"
+        True, description="Settle at closing price and skip records without one"
     )
     exclude_post_kickoff: bool = Field(
         True, description="Exclude analyses generated at or after kickoff"
@@ -644,6 +644,44 @@ class BacktestRequest(BaseModel):
         if v not in valid:
             raise ValueError(f"Strategy must be one of {valid}")
         return v
+
+
+def _market_settlement_price(
+    market: object, analysis: Mapping[str, object]
+) -> float | None:
+    """Return the single honest settlement price for a recorded forecast.
+
+    A bet may only be priced from a real market snapshot, never from a price
+    typed into the form. When no market exists nothing is recorded as a price,
+    so fabricated odds cannot leak into audits or backtests as realized profit.
+    """
+    if not isinstance(market, Mapping):
+        return None
+    raw_odds = market.get("raw_odds")
+    if not isinstance(raw_odds, Mapping):
+        return None
+
+    def valid(value: object) -> float | None:
+        if not isinstance(value, (int, float, str)) or isinstance(value, bool):
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if math.isfinite(parsed) and parsed > 1.0 else None
+
+    prediction = analysis.get("prediction")
+    selected = valid(raw_odds.get(prediction)) if prediction is not None else None
+    if selected is not None:
+        return round(selected, 4)
+    available = [
+        candidate
+        for outcome in raw_odds
+        if (candidate := valid(raw_odds[outcome])) is not None
+    ]
+    if not available:
+        return None
+    return round(min(available), 4)
 
 
 def _build_payload_from_prefill(prefill: Dict[str, Any]) -> AnalysisRequest:
@@ -1342,8 +1380,6 @@ async def _compute_analysis(
         market=payload.market_1x2,
         league_id=payload.league_id,
     )
-    decision_recommendation = PredictionDecisionPolicy.evaluate(analysis)
-    analysis["decision"] = decision_recommendation
     # Value must be estimated from a market-independent forecast. Blending the
     # market into the forecast and comparing it back to the same market is circular.
     value_analysis = ProbabilityEnsembler.apply(
@@ -1360,9 +1396,30 @@ async def _compute_analysis(
     )
     value_data["probability_source"] = "market_independent_stats_ml_ensemble"
     value_data["evaluation_probabilities"] = value_analysis["all_probabilities"]
+    # The decision recommendation is only a decision when a live market price
+    # confirms a real edge; a confident forecast without a market stays research.
+    decision_recommendation = PredictionDecisionPolicy.evaluate(
+        analysis,
+        market_edge_pct=None if payload.market_1x2 is None else value_data.get("edge"),
+        market_implied_pct=(
+            None
+            if payload.market_1x2 is None
+            else value_data.get("implied_probability")
+        ),
+        require_market=True,
+    )
+    analysis["decision"] = decision_recommendation
     financial_decision = financial_recommendation_service.evaluate()
     value_data["recommendation_evidence"] = financial_decision
-    if financial_decision.get("eligible") is not True:
+    # Without a live 1X2 price there is nothing to hold the model to account
+    # against, so the bet signal must stay research-only even if past audits
+    # passed. A missing market is never a recommendation to act.
+    market_unavailable = payload.market_1x2 is None
+    if market_unavailable:
+        value_data = ValueCalc.suppress_financial_recommendations(
+            value_data, reason="market_unavailable"
+        )
+    elif financial_decision.get("eligible") is not True:
         reasons = financial_decision.get("reasons")
         reason = (
             str(reasons[0])
@@ -1679,7 +1736,7 @@ def _persist_analysis(
         "prob_home": probs["HOME_WIN"],
         "prob_away": probs["AWAY_WIN"],
         "prob_draw": probs["DRAW"],
-        "odd": payload.odd,
+        "odd": _market_settlement_price(payload.market_1x2, analysis),
         "edge": value_data["edge"],
         "is_value_bet": 1 if value_data["value_bet"] else 0,
         "kelly_stake": best_pick.get("kelly_stake_pct"),
@@ -1852,6 +1909,23 @@ def get_tiered_predictor() -> Predictor:
     return get_active_tiered_predictor()
 
 
+def _tiered_gate_evidence(predictor: Predictor) -> dict[str, object] | None:
+    """Drop the Tier 2 evidence gate from the router without leaking internals."""
+    tier2_gate = getattr(predictor, "tier2_gate", None)
+    if not isinstance(tier2_gate, dict):
+        return None
+    trusted_keys = (
+        "passed",
+        "reasons",
+        "training_samples",
+        "minimum_samples",
+        "min_per_class",
+        "minimum_per_class",
+        "class_distribution",
+    )
+    return {key: tier2_gate.get(key) for key in trusted_keys if key in tier2_gate}
+
+
 @router.post(
     "/predict/tiered",
     dependencies=[Depends(require_permission("audit:read"))],
@@ -1899,6 +1973,8 @@ def predict_with_tiered_model(
         "decision_reasons": decision["reasons"],
         "uncertainty": decision,
         "artifact_version": prediction.artifact_version,
+        "research_only": prediction.research_only,
+        "tier2_gate": _tiered_gate_evidence(predictor),
     }
 
 
@@ -2134,7 +2210,7 @@ def run_backtest(body: BacktestRequest, db: Session = Depends(get_db)):
     repo = MatchPredictionRepository(db)
     predictions = repo.get_all_auditable()
 
-    return BacktestEngine.run_simulation(
+    result = BacktestEngine.run_simulation(
         predictions=predictions,
         initial_bankroll=body.initial_bankroll,
         strategy=body.strategy,
@@ -2147,6 +2223,30 @@ def run_backtest(body: BacktestRequest, db: Session = Depends(get_db)):
         require_closing_odds=body.require_closing_odds,
         exclude_post_kickoff=body.exclude_post_kickoff,
     )
+
+    minimum_bets = settings.AUDIT_MIN_CLOSING_SAMPLES
+    minimum_roi_pct = settings.AUDIT_MIN_CLOSING_ROI_PCT
+    gate_reasons: list[str] = []
+    gate = False
+    if not body.require_closing_odds:
+        gate_reasons.append("closing_reference_not_enforced")
+    if result["total_bets"] < minimum_bets:
+        gate_reasons.append("insufficient_closing_odds_bets")
+    if result["total_roi_pct"] < minimum_roi_pct:
+        gate_reasons.append("closing_roi_below_threshold")
+    if not gate_reasons:
+        gate = True
+    result["closing_gate"] = {
+        "passed": gate,
+        "reasons": gate_reasons,
+        "closing_bets": result["total_bets"],
+        "closing_roi_pct": result["total_roi_pct"],
+        "minimum_bets": minimum_bets,
+        "minimum_roi_pct": minimum_roi_pct,
+        "evidence": "financial signals stay disabled until the closing-odds "
+        "backtest is both large enough and positive.",
+    }
+    return result
 
 
 @router.get("/audit", dependencies=[Depends(require_permission("audit:read"))])

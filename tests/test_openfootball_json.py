@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
+from app.core.namespaced_ids import OPENFOOTBALL_FIXTURE_OFFSET
 from app.services.openfootball_json import (
     OpenFootballFormatError,
     OpenFootballJSONClient,
@@ -53,7 +54,7 @@ async def test_greek_super_league_results_are_normalized() -> None:
     assert rows[0]["actual_result"] == "HOME_WIN"
     assert rows[0]["half_time_home_goals"] == 0
     assert rows[0]["data_source"] == "openfootball_json"
-    assert rows[0]["fixture_id"] < 0
+    assert OPENFOOTBALL_FIXTURE_OFFSET < rows[0]["fixture_id"]
 
 
 @pytest.mark.asyncio

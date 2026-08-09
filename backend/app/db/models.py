@@ -284,6 +284,10 @@ class MatchPrediction(Base):
 
     roi: Mapped[float | None] = mapped_column(Float, nullable=True)
     closing_odds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    closing_odds_snapshot_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    closing_odds_snapshot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     clv: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     created_at: Mapped[datetime.datetime | None] = mapped_column(

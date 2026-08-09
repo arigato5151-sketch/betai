@@ -60,7 +60,23 @@ class PredictionDecisionPolicy:
         )
 
     @classmethod
-    def evaluate(cls, analysis: Mapping[str, object]) -> dict[str, object]:
+    def evaluate(
+        cls,
+        analysis: Mapping[str, object],
+        *,
+        market_edge_pct: float | None = None,
+        market_implied_pct: float | None = None,
+        market_min_edge_pct: float | None = None,
+        require_market: bool = False,
+    ) -> dict[str, object]:
+        """Separate a probability forecast from a decision-grade recommendation.
+
+        ``market_edge_pct`` ties the recommendation to an actual price. When
+        ``require_market`` is set the forecast may only count as a decision once
+        a live market clears the requested edge; otherwise it is demoted to
+        research-only. Callers that only need a forecast grade skip the market
+        requirement and keep the pure probability decision.
+        """
         probabilities = cls._normalize(analysis.get("all_probabilities"))
         if probabilities is None:
             return {
@@ -108,7 +124,30 @@ class PredictionDecisionPolicy:
         ):
             reasons.append("prediction_sources_diverge")
 
-        status = "abstain" if reasons else "eligible"
+        market_validation = cls._validate_market(
+            market_edge_pct=market_edge_pct,
+            market_implied_pct=market_implied_pct,
+            market_min_edge_pct=market_min_edge_pct,
+            top_probability_pct=top_probability_pct,
+        )
+        if reasons:
+            status = "abstain"
+        elif (
+            require_market
+            and market_validation["present"]
+            and market_validation["passed"]
+        ):
+            status = "eligible"
+        elif require_market:
+            reasons.append(
+                "market_unavailable"
+                if not market_validation["present"]
+                else "market_edge_insufficient"
+            )
+            status = "research"
+        else:
+            status = "eligible"
+
         confidence_tier = (
             "low"
             if reasons
@@ -127,4 +166,46 @@ class PredictionDecisionPolicy:
             "normalized_entropy": round(entropy, 6),
             "max_source_js_divergence": round(max_source_jsd, 6),
             "source_count": len(normalized_sources),
+            "market_validation": market_validation,
+        }
+
+    @classmethod
+    def _validate_market(
+        cls,
+        *,
+        market_edge_pct: float | None,
+        market_implied_pct: float | None,
+        market_min_edge_pct: float | None,
+        top_probability_pct: float,
+    ) -> dict[str, object]:
+        if market_edge_pct is None:
+            return {
+                "present": False,
+                "edge_pct": None,
+                "implied_pct": market_implied_pct,
+                "min_edge_pct": None,
+                "passed": None,
+            }
+        minimum_edge = (
+            market_min_edge_pct
+            if market_min_edge_pct is not None
+            else settings.DECISION_MIN_MARKET_EDGE_PCT
+        )
+        passed = market_edge_pct >= minimum_edge and (
+            market_implied_pct is None
+            or top_probability_pct
+            > market_implied_pct + settings.DECISION_EDGE_MARGIN_PCT
+        )
+        return {
+            "present": True,
+            "edge_pct": round(float(market_edge_pct), 2),
+            "implied_pct": market_implied_pct,
+            "min_edge_pct": minimum_edge,
+            "cleared_vs_implied": (
+                top_probability_pct
+                > (float(market_implied_pct) + settings.DECISION_EDGE_MARGIN_PCT)
+                if market_implied_pct is not None
+                else True
+            ),
+            "passed": bool(passed),
         }

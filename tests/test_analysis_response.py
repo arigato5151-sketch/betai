@@ -17,6 +17,7 @@ from app.api.endpoints import (
     _fetch_ml_match_data,
     _fetch_player_rating_data,
     _is_training_eligible,
+    _market_settlement_price,
     _select_reference_lineup,
 )
 from app.core.config import settings
@@ -1169,6 +1170,49 @@ async def test_value_evaluation_excludes_market_from_ensemble_probabilities(
     assert computed["analysis"]["ensemble"]["applied"] is True
 
 
+@pytest.mark.asyncio
+async def test_analysis_without_market_stays_research_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    monkeypatch.setattr(
+        endpoints.StatsEngine,
+        "analyze_match",
+        lambda *_args, **_kwargs: {
+            "model": "stats_test",
+            "prediction": "DRAW",
+            "probability": 40.0,
+            "all_probabilities": {
+                "HOME_WIN": 30.0,
+                "DRAW": 40.0,
+                "AWAY_WIN": 30.0,
+            },
+            "confidence_gap": 0.0,
+            "confidence_tier": "DUSUK",
+        },
+    )
+    payload = AnalysisRequest(
+        home_team="Home",
+        away_team="Away",
+        home_stats={"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
+        away_stats={"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        odd=2.0,
+    )
+
+    computed = await _compute_analysis(payload)
+
+    # No live 1X2 price means no market to hold the forecast against: the bet
+    # signal must be suppressed even if past audits would have permitted it.
+    assert computed["value_data"]["recommendation_status"] == "disabled"
+    assert computed["value_data"]["recommendation_reason"] == "market_unavailable"
+    assert computed["value_data"]["value_bet"] is False
+    assert computed["value_data"]["market_status"] in {
+        "market_unavailable",
+        "incomplete_1x2_market",
+    }
+
+
 def _eligible_computed() -> dict:
     return {
         "data_quality": {
@@ -1235,6 +1279,33 @@ def test_training_eligible_rejects_feature_overrides() -> None:
     payload = _base_payload()
     payload.feature_overrides = {"form": 99.0}
     assert _is_training_eligible(_eligible_computed(), payload, "automatic") is False
+
+
+def test_settlement_price_uses_market_not_form_odd() -> None:
+    result = _market_settlement_price(
+        {"raw_odds": {"home": 2.5, "draw": 3.2, "away": 3.4}},
+        {"prediction": "home"},
+    )
+    assert result == 2.5
+
+
+def test_settlement_price_falls_back_to_cheapest_market_odd() -> None:
+    result = _market_settlement_price(
+        {"raw_odds": {"home": 2.5, "draw": 3.2}},
+        {"prediction": "unknown_outcome"},
+    )
+    assert result == 2.5
+
+
+def test_settlement_price_none_without_market() -> None:
+    assert _market_settlement_price(None, {"prediction": "home"}) is None
+    assert _market_settlement_price({}, {"prediction": "home"}) is None
+    assert (
+        _market_settlement_price(
+            {"raw_odds": {"home": 0.9}}, {"prediction": "home"}
+        )
+        is None
+    )
 
 
 def test_training_eligible_rejects_unhealthy_prediction() -> None:

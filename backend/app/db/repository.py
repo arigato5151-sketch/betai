@@ -222,6 +222,8 @@ class MatchPredictionRepository:
         roi: Optional[float] = None,
         clv: Optional[float] = None,
         closing_odds: Optional[float] = None,
+        closing_odds_snapshot_at: Optional[datetime] = None,
+        closing_odds_snapshot_id: Optional[int] = None,
         verification_status: str = "manual",
         result_source: Optional[str] = None,
         result_provider_fixture_id: Optional[str] = None,
@@ -273,6 +275,10 @@ class MatchPredictionRepository:
             record.clv = clv
         if closing_odds is not None:
             record.closing_odds = closing_odds
+        if closing_odds_snapshot_at is not None:
+            record.closing_odds_snapshot_at = closing_odds_snapshot_at
+        if closing_odds_snapshot_id is not None:
+            record.closing_odds_snapshot_id = closing_odds_snapshot_id
         record.result_verification_status = verification_status
         record.result_source = result_source[:50] if result_source else None
         record.result_provider_fixture_id = (

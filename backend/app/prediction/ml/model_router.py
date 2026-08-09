@@ -33,6 +33,7 @@ class TieredModelBundle:
     artifact_version: str
     trained_at: str
     metadata: dict[str, object]
+    tier2_gate: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class RoutedPrediction:
     tier: str
     probabilities: tuple[float, float, float]
     artifact_version: str | None
+    research_only: bool = True
 
 
 class TieredModelArtifactStore:
@@ -95,12 +97,16 @@ class TieredModelArtifactStore:
         self.versions_dir.mkdir(parents=True, exist_ok=True)
         version = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         trained_at = datetime.now(UTC).isoformat()
+        raw_tier2_gate = tier2_metrics.get("tier2_gate")
         bundle_metadata = {
             **dict(metadata or {}),
             "tier1_features": list(tier1_model.FEATURES),
             "tier2_features": list(tier2_model.FEATURES),
             "tier1_metrics": dict(tier1_metrics),
             "tier2_metrics": dict(tier2_metrics),
+            "tier2_gate": (
+                dict(raw_tier2_gate) if isinstance(raw_tier2_gate, Mapping) else {}
+            ),
         }
         payload = {
             "schema_version": self.SCHEMA_VERSION,
@@ -214,8 +220,13 @@ class TieredModelArtifactStore:
             raise TieredArtifactIntegrityError(
                 "Tiered artifact feature schema is incompatible"
             )
+        tier2_gate = metadata.get("tier2_gate")
+        if not isinstance(tier2_gate, dict) or not tier2_gate:
+            # Empty or absent gate evidence means the bundle predates the Tier 2
+            # evidence floor and must be treated conservatively, not trusted.
+            tier2_gate = None
         return TieredModelBundle(
-            tier1_model, tier2_model, version, trained_at, metadata
+            tier1_model, tier2_model, version, trained_at, metadata, tier2_gate
         )
 
 
@@ -229,11 +240,13 @@ class Predictor:
         *,
         artifact_version: str | None = None,
         tier1_league_ids: frozenset[int] = FOOTBALL_DATA_LEAGUE_IDS,
+        tier2_gate: Mapping[str, object] | None = None,
     ) -> None:
         self.tier1_model = tier1_model
         self.tier2_model = tier2_model
         self.artifact_version = artifact_version
         self.tier1_league_ids = tier1_league_ids
+        self.tier2_gate = dict(tier2_gate) if tier2_gate else None
 
     @classmethod
     def from_active_artifact(cls, store: TieredModelArtifactStore) -> "Predictor":
@@ -244,6 +257,7 @@ class Predictor:
             bundle.tier1_model,
             bundle.tier2_model,
             artifact_version=bundle.artifact_version,
+            tier2_gate=bundle.tier2_gate,
         )
 
     def predict(self, features: Mapping[str, object]) -> RoutedPrediction:
@@ -261,6 +275,15 @@ class Predictor:
             raise ValueError("Selected model returned invalid 1X2 probabilities")
         if not np.isclose(probabilities[0].sum(), 1.0, atol=1e-6):
             raise ValueError("Selected model probabilities must sum to one")
+        research_only = True
+        if self.tier2_gate is not None:
+            # A modern bundle proves Tier 1 superiority against the closing
+            # line at promotion time; Tier 2 stays research-only until the
+            # evidence floors are met. Legacy bundles without the gate record
+            # are treated conservatively as research-only as well.
+            research_only = (
+                False if tier == "tier1" else self.tier2_gate.get("passed") is not True
+            )
         return RoutedPrediction(
             tier=tier,
             probabilities=(
@@ -269,6 +292,7 @@ class Predictor:
                 float(probabilities[0, 2]),
             ),
             artifact_version=self.artifact_version,
+            research_only=research_only,
         )
 
     @staticmethod

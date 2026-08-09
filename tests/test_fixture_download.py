@@ -3,6 +3,10 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
+from app.core.namespaced_ids import (
+    FIXTURE_DOWNLOAD_FIXTURE_OFFSET,
+    FIXTURE_DOWNLOAD_TEAM_OFFSET,
+)
 from app.services.fixture_download import (
     FixtureDownloadClient,
     FixtureDownloadFormatError,
@@ -50,8 +54,8 @@ async def test_completed_uefa_fixtures_are_normalized() -> None:
     assert len(fixtures) == 1
     assert fixtures[0]["actual_result"] == "AWAY_WIN"
     assert fixtures[0]["data_source"] == "fixture_download"
-    assert fixtures[0]["fixture_id"] < 0
-    assert fixtures[0]["home_team_id"] < 0
+    assert FIXTURE_DOWNLOAD_FIXTURE_OFFSET < fixtures[0]["fixture_id"]
+    assert FIXTURE_DOWNLOAD_TEAM_OFFSET < fixtures[0]["home_team_id"]
 
 
 @pytest.mark.asyncio
@@ -120,4 +124,4 @@ async def test_upcoming_league_feed_keeps_only_requested_date_range() -> None:
     assert len(fixtures) == 1
     assert fixtures[0]["home_team"] == "Lorient"
     assert fixtures[0]["status"] == "NS"
-    assert fixtures[0]["fixture_id"] < 0
+    assert FIXTURE_DOWNLOAD_FIXTURE_OFFSET < fixtures[0]["fixture_id"]

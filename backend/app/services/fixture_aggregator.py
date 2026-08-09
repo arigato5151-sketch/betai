@@ -12,6 +12,7 @@ import httpx
 from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS, LEAGUE_PRIORITY
 from app.core.config import settings
 from app.core.team_identity import normalize_team_name, stable_team_name_key
+from app.core.namespaced_ids import FIXTURE_DOWNLOAD_TEAM_OFFSET
 from app.providers.openligadb import ID_OFFSET as OPENLIGADB_ID_OFFSET
 from app.providers.openligadb import OpenLigaDBClient
 from app.services.api_football import APIFootballClient
@@ -174,6 +175,17 @@ def _hashed_provider_id(value: object, source: str) -> int | None:
     except (TypeError, ValueError):
         return None
     return _positive_id((raw_id % MAX_PROVIDER_ID) or 1, source)
+
+
+def _namespaced_passthrough(value: object, offset: int) -> int | None:
+    """Accept an id already in the canonical namespaced range, else None."""
+    try:
+        namespaced_id = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    if not offset < namespaced_id <= offset + MAX_PROVIDER_ID:
+        return None
+    return namespaced_id
 
 
 def _provider_fixture_id(fixture_id: object, source: object) -> str | None:
@@ -500,9 +512,17 @@ class FixtureDownloadFixtureSource:
             or not away
         ):
             return {}
-        fixture_id = _hashed_provider_id(item.get("fixture_id"), "fixture_download")
-        home_team_id = _hashed_provider_id(item.get("home_team_id"), "fixture_download")
-        away_team_id = _hashed_provider_id(item.get("away_team_id"), "fixture_download")
+        fixture_id = _namespaced_passthrough(
+            item.get("fixture_id"), SOURCE_ID_OFFSETS["fixture_download"]
+        )
+        if fixture_id is None:
+            fixture_id = _hashed_provider_id(item.get("fixture_id"), "fixture_download")
+        home_team_id = _namespaced_passthrough(
+            item.get("home_team_id"), FIXTURE_DOWNLOAD_TEAM_OFFSET
+        )
+        away_team_id = _namespaced_passthrough(
+            item.get("away_team_id"), FIXTURE_DOWNLOAD_TEAM_OFFSET
+        )
         if fixture_id is None:
             return {}
         return _fixture_row(

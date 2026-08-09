@@ -1649,6 +1649,12 @@ def _sync_completed_matches(
                     if closing_odd is not None
                     else None
                 )
+                closing_odd_snapshot_at = (
+                    closing_snapshot.captured_at if closing_snapshot is not None else None
+                )
+                closing_odd_snapshot_id = (
+                    closing_snapshot.id if closing_snapshot is not None else None
+                )
 
                 # Persist verified audit metrics to db
                 repo.update_result(
@@ -1659,6 +1665,8 @@ def _sync_completed_matches(
                     roi=roi,
                     clv=clv,
                     closing_odds=closing_odd,
+                    closing_odds_snapshot_at=closing_odd_snapshot_at,
+                    closing_odds_snapshot_id=closing_odd_snapshot_id,
                     verification_status="verified",
                     result_source=verified.source,
                     result_provider_fixture_id=verified.provider_fixture_id,

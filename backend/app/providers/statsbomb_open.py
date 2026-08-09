@@ -7,11 +7,25 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.core.namespaced_ids import (
+    STATSBOMB_FIXTURE_OFFSET as FIXTURE_ID_OFFSET,
+    STATSBOMB_PLAYER_OFFSET as PLAYER_ID_OFFSET,
+    STATSBOMB_TEAM_OFFSET as TEAM_ID_OFFSET,
+)
 
 MAX_PAYLOAD_BYTES = 12 * 1024 * 1024
-FIXTURE_ID_OFFSET = 8_000_000_000
-TEAM_ID_OFFSET = 8_500_000_000
-PLAYER_ID_OFFSET = 9_000_000_000
+
+
+def _namespaced_id(offset: int, value: object) -> int | None:
+    try:
+        source_id = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    if source_id <= 0 or source_id > 1_000_000_000:
+        return None
+    return offset + source_id
+
+
 COMPETITION_LEAGUES = {
     2: 39,  # Premier League
     7: 61,  # Ligue 1
@@ -25,16 +39,6 @@ COMPETITION_LEAGUES = {
 
 class StatsBombOpenDataError(RuntimeError):
     """Raised when the public StatsBomb repository returns invalid data."""
-
-
-def _negative_id(offset: int, value: object) -> int | None:
-    try:
-        source_id = int(str(value))
-    except (TypeError, ValueError):
-        return None
-    if source_id <= 0 or source_id > 1_000_000_000:
-        return None
-    return -(offset + source_id)
 
 
 class StatsBombOpenDataClient:
@@ -183,9 +187,9 @@ class StatsBombOpenDataClient:
             return {}
         league_id = COMPETITION_LEAGUES.get(competition_id)
         provider_match_id = raw.get("match_id")
-        fixture_id = _negative_id(FIXTURE_ID_OFFSET, provider_match_id)
-        home_team_id = _negative_id(TEAM_ID_OFFSET, home_data.get("home_team_id"))
-        away_team_id = _negative_id(TEAM_ID_OFFSET, away_data.get("away_team_id"))
+        fixture_id = _namespaced_id(FIXTURE_ID_OFFSET, provider_match_id)
+        home_team_id = _namespaced_id(TEAM_ID_OFFSET, home_data.get("home_team_id"))
+        away_team_id = _namespaced_id(TEAM_ID_OFFSET, away_data.get("away_team_id"))
         home_goals = raw.get("home_score")
         away_goals = raw.get("away_score")
         try:
@@ -331,7 +335,7 @@ class StatsBombOpenDataClient:
                         if isinstance(item, dict)
                         and isinstance(item.get("player"), dict)
                         and (
-                            player_id := _negative_id(
+                            player_id := _namespaced_id(
                                 PLAYER_ID_OFFSET, item["player"].get("id")
                             )
                         )

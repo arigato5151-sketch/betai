@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import hashlib
 import io
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,6 +12,11 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.core.config import settings
+from app.core.namespaced_ids import (
+    FOOTBALL_DATA_FIXTURE_OFFSET,
+    FOOTBALL_DATA_TEAM_OFFSET,
+    hashed_id,
+)
 from app.core.team_identity import stable_team_name_key
 
 
@@ -120,15 +124,6 @@ _CLOSING_ODDS_TRIPLETS = (
     ("BFDCH", "BFDCD", "BFDCA"),
     ("MaxCH", "MaxCD", "MaxCA"),
 )
-
-
-def _stable_negative_id(namespace: str, natural_key: str) -> int:
-    digest = hashlib.blake2b(
-        f"{namespace}:{natural_key}".encode("utf-8"), digest_size=8
-    ).digest()
-    # Keep the value in PostgreSQL's signed BIGINT range and away from API IDs.
-    identifier = int.from_bytes(digest, byteorder="big") & ((1 << 63) - 1)
-    return -(identifier or 1)
 
 
 class FootballDataCSVClient:
@@ -298,11 +293,17 @@ class FootballDataCSVClient:
                 f"{league.division}:{season}:{kickoff.isoformat()}:"
                 f"{home_key}:{away_key}"
             )
-            fixture_id = _stable_negative_id(
-                "football-data-fixture", natural_fixture_key
+            fixture_id = hashed_id(
+                "football-data-fixture",
+                natural_fixture_key,
+                FOOTBALL_DATA_FIXTURE_OFFSET,
             )
-            home_team_id = _stable_negative_id("football-data-team", home_key)
-            away_team_id = _stable_negative_id("football-data-team", away_key)
+            home_team_id = hashed_id(
+                "football-data-team", home_key, FOOTBALL_DATA_TEAM_OFFSET
+            )
+            away_team_id = hashed_id(
+                "football-data-team", away_key, FOOTBALL_DATA_TEAM_OFFSET
+            )
             self._assert_no_collision(
                 fixture_keys_by_id, fixture_id, natural_fixture_key
             )

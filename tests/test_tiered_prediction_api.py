@@ -105,8 +105,17 @@ def test_endpoint_routes_data_rich_league_to_tier1() -> None:
             "normalized_entropy": 0.853474,
             "max_source_js_divergence": 0.0,
             "source_count": 0,
+            "market_validation": {
+                "present": False,
+                "edge_pct": None,
+                "implied_pct": None,
+                "min_edge_pct": None,
+                "passed": None,
+            },
         },
         "artifact_version": None,
+        "research_only": True,
+        "tier2_gate": None,
     }
     assert tier1.calls == 1
     assert tier2.calls == 0
@@ -188,3 +197,37 @@ def test_endpoint_rejects_nested_league_override() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_endpoint_marks_market_inferior_tier2_as_research_only() -> None:
+    predictor = Predictor(
+        StubTier1Model(),
+        StubTier2Model(),
+        tier1_league_ids=frozenset({39}),
+        tier2_gate={
+            "passed": False,
+            "reasons": ["insufficient_tier2_samples", "tier2_class_imbalance"],
+            "training_samples": 14,
+            "minimum_samples": 500,
+            "min_per_class": 3,
+            "minimum_per_class": 20,
+        },
+    )
+
+    response = _make_client(predictor).post(
+        "/predict/tiered",
+        json={"league_id": 39, "features": _tier2_features()},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["used_tier"] == "Tier 2"
+    assert body["research_only"] is True
+    assert body["tier2_gate"] == {
+        "passed": False,
+        "reasons": ["insufficient_tier2_samples", "tier2_class_imbalance"],
+        "training_samples": 14,
+        "minimum_samples": 500,
+        "min_per_class": 3,
+        "minimum_per_class": 20,
+    }

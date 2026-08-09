@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import random
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from app.core.allowed_leagues import ALLOWED_LEAGUES
@@ -10,6 +11,12 @@ from app.core.config import settings
 from app.db.models import MatchPrediction
 
 OUTCOMES = ("HOME_WIN", "DRAW", "AWAY_WIN")
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 class PredictionAuditor:
@@ -146,6 +153,28 @@ class PredictionAuditor:
         )
 
     @classmethod
+    def closing_snapshot_age_hours(cls, prediction: MatchPrediction) -> float | None:
+        """Hours between the closing snapshot and kickoff.
+
+        Positive values mean the snapshot pre-dated kickoff (genuine closing
+        evidence); None when provenance is absent (pre-2.2 rows).
+        """
+        kickoff = prediction.kickoff
+        captured = prediction.closing_odds_snapshot_at
+        if kickoff is None or captured is None:
+            return None
+        kickoff_utc = _utc(kickoff)
+        captured_utc = _utc(captured)
+        return (kickoff_utc - captured_utc).total_seconds() / 3600.0
+
+    @classmethod
+    def _is_fresh_closing_evidence(cls, prediction: MatchPrediction) -> bool:
+        age_hours = cls.closing_snapshot_age_hours(prediction)
+        if age_hours is None:
+            return True
+        return 0.0 <= age_hours <= settings.AUDIT_MAX_CLOSING_ODDS_AGE_HOURS
+
+    @classmethod
     def audit_predictions(
         cls,
         predictions: list[MatchPrediction],
@@ -189,9 +218,44 @@ class PredictionAuditor:
             if prediction.closing_odds is not None
             and math.isfinite(prediction.closing_odds)
             and prediction.closing_odds > 1.0
+            and cls._is_fresh_closing_evidence(prediction)
+        ]
+        # Closing is the only honest reference: realized unit-stake profit when
+        # every bet is settled at its closing price instead of the stale price
+        # that triggered the (often illusionary) edge.
+        closing_candidates = [
+            prediction
+            for prediction in valid_bets
+            if prediction.closing_odds is not None
+            and math.isfinite(prediction.closing_odds)
+            and prediction.closing_odds > 1.0
+        ]
+        stale_closing = [
+            prediction
+            for prediction in closing_candidates
+            if not cls._is_fresh_closing_evidence(prediction)
+        ]
+        closing_provenance_missing = [
+            prediction
+            for prediction in closing_candidates
+            if cls.closing_snapshot_age_hours(prediction) is None
+        ]
+        closing_profits = [
+            cls.calculate_bet_roi(
+                prediction.prediction,
+                prediction.actual_result,
+                prediction.closing_odds,
+            )
+            for prediction in closing_candidates
+            if cls._is_fresh_closing_evidence(prediction)
         ]
         total_profit = sum(profits)
         reliable_sample = len(resolved) >= settings.AUDIT_MIN_RELIABLE_SAMPLES
+        closing_roi_lower = 0.0
+        if closing_profits:
+            closing_roi_interval = cls.bootstrap_mean_interval(closing_profits)
+            if isinstance(closing_roi_interval, Mapping):
+                closing_roi_lower = float(closing_roi_interval.get("lower_pct", 0.0))
         return {
             "total_predictions": len(resolved),
             "classified_predictions": classified,
@@ -220,7 +284,35 @@ class PredictionAuditor:
                 else None
             ),
             "clv_samples": len(clv_values),
+            "closing_bets": len(closing_profits),
+            "closing_roi_pct": (
+                round(sum(closing_profits) / len(closing_profits) * 100.0, 2)
+                if closing_profits
+                else 0.0
+            ),
+            "opening_roi_pct": (
+                round((total_profit / len(valid_bets)) * 100.0, 2)
+                if valid_bets
+                else 0.0
+            ),
+            "closing_vs_opening_roi_delta_pct": (
+                round(
+                    (sum(closing_profits) / len(closing_profits) * 100.0)
+                    - ((total_profit / len(valid_bets)) * 100.0),
+                    2,
+                )
+                if closing_profits and valid_bets
+                else 0.0
+            ),
+            "closing_roi_confidence_interval_95_pct": (
+                round(closing_roi_lower, 2) if closing_profits else None
+            ),
             "minimum_reliable_samples": settings.AUDIT_MIN_RELIABLE_SAMPLES,
+            "closing_gate_samples": settings.AUDIT_MIN_CLOSING_SAMPLES,
+            "closing_gate_min_roi_pct": settings.AUDIT_MIN_CLOSING_ROI_PCT,
+            "closing_max_age_hours": settings.AUDIT_MAX_CLOSING_ODDS_AGE_HOURS,
+            "stale_closing_odds_bets": len(stale_closing),
+            "closing_provenance_missing_bets": len(closing_provenance_missing),
             "sample_status": "reliable" if reliable_sample else "insufficient",
             "decision_grade": reliable_sample,
         }
@@ -270,14 +362,22 @@ class FinancialRecommendationPolicy:
     @staticmethod
     def evaluate(audit: Mapping[str, object]) -> dict[str, object]:
         minimum = settings.AUDIT_MIN_RELIABLE_SAMPLES
+        closing_minimum = settings.AUDIT_MIN_CLOSING_SAMPLES
+        closing_min_roi = settings.AUDIT_MIN_CLOSING_ROI_PCT
         reasons: list[str] = []
         total_bets_value = audit.get("total_bets")
         clv_samples_value = audit.get("clv_samples")
+        closing_bets_value = audit.get("closing_bets")
         total_bets = (
             int(total_bets_value) if isinstance(total_bets_value, (int, float)) else 0
         )
         clv_samples = (
             int(clv_samples_value) if isinstance(clv_samples_value, (int, float)) else 0
+        )
+        closing_bets = (
+            int(closing_bets_value)
+            if isinstance(closing_bets_value, (int, float))
+            else 0
         )
         roi_interval = audit.get("roi_confidence_interval_95_pct")
         roi_lower = (
@@ -287,6 +387,16 @@ class FinancialRecommendationPolicy:
         )
         avg_clv = audit.get("avg_clv_pct")
         avg_clv_value = float(avg_clv) if isinstance(avg_clv, (int, float)) else 0.0
+        closing_roi = audit.get("closing_roi_confidence_interval_95_pct")
+        closing_roi_lower = (
+            float(closing_roi) if isinstance(closing_roi, (int, float)) else 0.0
+        )
+        opening_roi = audit.get("opening_roi_pct")
+        closing_roi_point = audit.get("closing_roi_pct")
+        opening_roi_point = (
+            float(opening_roi) if isinstance(opening_roi, (int, float)) else None
+        )
+        erosion_delta = settings.AUDIT_CLOSING_ROI_EROSION_DELTA_PCT
 
         if audit.get("decision_grade") is not True or total_bets < minimum:
             reasons.append("insufficient_verified_bets")
@@ -296,6 +406,17 @@ class FinancialRecommendationPolicy:
             reasons.append("insufficient_closing_odds_samples")
         if avg_clv_value <= 0:
             reasons.append("average_clv_not_positive")
+        if closing_bets < closing_minimum:
+            reasons.append("insufficient_closing_odds_bets")
+        if closing_roi_lower < closing_min_roi:
+            reasons.append("closing_roi_below_threshold")
+        if (
+            closing_bets > 0
+            and opening_roi_point is not None
+            and isinstance(closing_roi_point, (int, float))
+            and opening_roi_point - float(closing_roi_point) >= erosion_delta
+        ):
+            reasons.append("closing_roi_erosion")
 
         return {
             "eligible": not reasons,
@@ -305,4 +426,10 @@ class FinancialRecommendationPolicy:
             "clv_samples": clv_samples,
             "roi_lower_95_pct": roi_lower,
             "avg_clv_pct": avg_clv_value,
+            "closing_gate": {
+                "closing_bets": closing_bets,
+                "closing_roi_lower_95_pct": closing_roi_lower,
+                "minimum_samples": closing_minimum,
+                "minimum_roi_pct": closing_min_roi,
+            },
         }

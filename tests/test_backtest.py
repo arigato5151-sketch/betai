@@ -167,6 +167,48 @@ def test_closing_odds_requirement_reports_skipped_records() -> None:
     assert result["skipped_reasons"] == {"missing_closing_odds": 1}
 
 
+def test_required_closing_reference_settles_at_closing_price() -> None:
+    stale_price_win = BacktestEngine.run_simulation(
+        [
+            prediction(
+                predicted="HOME_WIN",
+                actual="HOME_WIN",
+                odd=2.0,
+                closing_odds=1.5,
+            )
+        ],
+        initial_bankroll=100,
+        strategy="flat",
+        flat_stake_amount=10,
+        require_closing_odds=True,
+    )
+    with_closing = BacktestEngine.run_simulation(
+        [prediction(closing_odds=1.5)],
+        initial_bankroll=100,
+        strategy="flat",
+        flat_stake_amount=10,
+        require_closing_odds=True,
+    )
+
+    # Edge at 2.0 looked profitable, but against the 1.5 closing line it only
+    # returned the closing profit and the P&L must not credit the stale gap.
+    assert stale_price_win["final_bankroll"] == 105
+    assert stale_price_win["closing_reference_settlement"] is True
+    assert with_closing["final_bankroll"] == 105
+
+
+def test_default_engine_keeps_bet_time_settlement() -> None:
+    result = BacktestEngine.run_simulation(
+        [prediction(closing_odds=1.5)],
+        initial_bankroll=100,
+        strategy="flat",
+        flat_stake_amount=10,
+    )
+
+    assert result["final_bankroll"] == 110
+    assert result["closing_reference_settlement"] is False
+
+
 def test_post_kickoff_analysis_is_excluded_as_leakage() -> None:
     row = prediction()
     row.analyzed_at = datetime(2026, 7, 23, 20, tzinfo=UTC)

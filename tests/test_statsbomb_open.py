@@ -5,6 +5,7 @@ from datetime import UTC
 import httpx
 import pytest
 
+from app.core.namespaced_ids import STATSBOMB_FIXTURE_OFFSET
 from app.providers.statsbomb_open import StatsBombOpenDataClient, database_row
 
 COMPETITIONS = [
@@ -84,7 +85,7 @@ async def test_statsbomb_catalog_normalizes_supported_matches() -> None:
     assert len(fixtures) == 1
     assert fixtures[0]["league_id"] == 78
     assert fixtures[0]["season"] == 2023
-    assert fixtures[0]["fixture_id"] < 0
+    assert STATSBOMB_FIXTURE_OFFSET < fixtures[0]["fixture_id"]
     assert fixtures[0]["actual_result"] == "AWAY_WIN"
     assert fixtures[0]["kickoff"].tzinfo == UTC
 

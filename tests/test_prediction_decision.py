@@ -70,3 +70,58 @@ def test_invalid_probability_payload_fails_closed() -> None:
         "reasons": ["invalid_probabilities"],
         "confidence_tier": "insufficient",
     }
+
+
+def test_decision_requiring_market_stays_research_without_price() -> None:
+    decision = PredictionDecisionPolicy.evaluate(
+        {
+            "all_probabilities": {
+                "HOME_WIN": 70.0,
+                "DRAW": 20.0,
+                "AWAY_WIN": 10.0,
+            }
+        },
+        require_market=True,
+    )
+
+    assert decision["status"] == "research"
+    assert "market_unavailable" in decision["reasons"]
+    assert decision["market_validation"]["present"] is False
+
+
+def test_decision_requiring_market_demotes_clear_forecast_without_edge() -> None:
+    decision = PredictionDecisionPolicy.evaluate(
+        {
+            "all_probabilities": {
+                "HOME_WIN": 70.0,
+                "DRAW": 20.0,
+                "AWAY_WIN": 10.0,
+            }
+        },
+        market_edge_pct=2.0,
+        market_implied_pct=68.0,
+        require_market=True,
+    )
+
+    assert decision["status"] == "research"
+    assert "market_edge_insufficient" in decision["reasons"]
+    assert decision["market_validation"]["passed"] is False
+
+
+def test_decision_requiring_market_clears_positive_edge() -> None:
+    decision = PredictionDecisionPolicy.evaluate(
+        {
+            "all_probabilities": {
+                "HOME_WIN": 70.0,
+                "DRAW": 20.0,
+                "AWAY_WIN": 10.0,
+            }
+        },
+        market_edge_pct=6.5,
+        market_implied_pct=60.0,
+        require_market=True,
+    )
+
+    assert decision["status"] == "eligible"
+    assert decision["market_validation"]["passed"] is True
+    assert decision["market_validation"]["edge_pct"] == 6.5

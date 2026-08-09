@@ -189,8 +189,13 @@ class BacktestEngine:
 
             # Outcome check
             is_win = p.prediction == p.actual_result
+            # When closing is the required reference, the payoff is settled at
+            # the closing price rather than the stale price that produced the
+            # edge. Any edge that does not survive into the closing line must
+            # not be credited as profit.
+            settlement_odd = p.closing_odds if require_closing_odds else p.odd
             bet_roi = PredictionAuditor.calculate_bet_roi(
-                p.prediction, p.actual_result, p.odd
+                p.prediction, p.actual_result, settlement_odd
             )
             gross_return = stake * bet_roi
             net_return = (
@@ -303,6 +308,7 @@ class BacktestEngine:
             "max_stake_pct": max_stake_pct,
             "max_daily_exposure_pct": max_daily_exposure_pct,
             "exclude_post_kickoff": exclude_post_kickoff,
+            "closing_reference_settlement": require_closing_odds,
             "skipped_reasons": dict(sorted(skipped.items())),
             "bankroll_history": [round(b, 2) for b in bankroll_history],
         }

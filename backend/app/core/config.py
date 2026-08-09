@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     )
     AUDIT_MIN_RELIABLE_SAMPLES: int = Field(default=30, ge=10, le=1000)
     AUDIT_BOOTSTRAP_ITERATIONS: int = Field(default=2000, ge=200, le=10000)
+    AUDIT_MIN_CLOSING_SAMPLES: int = Field(default=200, ge=30, le=10000)
+    AUDIT_MIN_CLOSING_ROI_PCT: float = Field(default=2.0, ge=0.0, le=100.0)
+    # A closing price only counts as closing evidence if its snapshot was
+    # captured within this many hours before kickoff (the collector polls on a
+    # 6h cadence inside the closing window, so an older observation is a
+    # stale opening-to-mid price, not a closing price).
+    AUDIT_MAX_CLOSING_ODDS_AGE_HOURS: float = Field(default=8.0, gt=0.0, le=72.0)
+    # When closing ROI is this many percentage points below opening ROI, the
+    # edge is treated as an opening illusion and blocks financial activation.
+    AUDIT_CLOSING_ROI_EROSION_DELTA_PCT: float = Field(default=5.0, ge=0.0, le=100.0)
     # Financial actions stay disabled until out-of-time market and realized
     # betting audits justify enabling them explicitly.
     FINANCIAL_RECOMMENDATIONS_ENABLED: bool = False
@@ -410,6 +420,18 @@ class Settings(BaseSettings):
     DECISION_MAX_NORMALIZED_ENTROPY: float = Field(default=0.98, ge=0, le=1)
     DECISION_MAX_SOURCE_JSD: float = Field(default=0.15, ge=0, le=1)
     DECISION_SOURCE_DIVERGENCE_MAX_MARGIN_PCT: float = Field(default=10.0, ge=0, le=100)
+    DECISION_MIN_MARKET_EDGE_PCT: float = Field(
+        default=3.0,
+        ge=0,
+        le=100,
+        description="Minimum edge before a decision is market-grade",
+    )
+    DECISION_EDGE_MARGIN_PCT: float = Field(
+        default=0.0,
+        ge=-10,
+        le=10,
+        description="Extra model probability required over implied price",
+    )
     MIN_VALUE_EV_POINTS: float = Field(
         default=0.05,
         ge=0,
@@ -420,6 +442,21 @@ class Settings(BaseSettings):
             "fraction; 0.05 equals 5 percentage points) required before a 1X2 "
             "bet is suggested."
         ),
+    )
+    TIERED_MIN_TIER2_SAMPLES: int = Field(
+        default=500,
+        ge=30,
+        le=100000,
+        description=(
+            "Completed fixtures a Tier 2 model needs before its forecasts are "
+            "treated as more than research."
+        ),
+    )
+    TIERED_MIN_TIER2_SAMPLES_PER_CLASS: int = Field(
+        default=20,
+        ge=5,
+        le=10000,
+        description="Minimum Tier 2 training samples per outcome class.",
     )
     KELLY_FRACTION: float = Field(
         default=0.25, gt=0, le=1, description="Fractional Kelly stake multiplier"

@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.core.namespaced_ids import FOOTBALL_DATA_FIXTURE_OFFSET
 from app.services.football_data_csv import FootballDataCSVClient
 from scripts.ingest_historical import (
     fetch_fixture_rows,
@@ -60,7 +61,7 @@ def test_fetch_uses_canonical_client_and_normalizes_rows() -> None:
     assert home_row["closing_home_odd"] == pytest.approx(1.5)
     assert home_row["status"] == "FT"
     assert home_row["data_source"] == "football_data_csv"
-    assert home_row["fixture_id"] < 0
+    assert FOOTBALL_DATA_FIXTURE_OFFSET < home_row["fixture_id"]
     assert rows[1]["actual_result"] == "DRAW"
     assert rows[1]["away_corners"] == 6
 
