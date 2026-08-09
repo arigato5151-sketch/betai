@@ -44,6 +44,7 @@ from app.services.fixture_aggregator import FixtureAggregator
 from app.services.fixture_context import fixture_context_service
 from app.services.task_lock import DistributedTaskLock
 from app.services.result_verification import (
+    ResultVerificationDecision,
     ResultVerificationService,
     canonical_result_source,
     provider_request_fixture_id,
@@ -1521,14 +1522,18 @@ def _sync_completed_matches(
                     pred, historical_fixture
                 )
                 if decision.status == "pending":
-                    fixture = None
                     if request_id is not None and source == "openligadb":
                         fixture = _run_async(
                             openligadb_client.get_fixture_by_id(request_id)
                         )
+                        decision = ResultVerificationService.verify(pred, fixture)
                     elif request_id is not None and source == "api_football":
                         fixture = _run_async(api_client.get_fixture_by_id(request_id))
-                    decision = ResultVerificationService.verify(pred, fixture)
+                        decision = ResultVerificationService.verify(pred, fixture)
+                    else:
+                        decision = ResultVerificationDecision(
+                            "pending", "no_provider_identity"
+                        )
                 counters[decision.status] += 1
                 if decision.status != "verified" or decision.result is None:
                     if decision.status in {"conflict", "rejected"}:
