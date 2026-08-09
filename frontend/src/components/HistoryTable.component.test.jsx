@@ -148,4 +148,24 @@ describe("HistoryTable Türkçe arayüzü", () => {
     expect(screen.getByText("Sınırlı veri")).toBeInTheDocument();
     expect(screen.getByText("Eğitim dışı")).toBeInTheDocument();
   });
+
+  it("yükleme durumunu canlı bölge olarak bildirir", () => {
+    render(<HistoryTable {...defaultProps} historyLoading />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Geçmiş yükleniyor…");
+  });
+
+  it("geçmiş hatasını erişilebilir uyarı bölgesiyle gösterir", () => {
+    render(
+      <HistoryTable
+        {...defaultProps}
+        history={[]}
+        historyError="Tahmin geçmişi alınamadı."
+      />,
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Tahmin geçmişi alınamadı.");
+    expect(alert).toHaveAttribute("id", "history-error");
+  });
 });

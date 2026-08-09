@@ -1,3 +1,4 @@
+import StatusMessage from "./StatusMessage.jsx";
 import { resultLabel } from "../localization.js";
 
 const hasScore = (value) =>
@@ -166,10 +167,18 @@ function HistoryTable({
             </button>
           );
         })}
-        {historyLoading && <p className="p-3 text-sm text-slate-500">Geçmiş yükleniyor…</p>}
-        {historyError && <p className="rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">{historyError}</p>}
+        {historyLoading && (
+          <StatusMessage tone="stale">Geçmiş yükleniyor…</StatusMessage>
+        )}
+        {historyError && (
+          <StatusMessage tone="error" id="history-error">
+            {historyError}
+          </StatusMessage>
+        )}
         {!historyLoading && !historyError && history.length === 0 && (
-          <p className="rounded-lg border border-dashed border-slate-800 p-4 text-sm text-slate-500">Filtrelerle eşleşen kayıt bulunamadı.</p>
+          <p className="rounded-lg border border-dashed border-slate-800 p-4 text-sm text-slate-500">
+            Filtrelerle eşleşen kayıt bulunamadı.
+          </p>
         )}
       </div>
       {meta.pages > 1 && (
