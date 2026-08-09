@@ -21,42 +21,64 @@ function LoginForm({
 }) {
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-950 p-4 text-slate-100">
-      <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4 rounded-lg border border-slate-800 bg-slate-900 p-6 shadow-xl">
+      <form
+        aria-busy={loginLoading}
+        onSubmit={onSubmit}
+        className="w-full max-w-sm space-y-4 rounded-lg border border-slate-800 bg-slate-900 p-6 shadow-xl"
+      >
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-xl font-black text-emerald-400">BET AI TAHMİN PLATFORMU</h1>
           <DemoModeBadge apiMode={apiMode} />
         </div>
-        <input
-          required
-          autoComplete="username"
-          className="w-full rounded-lg border border-slate-800 bg-slate-950 p-2.5"
-          placeholder="Kullanıcı adı"
-          value={credentials.username}
-          onChange={(event) => onCredentialsChange({ ...credentials, username: event.target.value })}
-        />
-        {registerMode && (
+        <label className="block space-y-1" htmlFor="auth-username">
+          <span className="text-sm text-slate-300">Kullanıcı adı</span>
           <input
+            id="auth-username"
             required
-            type="email"
-            autoComplete="email"
+            autoComplete="username"
+            aria-invalid={Boolean(loginError)}
+            aria-describedby={loginError ? "auth-error" : undefined}
             className="w-full rounded-lg border border-slate-800 bg-slate-950 p-2.5"
-            placeholder="E-posta"
-            value={credentials.email}
-            onChange={(event) => onCredentialsChange({ ...credentials, email: event.target.value })}
+            placeholder="Kullanıcı adı"
+            value={credentials.username}
+            onChange={(event) => onCredentialsChange({ ...credentials, username: event.target.value })}
           />
+        </label>
+        {registerMode && (
+          <label className="block space-y-1" htmlFor="auth-email">
+            <span className="text-sm text-slate-300">E-posta</span>
+            <input
+              id="auth-email"
+              required
+              type="email"
+              autoComplete="email"
+              aria-invalid={Boolean(loginError)}
+              aria-describedby={loginError ? "auth-error" : undefined}
+              className="w-full rounded-lg border border-slate-800 bg-slate-950 p-2.5"
+              placeholder="E-posta"
+              value={credentials.email}
+              onChange={(event) => onCredentialsChange({ ...credentials, email: event.target.value })}
+            />
+          </label>
         )}
-        <input
-          required
-          minLength={registerMode ? 12 : 8}
-          type="password"
-          autoComplete={registerMode ? "new-password" : "current-password"}
-          className="w-full rounded-lg border border-slate-800 bg-slate-950 p-2.5"
-          placeholder="Parola"
-          value={credentials.password}
-          onChange={(event) => onCredentialsChange({ ...credentials, password: event.target.value })}
-        />
-        {loginError && <p className="text-sm text-red-400">{loginError}</p>}
-        <button disabled={loginLoading} className="w-full rounded-lg bg-emerald-500 p-3 font-bold text-slate-950 disabled:opacity-50">
+        <label className="block space-y-1" htmlFor="auth-password">
+          <span className="text-sm text-slate-300">Parola</span>
+          <input
+            id="auth-password"
+            required
+            minLength={registerMode ? 12 : 8}
+            type="password"
+            autoComplete={registerMode ? "new-password" : "current-password"}
+            aria-invalid={Boolean(loginError)}
+            aria-describedby={loginError ? "auth-error" : undefined}
+            className="w-full rounded-lg border border-slate-800 bg-slate-950 p-2.5"
+            placeholder="Parola"
+            value={credentials.password}
+            onChange={(event) => onCredentialsChange({ ...credentials, password: event.target.value })}
+          />
+        </label>
+        {loginError && <p id="auth-error" role="alert" className="text-sm text-red-400">{loginError}</p>}
+        <button type="submit" disabled={loginLoading} className="w-full rounded-lg bg-emerald-500 p-3 font-bold text-slate-950 disabled:opacity-50">
           {loginLoading ? "İşleniyor..." : registerMode ? "Hesap Oluştur" : "Giriş Yap"}
         </button>
         {registrationEnabled && (

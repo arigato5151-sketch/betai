@@ -1,4 +1,7 @@
-import { modelNameLabel } from "../localization.js";
+import {
+  modelMonitoringStatusLabel,
+  modelNameLabel,
+} from "../localization.js";
 
 function Value({ label, children }) {
   return (
@@ -29,13 +32,21 @@ function ModelStatusCard({ status, error, loading, onRefresh }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <span className={`rounded border px-3 py-1 text-xs font-bold ${
-            status?.ready
-              ? "border-emerald-700 bg-emerald-950/40 text-emerald-300"
-              : "border-amber-700 bg-amber-950/40 text-amber-300"
-          }`}>
-            {status?.ready ? "AKTİF" : "EĞİTİM BEKLİYOR"}
-          </span>
+          {(status || loading) && (
+            <span
+              className={`rounded border px-3 py-1 text-xs font-bold ${
+                status?.ready
+                  ? "border-emerald-700 bg-emerald-950/40 text-emerald-300"
+                  : "border-amber-700 bg-amber-950/40 text-amber-300"
+              }`}
+            >
+              {loading
+                ? "YÜKLENİYOR"
+                : status?.ready
+                  ? "AKTİF"
+                  : "EĞİTİM BEKLİYOR"}
+            </span>
+          )}
           <button
             type="button"
             onClick={onRefresh}
@@ -46,10 +57,16 @@ function ModelStatusCard({ status, error, loading, onRefresh }) {
           </button>
         </div>
       </div>
-      {error && <p className="mt-3 rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">{error}</p>}
+      {error && <p role="alert" className="mt-3 rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">{error}</p>}
+      {loading && !status && (
+        <p role="status" className="mt-3 text-sm text-slate-400">
+          Model operasyon durumu yükleniyor.
+        </p>
+      )}
       {status && (
         <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-8">
           <Value label="Model">{modelNameLabel(status.model_name)}</Value>
+          <Value label="Artifact Sürümü">{status.artifact_version}</Value>
           <Value label="Eğitim Örneği">{metrics.samples ?? 0}</Value>
           <Value label="Tarihsel Maç">{trainingData.historical_fixtures ?? 0}</Value>
           <Value label="Etiketli Tahmin">{trainingData.labeled_predictions ?? 0}</Value>
@@ -58,9 +75,24 @@ function ModelStatusCard({ status, error, loading, onRefresh }) {
           <Value label="Kalibrasyon">{metrics.calibration_error?.toFixed?.(4)}</Value>
           <Value label="Doğruluk">{metrics.accuracy !== undefined ? `%${(metrics.accuracy * 100).toFixed(1)}` : "-"}</Value>
           <Value label="Lig">{metrics.league_count ?? 0}</Value>
-          <Value label="Drift">{monitoring.status ?? "-"}</Value>
+          <Value label="Drift">{modelMonitoringStatusLabel(monitoring.status)}</Value>
+          <Value label="Drift Örneği">
+            {monitoring.samples !== undefined
+              ? `${monitoring.samples}/${monitoring.required_samples ?? "?"}`
+              : "-"}
+          </Value>
           <Value label="Güncel Brier">{monitoring.recent_brier?.toFixed?.(4)}</Value>
           <Value label="Brier Değişimi">{monitoring.brier_delta?.toFixed?.(4)}</Value>
+          <Value label="Güven Alt Sınırı">{monitoring.brier_delta_lower_bound?.toFixed?.(4)}</Value>
+          <Value label="Güven Düzeyi">
+            {monitoring.confidence !== undefined
+              ? `%${(monitoring.confidence * 100).toFixed(0)}`
+              : "-"}
+          </Value>
+          <Value label="Inference Hatası">{status.runtime?.inference_failure ?? 0}</Value>
+          <Value label="Rollback Adayı">
+            {status.rollback_available ? "Hazır" : "Yok"}
+          </Value>
         </div>
       )}
     </section>

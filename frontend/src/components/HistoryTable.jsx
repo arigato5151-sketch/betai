@@ -107,12 +107,20 @@ function HistoryTable({
         {history.map((item) => {
           const predictionResult = getPredictionResult(item);
           const verificationBadge = getResultVerificationBadge(item);
+          const actionableValueBet =
+            item.is_value_bet === 1 &&
+            item.data_quality?.financial_recommendation?.status === "eligible";
 
           return (
             <button key={item.id} type="button" onClick={() => onSelectMatch(item)} className="flex w-full cursor-pointer flex-col gap-2 rounded-lg border border-slate-800 bg-slate-950 p-3 text-left transition hover:border-slate-600 sm:flex-row sm:items-center sm:justify-between">
-              <span className="text-sm font-medium text-slate-200">
-                {item.home_team} – {item.away_team}
-              </span>
+              <span className="min-w-0 flex-1 text-sm font-medium text-slate-200">
+                  <span
+                    className="block truncate"
+                    title={`${item.home_team} – ${item.away_team}`}
+                  >
+                    {item.home_team} – {item.away_team}
+                  </span>
+                </span>
               <div className="flex flex-wrap items-center gap-2">
                 {item.analysis_origin === "scenario" && (
                   <span className="rounded border border-violet-800 bg-violet-950/50 px-2 py-1 text-xs font-semibold text-violet-300">
@@ -153,7 +161,7 @@ function HistoryTable({
                   </span>
                 )}
                 <span className="rounded bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-400">Oran: {item.odd}</span>
-                <span className={`h-2 w-2 rounded-full ${item.is_value_bet === 1 ? "animate-pulse bg-amber-400" : "bg-slate-700"}`}></span>
+                <span className={`h-2 w-2 rounded-full ${actionableValueBet ? "animate-pulse bg-amber-400" : "bg-slate-700"}`}></span>
               </div>
             </button>
           );

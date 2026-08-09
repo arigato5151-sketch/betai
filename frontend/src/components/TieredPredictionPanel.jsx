@@ -3,6 +3,9 @@ import { useEffect, useState } from "react";
 import { tierLabel, tierOutcomeLabels } from "../localization.js";
 
 const asFiniteNumber = (value) => {
+  if (value === null || value === undefined || value === "" || typeof value === "boolean") {
+    return null;
+  }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 };
@@ -18,10 +21,28 @@ const collect = (features, name, value) => {
   return features;
 };
 
-export function buildTieredFeatures(featureSnapshot, leagueId, homeTeam, awayTeam) {
+const normalizedFormPoints = (value) => {
+  const numeric = asFiniteNumber(value);
+  if (numeric === null) return null;
+  // Main analysis uses 0-100 scores; tier models use points per match (0-3).
+  const normalized = numeric > 3 ? Math.max(0, Math.min(3, (numeric / 100) * 3)) : numeric;
+  return Number(normalized.toFixed(6));
+};
+
+const oddsValue = (odds, outcome) => {
+  if (!odds || typeof odds !== "object") return null;
+  return odds[outcome] ?? odds[outcome.toLowerCase()] ?? null;
+};
+
+export function buildTieredFeatures(
+  featureSnapshot,
+  leagueId,
+  homeTeam,
+  awayTeam,
+  openingOdds,
+) {
   const snapshot = featureSnapshot && typeof featureSnapshot === "object" ? featureSnapshot : {};
   const features = {};
-  if (asFiniteNumber(leagueId) !== null) features.league_id = leagueId;
   if (homeTeam) features.home_team = homeTeam;
   if (awayTeam) features.away_team = awayTeam;
   collect(features, "home_avg_goals", snapshot.home_gf_last5);
@@ -29,15 +50,22 @@ export function buildTieredFeatures(featureSnapshot, leagueId, homeTeam, awayTea
   collect(
     features,
     "home_form_last5",
-    snapshot.home_form_last5 ?? snapshot.home_form ?? snapshot.home_form_ema,
+    normalizedFormPoints(
+      snapshot.home_form_last5 ?? snapshot.home_form_ema ?? snapshot.home_form,
+    ),
   );
   collect(
     features,
     "away_form_last5",
-    snapshot.away_form_last5 ?? snapshot.away_form ?? snapshot.away_form_ema,
+    normalizedFormPoints(
+      snapshot.away_form_last5 ?? snapshot.away_form_ema ?? snapshot.away_form,
+    ),
   );
   collect(features, "home_elo", snapshot.home_elo);
   collect(features, "away_elo", snapshot.away_elo);
+  collect(features, "opening_home_odd", oddsValue(openingOdds, "HOME_WIN"));
+  collect(features, "opening_draw_odd", oddsValue(openingOdds, "DRAW"));
+  collect(features, "opening_away_odd", oddsValue(openingOdds, "AWAY_WIN"));
   return features;
 }
 
@@ -47,6 +75,7 @@ function TieredPredictionPanel({
   homeTeam,
   awayTeam,
   featureSnapshot,
+  openingOdds,
   enabled,
 }) {
   const [loading, setLoading] = useState(false);
@@ -78,6 +107,7 @@ function TieredPredictionPanel({
               leagueId,
               homeTeam,
               awayTeam,
+              openingOdds,
             ),
           }),
         });
@@ -109,7 +139,7 @@ function TieredPredictionPanel({
     return () => {
       isActive = false;
     };
-  }, [enabled, request, leagueId, homeTeam, awayTeam, featureSnapshot]);
+  }, [enabled, request, leagueId, homeTeam, awayTeam, featureSnapshot, openingOdds]);
 
   const outcomes = tierOutcomeLabels();
   const scoreKeys = ["0", "1", "2"];

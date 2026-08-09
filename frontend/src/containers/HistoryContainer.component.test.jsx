@@ -22,6 +22,10 @@ describe("historyItemToSelectedMatch", () => {
       ml_cluster: null,
       model_name: "Calibrated Model",
       model_artifact_version: "v1",
+      kickoff: "2030-07-30T18:00:00+00:00",
+      data_quality: {
+        financial_recommendation: { status: "eligible", reason: null },
+      },
     });
 
     expect(selected.match).toBe("Home – Away");
@@ -33,9 +37,12 @@ describe("historyItemToSelectedMatch", () => {
     expect(selected.value_assessment).toEqual({
       value_bet: true,
       edge: 6.5,
+      recommendation_status: "eligible",
+      recommendation_reason: null,
     });
     expect(selected.ml_safety_trigger).toBe("INSUFFICIENT_DATA");
     expect(selected.provenance.model_artifact_version).toBe("v1");
+    expect(selected.provenance.kickoff).toBe("2030-07-30T18:00:00+00:00");
   });
 
   it("uses safe defaults for legacy history rows", () => {
@@ -56,6 +63,12 @@ describe("historyItemToSelectedMatch", () => {
     });
     expect(selected.home_stats.attack).toBe(80);
     expect(selected.ml_safety_trigger).toBe("HIGH_CONFIDENCE");
+    expect(selected.value_assessment).toEqual({
+      value_bet: false,
+      edge: 0,
+      recommendation_status: "disabled",
+      recommendation_reason: "legacy_record_unverified",
+    });
   });
 
   it("uses the persisted market-aware ML assessment", () => {

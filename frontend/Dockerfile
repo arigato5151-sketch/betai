@@ -1,7 +1,7 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-ARG VITE_API_BASE_URL=http://localhost:8000/api
+ARG VITE_API_BASE_URL=/api
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 COPY package.json package-lock.json ./
@@ -15,6 +15,7 @@ WORKDIR /app
 COPY --chown=node:node --from=builder /app/dist ./dist
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 COPY --chown=node:node --from=builder /app/package.json ./package.json
+COPY --chown=node:node --from=builder /app/vite.config.js ./vite.config.js
 
 USER node
 EXPOSE 3000

@@ -17,7 +17,6 @@ export default [
         ecmaFeatures: { jsx: true },
       },
       globals: {
-        alert: "readonly",
         Event: "readonly",
         fetch: "readonly",
         Headers: "readonly",

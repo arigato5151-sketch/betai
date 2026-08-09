@@ -72,9 +72,9 @@ describe("AdminPanel integration", () => {
     );
     await screen.findByText("analyst");
 
-    await user.type(container.querySelector('input[placeholder^="Kullan"]'), "new.user");
-    await user.type(container.querySelector('input[type="email"]'), "new@example.com");
-    await user.type(container.querySelector('input[type="password"]'), "StrongPassword123!");
+    await user.type(screen.getByLabelText("Kullanıcı adı"), "new.user");
+    await user.type(screen.getByLabelText("E-posta"), "new@example.com");
+    await user.type(screen.getByLabelText("Parola"), "StrongPassword123!");
     fireEvent.submit(container.querySelector("form"));
 
     expect(await screen.findByText("new.user")).toBeInTheDocument();

@@ -3,12 +3,14 @@ import { ArcElement, Chart as ChartJS, Tooltip } from "chart.js";
 import { Doughnut } from "react-chartjs-2";
 
 import {
+  decisionReasonLabel,
   eligibilityReasonLabel,
   matchLabel,
   mlSafetyLabel,
   mlSafetyTone,
   modelNameLabel,
   predictionLabel,
+  predictionSourceLabel,
   resultLabel,
 } from "../localization.js";
 
@@ -102,14 +104,36 @@ export function buildAlternativeResults(analysis) {
   return results;
 }
 
-function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
+function AnalysisReport({
+  canUpdateResult,
+  match,
+  onSubmitActualResult,
+  resultError = "",
+  resultUpdating = false,
+}) {
   const safetyTone = mlSafetyTone(match.ml_safety_trigger);
   const eligibility = match.data_quality?.prediction_eligibility;
-  const abstained = eligibility?.status === "abstain";
+  const decision = match.data_quality?.decision_recommendation;
+  const dataAbstained = eligibility?.status === "abstain";
+  const uncertaintyAbstained = decision?.status === "abstain";
+  const abstained = dataAbstained || uncertaintyAbstained;
   const scenario = match.provenance?.analysis_origin === "scenario";
+  const financialRecommendationsDisabled =
+    match.value_assessment?.recommendation_status === "disabled";
   const automaticAbstain =
     abstained && match.provenance?.analysis_origin === "automatic";
   const limitedAnalysis = abstained && !automaticAbstain && !scenario;
+  const predictionSource = predictionSourceLabel(match);
+  const predictionGiven = !abstained && Boolean(match.analysis?.prediction);
+  const predictionTone =
+    predictionSource.tone === "model"
+      ? "text-emerald-400"
+      : predictionSource.tone === "none"
+        ? "text-slate-400"
+        : "text-amber-400";
+  const kickoffTimestamp = Date.parse(match.provenance?.kickoff ?? "");
+  const resultEntryOpen =
+    !Number.isFinite(kickoffTimestamp) || kickoffTimestamp <= Date.now();
   const alternativeResults = useMemo(
     () => buildAlternativeResults(match.analysis),
     [match.analysis],
@@ -149,18 +173,28 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
                 ? "Senaryo analizi"
                 : automaticAbstain
                   ? "Otomatik tahmin verilmedi (ABSTAIN)"
+                  : uncertaintyAbstained && !dataAbstained
+                    ? "Yüksek tahmin belirsizliği (ABSTAIN)"
                   : "Sınırlı veriyle istatistik analizi"}
             </strong>
             <span className="mt-1 block text-xs text-amber-300/80">
               {scenario
                 ? "Manuel değişiklik içerir; eğitim ve performans hesaplarına katılmaz."
                 : automaticAbstain
-                  ? "Otomatik karar için gerekli veri kalitesi sağlanmadı; kayıt oluşturulmadı."
+                  ? "Olasılık tahmini denetim için saklandı; veri veya belirsizlik eşiği nedeniyle karar önerilmedi."
+                  : uncertaintyAbstained && !dataAbstained
+                    ? "Olasılık dağılımı saklandı; sonuçlar yeterince ayrışmadığı için karar önerilmedi."
                   : "Temel maç tahmini üretildi, ancak eksik oran/geçmiş verisi nedeniyle finansal değer hesabı kullanılmamalıdır."}
             </span>
-            {abstained && eligibility.reasons?.length > 0 && (
+            {dataAbstained && eligibility.reasons?.length > 0 && (
               <span className="mt-1 block text-xs text-slate-400">
                 Nedenler: {eligibility.reasons.map(eligibilityReasonLabel).join(", ")}
+              </span>
+            )}
+            {uncertaintyAbstained && decision.reasons?.length > 0 && (
+              <span className="mt-1 block text-xs text-slate-400">
+                Belirsizlik nedenleri:{" "}
+                {decision.reasons.map(decisionReasonLabel).join(", ")}
               </span>
             )}
           </div>
@@ -168,11 +202,18 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
 
         <div className="space-y-3">
           <div>
-            <span className="text-xs text-slate-400">Yapay Zekâ Tahmini</span>
-            <p className="text-lg font-bold text-amber-400">
-              {predictionLabel(match.analysis.prediction)} (%
-              {match.analysis.probability})
-            </p>
+            <span className="text-xs text-slate-400">{predictionSource.label}</span>
+            {predictionGiven ? (
+              <p className={`text-lg font-bold ${predictionTone}`}>
+                {predictionLabel(match.analysis.prediction)} (%
+                {match.analysis.probability})
+              </p>
+            ) : (
+              <p className="text-sm text-slate-400">
+                Bu maç için tahmin üretilmedi; veri veya belirsizlik eşiği kararı
+                engelledi.
+              </p>
+            )}
           </div>
           {match.actual_result && (() => {
             const hasScore = (value) => Number.isInteger(value) && value >= 0;
@@ -242,7 +283,9 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
                   : "text-slate-400"
               }`}
             >
-              {abstained
+              {financialRecommendationsDisabled
+                ? "FİNANSAL ÖNERİ KAPALI — PİYASA ÜSTÜNLÜĞÜ DOĞRULANMADI"
+                : abstained
                 ? "VERİ YETERSİZ — DEĞER HESABI KULLANILMAMALI"
                 : match.value_assessment.value_bet
                 ? `DEĞERLİ ORAN BULUNDU (+%${match.value_assessment.edge})`
@@ -286,21 +329,36 @@ function AnalysisReport({ canUpdateResult, match, onSubmitActualResult }) {
               </p>
             )}
           </div>
-          {canUpdateResult && match.record_id && !match.actual_result && (
+          {canUpdateResult &&
+            match.record_id &&
+            !match.actual_result &&
+            resultEntryOpen && (
             <div className="flex flex-wrap gap-2 pt-2">
               <span className="w-full text-xs text-slate-500">
                 Gerçek sonucu girin:
               </span>
-              {["HOME_WIN", "DRAW", "AWAY_WIN"].map((result) => (
-                <button
-                  key={result}
-                  type="button"
-                  onClick={() => onSubmitActualResult(match.record_id, result)}
-                  className="rounded border border-slate-700 px-2 py-1 text-xs hover:border-emerald-500"
+              {resultError && (
+                <p
+                  role="alert"
+                  aria-live="assertive"
+                  className="w-full rounded border border-red-900/70 bg-red-950/40 p-2 text-xs text-red-300"
                 >
-                  {resultLabel(result)}
-                </button>
-              ))}
+                  {resultError}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {["HOME_WIN", "DRAW", "AWAY_WIN"].map((result) => (
+                  <button
+                    key={result}
+                    type="button"
+                    disabled={resultUpdating}
+                    onClick={() => onSubmitActualResult(match.record_id, result)}
+                    className="rounded border border-slate-700 px-2 py-1 text-xs hover:border-emerald-500 disabled:opacity-40"
+                  >
+                    {resultLabel(result)}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>

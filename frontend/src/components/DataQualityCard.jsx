@@ -1,5 +1,6 @@
 import {
   dataQualityStatusLabel,
+  providerStatusLabel,
   syncStatusLabel,
 } from "../localization.js";
 
@@ -27,7 +28,7 @@ function ProviderStatus({ name, provider }) {
   return (
     <div className={`rounded border p-3 ${tone}`}>
       <span className="block text-xs text-slate-500">{name}</span>
-      <strong className="text-sm">{status}</strong>
+      <strong className="text-sm">{providerStatusLabel(status)}</strong>
       {provider.daily_remaining !== null && provider.daily_remaining !== undefined && (
         <span className="mt-1 block text-xs text-slate-400">
           Günlük kota: {provider.daily_remaining}/{provider.daily_limit ?? "?"}
@@ -80,7 +81,12 @@ function DataQualityCard({ data, error, loading, onRefresh }) {
           </button>
         </div>
       </div>
-      {error && <p className="mt-3 rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">{error}</p>}
+      {error && <p role="alert" className="mt-3 rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">{error}</p>}
+      {loading && !data && (
+        <p role="status" className="mt-3 text-sm text-slate-400">
+          Veri kalitesi durumu yükleniyor.
+        </p>
+      )}
       {data && (
         <>
           <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-8">

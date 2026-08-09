@@ -122,6 +122,29 @@ describe("AnalysisReport Türkçe gösterim katmanı", () => {
     expect(screen.queryByText(/DEĞERLİ ORAN BULUNDU/)).not.toBeInTheDocument();
   });
 
+  it("yüksek tahmin belirsizliğini karar ABSTAIN olarak gösterir", () => {
+    render(
+      <AnalysisReport
+        match={{
+          ...match,
+          data_quality: {
+            prediction_eligibility: { status: "eligible", reasons: [] },
+            decision_recommendation: {
+              status: "abstain",
+              reasons: ["probability_margin_too_low"],
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Yüksek tahmin belirsizliği (ABSTAIN)")).toBeInTheDocument();
+    expect(
+      screen.getByText(/En olası iki sonuç arasındaki fark yetersiz/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("probability_margin_too_low")).not.toBeInTheDocument();
+  });
+
   it("manuel feature değişikliğini senaryo olarak işaretler", () => {
     render(
       <AnalysisReport
@@ -178,5 +201,85 @@ describe("AnalysisReport Türkçe gösterim katmanı", () => {
     render(<AnalysisReport match={match} />);
 
     expect(screen.queryByText("Maç Sonucu")).not.toBeInTheDocument();
+  });
+
+  it("başlamamış maçta manuel sonuç girişini gizler", () => {
+    render(
+      <AnalysisReport
+        canUpdateResult
+        match={{
+          ...match,
+          provenance: { kickoff: "2999-08-09T18:00:00+00:00" },
+        }}
+        onSubmitActualResult={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText("Gerçek sonucu girin:")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Ev Sahibi Kazandı" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("tahmin kaynağı etiketini veri yeterliliğine göre seçer", () => {
+    render(<AnalysisReport match={match} />);
+    expect(
+      screen.getByText(/Sınırlı istatistik analizi/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Ev Sahibi Kazanır (%62)")).toBeInTheDocument();
+  });
+
+  it("aktif modelde doğrulanmış model tahmini etiketini gösterir", () => {
+    render(
+      <AnalysisReport
+        match={{
+          ...match,
+          ml_ready: true,
+          ml_safety_trigger: "HIGH_CONFIDENCE",
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText(/Doğrulanmış model tahmini/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Ev Sahibi Kazanır (%62)")).toBeInTheDocument();
+  });
+
+  it("abstain kararında tahmin üretilmedi ifadesini gösterir", () => {
+    render(
+      <AnalysisReport
+        match={{
+          ...match,
+          data_quality: {
+            prediction_eligibility: { status: "abstain", reasons: [] },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Tahmin verilmedi")).toBeInTheDocument();
+    expect(
+      screen.getByText(/tahmin üretilmedi/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Ev Sahibi Kazanır (%62)")).not.toBeInTheDocument();
+  });
+
+  it("sonuç güncelleme hatasını erişilebilir biçimde gösterir ve girişi kilitler", () => {
+    render(
+      <AnalysisReport
+        canUpdateResult
+        match={{
+          ...match,
+          provenance: { kickoff: "2020-01-01T00:00:00+00:00" },
+        }}
+        onSubmitActualResult={vi.fn()}
+        resultError="Sonuç kaydedilemedi."
+        resultUpdating
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Sonuç kaydedilemedi.");
+    expect(screen.getByRole("button", { name: "Ev Sahibi Kazandı" })).toBeDisabled();
   });
 });

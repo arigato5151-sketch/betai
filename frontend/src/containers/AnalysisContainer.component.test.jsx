@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import AnalysisContainer from "./AnalysisContainer.jsx";
 
@@ -77,7 +77,57 @@ function renderContainer(request, fixtureSelection) {
   return { onHistoryChanged, onSelectMatch };
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("AnalysisContainer lig entegrasyonu", () => {
+  it("araştırma testinde kapanış oranını zorunlu tutar", async () => {
+    const request = vi.fn(async (path) => {
+      if (path === "/leagues") {
+        return { ok: true, json: async () => [] };
+      }
+      if (path === "/backtest") {
+        return {
+          ok: true,
+          json: async () => ({
+            total_bets: 0,
+            skipped_reasons: { missing_closing_odds: 1 },
+            bankroll_history: [1000],
+          }),
+        };
+      }
+      throw new Error(`Beklenmeyen istek: ${path}`);
+    });
+
+    render(
+      <AnalysisContainer
+        actions={{ ...actions, runBacktest: true }}
+        onHistoryChanged={vi.fn()}
+        onSelectMatch={vi.fn()}
+        request={request}
+        selectedMatch={null}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Araştırma Testini Çalıştır",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith(
+        "/backtest",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const backtestCall = request.mock.calls.find(
+      ([path]) => path === "/backtest",
+    );
+    expect(JSON.parse(backtestCall[1].body).require_closing_odds).toBe(true);
+  });
+
   it("ilk açılışta takım alanlarını boş gösterir", async () => {
     const request = vi.fn(async (path) => {
       if (path === "/leagues") {
@@ -278,5 +328,61 @@ describe("AnalysisContainer lig entegrasyonu", () => {
     const analyzeCall = request.mock.calls.find(([path]) => path === "/analyze");
     expect(JSON.parse(analyzeCall[1].body).league_id).toBeNull();
     expect(onHistoryChanged).toHaveBeenCalledOnce();
+  });
+
+  it("analiz hatasında erişilebilir bildirim gösterir ve alert() çağırmaz", async () => {
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+    const request = vi.fn(async (path) => {
+      if (path === "/leagues") {
+        return { ok: true, json: async () => [] };
+      }
+      if (path === "/analyze") {
+        return { ok: false, json: async () => ({ detail: "Sunucu hatası" }) };
+      }
+      throw new Error(`Beklenmeyen istek: ${path}`);
+    });
+    renderContainer(request);
+
+    fireEvent.click(screen.getByRole("button", { name: "Tahmin Oluştur" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Sunucu hatası");
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Ev sahibi takım")).toBeEnabled();
+    alertSpy.mockRestore();
+  });
+
+  it("sonuç güncelleme hatasında bildirim bölgesi gösterir ve alert() çağırmaz", async () => {
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+    const request = vi.fn(async (path) => {
+      if (path === "/leagues") {
+        return { ok: true, json: async () => [] };
+      }
+      if (path === "/history/42/result") {
+        return { ok: false, json: async () => ({ detail: "Karantina" }) };
+      }
+      throw new Error(`Beklenmeyen istek: ${path}`);
+    });
+    const selectedMatch = {
+      ...analysisResponse,
+      record_id: 42,
+      provenance: { kickoff: "2020-01-01T00:00:00+00:00" },
+    };
+    render(
+      <AnalysisContainer
+        actions={{ ...actions, updateResult: true }}
+        onHistoryChanged={vi.fn()}
+        onSelectMatch={vi.fn()}
+        request={request}
+        selectedMatch={selectedMatch}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Ev Sahibi Kazandı" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Sonuç kaydedilemedi",
+    );
+    expect(alertSpy).not.toHaveBeenCalled();
+    alertSpy.mockRestore();
   });
 });

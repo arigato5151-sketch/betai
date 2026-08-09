@@ -63,6 +63,23 @@ const SYNC_STATUS_LABELS = Object.freeze({
   pending: "Bekliyor",
 });
 
+const MODEL_MONITORING_STATUS_LABELS = Object.freeze({
+  model_unavailable: "Aktif Model Yok",
+  insufficient_data: "Yetersiz Doğrulanmış Örnek",
+  stable: "Kararlı",
+  drift: "Drift Tespit Edildi",
+});
+
+const PROVIDER_STATUS_LABELS = Object.freeze({
+  ready: "Hazır",
+  configured: "Yapılandırıldı",
+  unknown: "Henüz Ölçülmedi",
+  disabled: "Devre Dışı",
+  degraded: "Sorunlu",
+  circuit_open: "Devre Kesici Açık",
+  rate_limited: "Kota Sınırında",
+});
+
 const MODEL_NAME_LABELS = Object.freeze({
   "Random Forest": "Rastgele Orman",
   random_forest: "Rastgele Orman",
@@ -102,6 +119,14 @@ const ELIGIBILITY_REASON_LABELS = Object.freeze({
   manual_override_not_automatic: "Manuel değişiklik içeren senaryo analizi",
 });
 
+const DECISION_REASON_LABELS = Object.freeze({
+  invalid_probabilities: "Olasılık dağılımı geçersiz",
+  top_probability_too_low: "En yüksek sonuç olasılığı karar eşiğinin altında",
+  probability_margin_too_low: "En olası iki sonuç arasındaki fark yetersiz",
+  predictive_entropy_too_high: "Tahmin dağılımı aşırı belirsiz",
+  prediction_sources_diverge: "Model, istatistik ve piyasa kaynakları ayrışıyor",
+});
+
 const hasValue = (value) =>
   value !== null && value !== undefined && String(value).trim() !== "";
 
@@ -117,6 +142,22 @@ const lookupClosedSet = (labels, value, fallback) => {
 
 export const predictionLabel = (value) =>
   lookupClosedSet(OUTCOME_PREDICTION_LABELS, value, "Tahmin Bilinmiyor");
+
+export const predictionSourceLabel = (match) => {
+  const eligibilityStatus = match?.data_quality?.prediction_eligibility?.status;
+  const decisionStatus = match?.data_quality?.decision_recommendation?.status;
+  if (
+    eligibilityStatus === "abstain" ||
+    decisionStatus === "abstain" ||
+    !match?.analysis?.prediction
+  ) {
+    return { label: "Tahmin verilmedi", tone: "none" };
+  }
+  if (match?.ml_ready === true) {
+    return { label: "Doğrulanmış model tahmini", tone: "model" };
+  }
+  return { label: "Sınırlı istatistik analizi", tone: "limited" };
+};
 
 export const resultLabel = (value) =>
   lookupClosedSet(OUTCOME_RESULT_LABELS, value, "Sonuç Bilinmiyor");
@@ -161,6 +202,20 @@ export const syncStatusLabel = (value) =>
     "Senkron Yok",
   );
 
+export const modelMonitoringStatusLabel = (value) =>
+  lookupClosedSet(
+    MODEL_MONITORING_STATUS_LABELS,
+    hasValue(value) ? String(value).toLowerCase() : value,
+    "Bilinmiyor",
+  );
+
+export const providerStatusLabel = (value) =>
+  lookupClosedSet(
+    PROVIDER_STATUS_LABELS,
+    hasValue(value) ? String(value).toLowerCase() : value,
+    "Bilinmiyor",
+  );
+
 export const modelNameLabel = (value) =>
   lookup(MODEL_NAME_LABELS, value, "Model Yok");
 
@@ -169,6 +224,9 @@ export const backtestReasonLabel = (value) =>
 
 export const eligibilityReasonLabel = (value) =>
   lookupClosedSet(ELIGIBILITY_REASON_LABELS, value, "Bilinmeyen veri eksiği");
+
+export const decisionReasonLabel = (value) =>
+  lookupClosedSet(DECISION_REASON_LABELS, value, "Bilinmeyen belirsizlik nedeni");
 
 export const tierLabel = (value) =>
   lookupClosedSet(TIER_LABELS, value, "Katman Modeli Yüklü Değil");

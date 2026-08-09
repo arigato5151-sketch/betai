@@ -30,8 +30,14 @@ function LeaguePerformanceCard({ data, error, loading, onRefresh }) {
       </div>
 
       {error && (
-        <p className="mt-3 rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">
+        <p role="alert" className="mt-3 rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">
           {error}
+        </p>
+      )}
+
+      {loading && !data && (
+        <p role="status" className="mt-3 text-sm text-slate-400">
+          Lig performansı yükleniyor.
         </p>
       )}
 

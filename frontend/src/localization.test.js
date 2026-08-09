@@ -7,14 +7,18 @@ import test from "node:test";
 import {
   backtestReasonLabel,
   dataQualityStatusLabel,
+  decisionReasonLabel,
   eligibilityReasonLabel,
   leagueLabel,
   matchLabel,
   mlSafetyLabel,
   mlSafetyTone,
+  modelMonitoringStatusLabel,
   modelNameLabel,
   permissionLabel,
   predictionLabel,
+  predictionSourceLabel,
+  providerStatusLabel,
   resultLabel,
   roleLabel,
   syncStatusLabel,
@@ -44,6 +48,12 @@ test("model güveni ve operasyon durumlarını Türkçeleştirir", () => {
   assert.equal(syncStatusLabel("succeeded"), "Başarılı");
   assert.equal(syncStatusLabel(undefined), "Senkron Yok");
   assert.equal(syncStatusLabel("unknown"), "Senkron Yok");
+  assert.equal(modelMonitoringStatusLabel("stable"), "Kararlı");
+  assert.equal(
+    modelMonitoringStatusLabel("insufficient_data"),
+    "Yetersiz Doğrulanmış Örnek",
+  );
+  assert.equal(providerStatusLabel("circuit_open"), "Devre Kesici Açık");
 });
 
 test("ABSTAIN nedenlerini kullanıcıya Türkçe açıklar", () => {
@@ -54,6 +64,10 @@ test("ABSTAIN nedenlerini kullanıcıya Türkçe açıklar", () => {
   assert.equal(
     eligibilityReasonLabel("market_unavailable"),
     "Güncel 1X2 oranları bulunamadı",
+  );
+  assert.equal(
+    decisionReasonLabel("probability_margin_too_low"),
+    "En olası iki sonuç arasındaki fark yetersiz",
   );
 });
 
@@ -116,6 +130,40 @@ test("maç ayırıcısını Türkçe arayüz biçimine getirir", () => {
     "Fenerbahçe – Galatasaray",
   );
   assert.equal(matchLabel(undefined), "Maç Bilgisi Yok");
+});
+
+test("tahmin kaynağını veri yeterliliğine göre adlandırır", () => {
+  assert.deepEqual(predictionSourceLabel(undefined), {
+    label: "Tahmin verilmedi",
+    tone: "none",
+  });
+  assert.deepEqual(
+    predictionSourceLabel({
+      analysis: { prediction: "HOME_WIN" },
+      ml_ready: true,
+    }),
+    { label: "Doğrulanmış model tahmini", tone: "model" },
+  );
+  assert.deepEqual(
+    predictionSourceLabel({ analysis: { prediction: "DRAW" } }),
+    { label: "Sınırlı istatistik analizi", tone: "limited" },
+  );
+  assert.deepEqual(
+    predictionSourceLabel({
+      analysis: { prediction: "DRAW" },
+      data_quality: {
+        prediction_eligibility: { status: "abstain" },
+      },
+    }),
+    { label: "Tahmin verilmedi", tone: "none" },
+  );
+  assert.deepEqual(
+    predictionSourceLabel({
+      analysis: { prediction: "DRAW" },
+      data_quality: { decision_recommendation: { status: "abstain" } },
+    }),
+    { label: "Tahmin verilmedi", tone: "none" },
+  );
 });
 
 const collectJsxFiles = (directory) =>

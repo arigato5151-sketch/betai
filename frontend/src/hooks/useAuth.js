@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api"
+  import.meta.env.VITE_API_BASE_URL || "/api"
 ).replace(/\/$/, "");
 const CSRF_COOKIE_NAME = import.meta.env.VITE_CSRF_COOKIE_NAME || "bet_ai_csrf";
 const CSRF_HEADER_NAME = import.meta.env.VITE_CSRF_HEADER_NAME || "X-CSRF-Token";

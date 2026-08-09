@@ -11,6 +11,12 @@ export function historyItemToSelectedMatch(rawDbItem) {
     rawDbItem.ml_cluster === null || rawDbItem.ml_cluster === undefined;
   const storedAssessment = rawDbItem.data_quality?.ml_assessment;
   const storedAnalysisOutputs = rawDbItem.data_quality?.analysis_outputs ?? {};
+  const storedFinancialRecommendation =
+    rawDbItem.data_quality?.financial_recommendation;
+  const financialRecommendationStatus =
+    storedFinancialRecommendation?.status === "eligible"
+      ? "eligible"
+      : "disabled";
   const hasScore = (value) => Number.isInteger(value) && value >= 0;
 
   return {
@@ -39,8 +45,16 @@ export function historyItemToSelectedMatch(rawDbItem) {
       ...storedAnalysisOutputs,
     },
     value_assessment: {
-      value_bet: rawDbItem.is_value_bet === 1,
-      edge: rawDbItem.edge,
+      value_bet:
+        financialRecommendationStatus === "eligible" &&
+        rawDbItem.is_value_bet === 1,
+      edge:
+        financialRecommendationStatus === "eligible" ? rawDbItem.edge : 0,
+      recommendation_status: financialRecommendationStatus,
+      recommendation_reason:
+        storedFinancialRecommendation === undefined
+          ? "legacy_record_unverified"
+          : (storedFinancialRecommendation.reason ?? null),
     },
     ml_safety_trigger:
       storedAssessment?.trigger ??
@@ -70,6 +84,7 @@ export function historyItemToSelectedMatch(rawDbItem) {
       feature_schema_version: rawDbItem.feature_schema_version,
       ensemble_version: rawDbItem.ensemble_version,
       analysis_lead_minutes: rawDbItem.analysis_lead_minutes,
+      kickoff: rawDbItem.kickoff,
     },
   };
 }

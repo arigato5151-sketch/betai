@@ -120,11 +120,20 @@ function AdminPanel({ request, currentUserId, onClose }) {
       {error && <p role="alert" className="mb-4 rounded border border-red-900 bg-red-950/40 p-3 text-sm text-red-400">{error}</p>}
       {notice && <p role="status" className="mb-4 rounded border border-emerald-900 bg-emerald-950/40 p-3 text-sm text-emerald-400">{notice}</p>}
 
-      <form onSubmit={createUser} className="mb-6 grid gap-3 rounded-lg bg-slate-950 p-4 md:grid-cols-4">
-        <input required minLength={3} maxLength={100} pattern="[A-Za-z0-9_.-]+" autoComplete="off" placeholder="Kullanıcı adı" value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} className="rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm" />
-        <input required type="email" autoComplete="off" placeholder="E-posta" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} className="rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm" />
-        <input required type="password" minLength={12} autoComplete="new-password" placeholder="Parola (min. 12)" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} className="rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm" />
-        <button disabled={creating || loading} className="rounded bg-emerald-500 px-4 py-2 text-sm font-bold text-slate-950 disabled:opacity-50">{creating ? "Oluşturuluyor..." : "Kullanıcı Oluştur"}</button>
+      <form aria-busy={creating} onSubmit={createUser} className="mb-6 grid gap-3 rounded-lg bg-slate-950 p-4 md:grid-cols-4">
+        <label className="space-y-1">
+          <span className="block text-xs text-slate-400">Kullanıcı adı</span>
+          <input required minLength={3} maxLength={100} pattern="[A-Za-z0-9_.-]+" autoComplete="off" placeholder="Kullanıcı adı" value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm" />
+        </label>
+        <label className="space-y-1">
+          <span className="block text-xs text-slate-400">E-posta</span>
+          <input required type="email" autoComplete="off" placeholder="E-posta" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm" />
+        </label>
+        <label className="space-y-1">
+          <span className="block text-xs text-slate-400">Parola</span>
+          <input required type="password" minLength={12} autoComplete="new-password" placeholder="Parola (min. 12)" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm" />
+        </label>
+        <button type="submit" disabled={creating || loading} className="self-end rounded bg-emerald-500 px-4 py-2 text-sm font-bold text-slate-950 disabled:opacity-50">{creating ? "Oluşturuluyor..." : "Kullanıcı Oluştur"}</button>
         <fieldset className="flex flex-wrap gap-3 md:col-span-4">
           <legend className="mb-2 text-xs text-slate-500">Başlangıç rolleri</legend>
           {roles.map((role) => (
@@ -137,7 +146,7 @@ function AdminPanel({ request, currentUserId, onClose }) {
       </form>
 
       {loading ? (
-        <p className="text-sm text-slate-500">Yönetim verileri yükleniyor...</p>
+        <p role="status" className="text-sm text-slate-500">Yönetim verileri yükleniyor...</p>
       ) : (
         <div className="space-y-3">
           {users.map((user) => {
