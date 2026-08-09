@@ -8,4 +8,5 @@ ruff==0.4.10
 mypy==1.8.0
 pre-commit==4.5.0
 colorama==0.4.6
+bandit==1.9.4
 python-dotenv==1.2.2

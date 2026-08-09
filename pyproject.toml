@@ -53,7 +53,8 @@ dev = [
   "ruff==0.4.10",
   "mypy==1.8.0",
   "pre-commit==4.5.0",
-  "colorama==0.4.6"
+  "colorama==0.4.6",
+  "bandit==1.9.4"
 ]
 
 [tool.black]
@@ -64,6 +65,9 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 filterwarnings = ["error::DeprecationWarning"]
+markers = [
+  "integration: requires live PostgreSQL and Redis; run with RUN_INTEGRATION=1",
+]
 
 [tool.coverage.report]
 fail_under = 73

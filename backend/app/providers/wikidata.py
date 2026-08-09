@@ -46,7 +46,7 @@ class _UrllibTransport(httpx.AsyncBaseTransport):
                 method=request.method,
                 headers=dict(request.headers),
             )
-            with urllib.request.urlopen(
+            with urllib.request.urlopen(  # nosec B310 - httpx->urllib transport adapter
                 http_request, timeout=self.timeout_seconds
             ) as response:
                 return httpx.Response(

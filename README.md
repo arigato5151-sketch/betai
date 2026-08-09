@@ -1237,6 +1237,17 @@ frontend npm bağımlılıklarını her pazartesi kontrol eder.
 
 Mypy `backend/app` altındaki tüm backend paketini zorunlu kontrol eder. ORM modelleri SQLAlchemy 2 `DeclarativeBase`, `Mapped` ve `mapped_column` yapısındadır; nullable legacy tahmin alanları audit, backtest, task ve endpoint katmanlarında güvenli varsayılanlarla ele alınır.
 
+### Otomatik kalite kapıları (P7)
+
+CI, kapıları şu sırayla uygular: format/lint (Ruff, Black, ESLint) → tip kontrolü (Mypy) → birim testleri (SQLite) → PostgreSQL/Redis entegrasyonu → API sözleşmesi (OpenAPI drift) → tarayıcı E2E (Playwright) → model leakage testi → walk-forward değerlendirme ve promotion kapısı → Docker smoke → güvenlik taraması (pip-audit, npm audit, Bandit).
+
+- **Entegrasyon kapısı**: tam suite SQLite üzerinde çalıştığından gerçek PostgreSQL/Redis yokluğu hiç kanıtlanmazdı. `tests/integration/test_postgres_redis.py` canlı Postgres tablosu + Redis round-trip'ini doğrular; yerelde `RUN_INTEGRATION=1 pytest tests/integration -q` (hedef `INTEGRATION_DATABASE_URL` ve `INTEGRATION_REDIS_URL`) ile çalışır, CI `PostgreSQL/Redis integration gate` job'ında çalışır.
+- **Model leakage kapısı**: `tests/test_leakage_gate.py`, geçmiş satırların gelecek sonuçlar silindiğinde değişmemesini, temporal holdout'un kronolojik son satırları örneklemesini ve closing odds/current-stat sızıntısının olmamasını kanıtlar.
+- **Walk-forward & promotion kapısı**: `backend/app/prediction/ml/walkforward_policy.py` policy'sini `scripts/walkforward_gate.py --synthetic` deterministik walk-forward değerlendirmesiyle çalıştırır (bütçe: Brier ≤ 0.40, log loss ≤ 1.10); imzalı bir tiered artifact varsa onu da doğrular.
+- **Tarayıcı E2E**: `frontend/e2e/platform.spec.js` + Playwright, canlı stack'e (frontend `:3000` + nginx proxisi) karşı oturum açma/çıkış/yenileme, cross-site Origin reddi (403) ve demo fikstür → analiz formu → `/api/analyze` turunu koşar. `npm --prefix frontend run e2e` ile yerelde de koşar.
+- **Docker smoke**: compose config doğrulaması, üretim imajlarının derlenmesi, stack'in ayaklanması ve `/health/ready` + frontend 200 doğrulaması.
+- **Güvenlik taraması**: `python -m bandit -r backend/app -c .bandit.yml` (yalnızca yüksek önem seviyesinde bloklar), `pip-audit` ve `npm audit --audit-level=high` engelleyicidir.
+
 CI, `coverage.xml` dosyasını Codecov'a yükler ve toplam backend coverage değerinin `%73` altına düşmesine izin vermez. Badge yayımlamak için repository Codecov'da etkinleştirildikten sonra servisin verdiği repository-specific badge URL'si README'nin başına eklenmelidir; repository/organizasyon adresi bilinmediği için yanıltıcı bir URL sabitlenmemiştir.
 
 ## OpenAPI Şeması

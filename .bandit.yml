@@ -1,0 +1,12 @@
+---
+reports: standard
+exclude_dirs:
+  - backend/migrations
+  - frontend
+  - tests
+  - .venv
+skips:
+  - B101
+  - B105
+  - B106
+  - B311
