@@ -20,6 +20,7 @@ def production_settings(**overrides) -> Settings:
         "COOKIE_SECURE": True,
         "REQUIRE_ORIGIN_HEADER": True,
         "ADMIN_PASSWORD": "strong-admin-password",
+        "BOOTSTRAP_ADMIN_SECRET": "bootstrap-secret-12345",
         "FRONTEND_URL": "https://bets.example.com",
         "BACKEND_CORS_ORIGINS": "https://bets.example.com",
     }
@@ -61,6 +62,18 @@ def test_model_signing_key_must_differ_from_jwt_secrets() -> None:
         ),
         ({"DATABASE_URL": "sqlite:///local.db"}, "DATABASE_URL must use PostgreSQL"),
         ({"ALLOW_DATABASE_FALLBACK": True}, "ALLOW_DATABASE_FALLBACK must be false"),
+        (
+            {"BOOTSTRAP_ADMIN_SECRET": "short"},
+            "BOOTSTRAP_ADMIN_SECRET must be set",
+        ),
+        (
+            {"BOOTSTRAP_ADMIN_SECRET": None},
+            "BOOTSTRAP_ADMIN_SECRET must be set",
+        ),
+        (
+            {"ADMIN_PASSWORD": "change-this-password"},
+            "ADMIN_PASSWORD must be non-default",
+        ),
     ],
 )
 def test_insecure_production_configuration_fails_fast(
@@ -68,6 +81,13 @@ def test_insecure_production_configuration_fails_fast(
 ) -> None:
     with pytest.raises(ValidationError, match=expected_message):
         production_settings(**override)
+
+
+def test_production_allows_generated_admin_password() -> None:
+    configured = production_settings(ADMIN_PASSWORD=None)
+
+    assert configured.ADMIN_PASSWORD is None
+    assert configured.BOOTSTRAP_ADMIN_SECRET == "bootstrap-secret-12345"
 
 
 def test_samesite_none_requires_secure_cookie_in_every_environment() -> None:

@@ -66,7 +66,8 @@ class Settings(BaseSettings):
     CSRF_COOKIE_NAME: str = "bet_ai_csrf"
     CSRF_HEADER_NAME: str = "X-CSRF-Token"
     ADMIN_USERNAME: str = Field(default="admin", min_length=1)
-    ADMIN_PASSWORD: str = Field(default="change-this-password", min_length=8)
+    ADMIN_PASSWORD: str | None = None
+    BOOTSTRAP_ADMIN_SECRET: str | None = None
     ALLOW_SELF_REGISTRATION: bool = False
     SELF_REGISTRATION_ROLE: Literal["viewer", "analyst"] = "viewer"
     FRONTEND_URL: str = "http://localhost:3000"
@@ -777,7 +778,11 @@ class Settings(BaseSettings):
         elif self.MODEL_SIGNING_KEY in secrets:
             errors.append("MODEL_SIGNING_KEY must be distinct from JWT secrets")
 
-        if (
+        if self.BOOTSTRAP_ADMIN_SECRET is None or len(self.BOOTSTRAP_ADMIN_SECRET) < 16:
+            errors.append(
+                "BOOTSTRAP_ADMIN_SECRET must be set and at least 16 characters"
+            )
+        if self.ADMIN_PASSWORD is not None and (
             len(self.ADMIN_PASSWORD) < 12
             or self.ADMIN_PASSWORD == "change-this-password"
         ):

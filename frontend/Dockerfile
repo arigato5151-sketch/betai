@@ -10,15 +10,10 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:20-alpine AS runner
-WORKDIR /app
-COPY --chown=node:node --from=builder /app/dist ./dist
-COPY --chown=node:node --from=builder /app/node_modules ./node_modules
-COPY --chown=node:node --from=builder /app/package.json ./package.json
-COPY --chown=node:node --from=builder /app/vite.config.js ./vite.config.js
+FROM nginx:1.27-alpine
+COPY nginx.conf /etc/nginx/nginx.conf
+COPY --from=builder /app/dist /usr/share/nginx/html
 
-USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD wget -q -O /dev/null http://127.0.0.1:3000/
-CMD ["npm", "run", "preview"]
+    CMD wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1

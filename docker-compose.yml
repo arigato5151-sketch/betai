@@ -2,6 +2,11 @@ services:
   postgres:
     image: postgres:15
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
     environment:
       POSTGRES_USER: betai
       POSTGRES_PASSWORD: betai
@@ -17,6 +22,11 @@ services:
   redis:
     image: redis:7
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
     ports:
       - "6379:6379"
     healthcheck:
@@ -28,6 +38,11 @@ services:
   memcached:
     image: memcached:1.6-alpine
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
     command: memcached -m 64 -I 2m
     healthcheck:
       test: ["CMD-SHELL", "echo stats | nc 127.0.0.1 11211 | grep STAT"]
@@ -45,6 +60,14 @@ services:
     environment:
       DATABASE_URL: postgresql://betai:betai@postgres:5432/bet_ai
       API_FOOTBALL_KEY: DEMO_KEY
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,8 +83,17 @@ services:
       DATABASE_URL: postgresql://betai:betai@postgres:5432/bet_ai
       API_FOOTBALL_KEY: DEMO_KEY
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-this-password}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      BOOTSTRAP_ADMIN_SECRET: ${BOOTSTRAP_ADMIN_SECRET}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.invalid}
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
     depends_on:
       migration:
         condition: service_completed_successfully
@@ -72,6 +104,14 @@ services:
       dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://betai:betai@postgres:5432/bet_ai
@@ -194,6 +234,7 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-development-access-secret-change-me}
       JWT_REFRESH_SECRET_KEY: ${JWT_REFRESH_SECRET_KEY:-development-refresh-secret-change-me}
       MODEL_SIGNING_KEY: ${MODEL_SIGNING_KEY:-development-model-signing-key-change-me}
+      BOOTSTRAP_ADMIN_SECRET: ${BOOTSTRAP_ADMIN_SECRET}
       COOKIE_SECURE: "false"
       ALLOW_SELF_REGISTRATION: ${ALLOW_SELF_REGISTRATION:-false}
       FRONTEND_URL: http://localhost:3000
@@ -216,10 +257,17 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: /api
-    environment:
-      VITE_PROXY_TARGET: http://backend:8000
     ports:
       - "3000:3000"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
     restart: unless-stopped
     depends_on:
       backend:
@@ -230,6 +278,14 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     command: celery -A app.tasks.celery_app:celery_app worker --loglevel=INFO --concurrency=1
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
     healthcheck:
       disable: true
     restart: unless-stopped
@@ -335,6 +391,7 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-development-access-secret-change-me}
       JWT_REFRESH_SECRET_KEY: ${JWT_REFRESH_SECRET_KEY:-development-refresh-secret-change-me}
       MODEL_SIGNING_KEY: ${MODEL_SIGNING_KEY:-development-model-signing-key-change-me}
+      BOOTSTRAP_ADMIN_SECRET: ${BOOTSTRAP_ADMIN_SECRET}
       COOKIE_SECURE: "false"
       ALLOW_SELF_REGISTRATION: ${ALLOW_SELF_REGISTRATION:-false}
       FRONTEND_URL: http://localhost:3000
@@ -356,6 +413,14 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     command: celery -A app.tasks.celery_app:celery_app beat --loglevel=INFO --schedule=/var/run/celery/celerybeat-schedule
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
     healthcheck:
       disable: true
     restart: unless-stopped
@@ -418,6 +483,7 @@ services:
       SPORTMONKS_PLAYER_LOOKBACK_MATCHES: ${SPORTMONKS_PLAYER_LOOKBACK_MATCHES:-10}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-development-access-secret-change-me}
       JWT_REFRESH_SECRET_KEY: ${JWT_REFRESH_SECRET_KEY:-development-refresh-secret-change-me}
+      BOOTSTRAP_ADMIN_SECRET: ${BOOTSTRAP_ADMIN_SECRET}
       COOKIE_SECURE: "false"
       ALLOW_SELF_REGISTRATION: ${ALLOW_SELF_REGISTRATION:-false}
       FRONTEND_URL: http://localhost:3000

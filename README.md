@@ -1301,6 +1301,14 @@ Secret adları `<prefix>-<küçük-harf-env-anahtarı>` biçimindedir; örneğin
 - Başarısız login denemeleri kullanıcı+IP karmasıyla Redis'te sayılır. Redis yoksa process-local fail-safe devreye girer ve bağlantı periyodik olarak tekrar denenir. Varsayılan politika 5 deneme/300 saniye ve 900 saniye kilittir.
 - Refresh token her kullanımda rotate edilir; tekrar kullanım bütün token ailesini iptal eder. Kullanıcılar `/api/auth/sessions` ile cihaz oturumlarını görüp tek tek kapatabilir.
 
+### Dağıtım (Nginx) ve ilk kurulum güvenliği
+
+- Frontend `vite preview` yerine Nginx ile servis edilir; `/api` aynı origin üzerinden `backend` servisine reverse proxy edilir (single-origin, CORS yerine).
+- Nginx CSP, HSTS, `X-Content-Type-Options: nosniff`, `Referrer-Policy` ve `X-Frame-Options: DENY` başlıklarını uygular; asset'ler `/assets/*` üzerinden uzun ömürlü cache ile servis edilir.
+- Varsayılan admin parolası yoktur. İlk kurulumda `BOOTSTRAP_ADMIN_SECRET` (min 16 karakter) zorunludur; `bootstrap-admin` bir kez çalışıp kullanıcıyı oluşturduktan sonra atlar. `ADMIN_PASSWORD` boş bırakılırsa tek kullanımlık parola üretilir ve log'a basılır.
+- Tüm servislere CPU/bellek limitleri ve (backend/worker/beat/frontend dahil) read-only filesystem uygulanır; yazılabilir alanlar yalnızca named volume veya `tmpfs` üzerindedir.
+- CI'da `pip-audit` (Python) ve `npm audit --audit-level=high` (frontend) bağımlılık güvenliğini bloklayıcı olarak denetler.
+
 - `.env`, veritabanı dosyaları ve model artifact'larını kaynak kontrolüne eklemeyin.
 - Production'da CORS origin listesini yalnızca güvenilen domain'lerle sınırlandırın.
 - `ENVIRONMENT=production` iken güvenlik kuralları fail-fast uygulanır; geçersiz ayarlar sessiz fallback ile zayıflatılmaz.

@@ -23,8 +23,9 @@ jobs:
       JWT_SECRET_KEY: ci-access-secret-that-is-not-used-in-production
       JWT_REFRESH_SECRET_KEY: ci-refresh-secret-that-is-not-used-in-production
       MODEL_SIGNING_KEY: ci-model-signing-secret-that-is-not-production
-      ADMIN_USERNAME: ci-admin
-      ADMIN_PASSWORD: ci-password-only
+ADMIN_USERNAME: ci-admin
+      ADMIN_PASSWORD: ci-password-only-long-enough
+      BOOTSTRAP_ADMIN_SECRET: ci-bootstrap-secret-that-is-long-enough
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -44,8 +45,10 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Install frontend dependencies
+- name: Install frontend dependencies
         run: npm --prefix frontend ci
+      - name: Frontend vulnerability audit
+        run: npm --prefix frontend audit --audit-level=high
       - name: Frontend lint
         run: npm --prefix frontend run lint
       - name: Frontend tests
