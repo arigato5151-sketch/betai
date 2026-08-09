@@ -49,12 +49,16 @@ class ClubEloClient:
         base_url: str | None = None,
         timeout_seconds: float | None = None,
         cache_hours: int | None = None,
+        failure_cooldown_seconds: int | None = None,
         confidence: float | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = (base_url or settings.CLUBELO_BASE_URL).strip().rstrip("/")
         self.timeout_seconds = timeout_seconds or settings.CLUBELO_TIMEOUT_SECONDS
         self.cache_seconds = float((cache_hours or settings.CLUBELO_CACHE_HOURS) * 3600)
+        self.failure_cooldown_seconds = float(
+            failure_cooldown_seconds or settings.CLUBELO_FAILURE_COOLDOWN_SECONDS
+        )
         self.confidence = (
             float(confidence)
             if confidence is not None
@@ -62,6 +66,7 @@ class ClubEloClient:
         )
         self.transport = transport
         self._cache: dict[str, tuple[float, tuple[_ClubEloRow, ...]]] = {}
+        self._failure_cache: dict[str, float] = {}
         self._cache_lock = asyncio.Lock()
 
     async def resolve_elo(
@@ -124,13 +129,25 @@ class ClubEloClient:
         cached = self._cache.get(cache_key)
         if cached and cached[0] > now:
             return cached[1]
+        if self._failure_cache.get(cache_key, 0.0) > now:
+            raise ClubEloDownloadError("ClubElo rating feed is in failure cooldown")
 
         async with self._cache_lock:
+            now = time.monotonic()
             cached = self._cache.get(cache_key)
-            if cached and cached[0] > time.monotonic():
+            if cached and cached[0] > now:
                 return cached[1]
-            content = await self._download(cache_key)
-            rows = self._parse(content)
+            if self._failure_cache.get(cache_key, 0.0) > now:
+                raise ClubEloDownloadError("ClubElo rating feed is in failure cooldown")
+            try:
+                content = await self._download(cache_key)
+                rows = self._parse(content)
+            except ClubEloError:
+                self._failure_cache[cache_key] = (
+                    time.monotonic() + self.failure_cooldown_seconds
+                )
+                raise
+            self._failure_cache.pop(cache_key, None)
             self._cache[cache_key] = (time.monotonic() + self.cache_seconds, rows)
             return rows
 

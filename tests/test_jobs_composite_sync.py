@@ -3,7 +3,12 @@ from unittest.mock import Mock
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import Base, HistoricalFixture, MatchPrediction
+from app.db.models import (
+    Base,
+    FixtureOddsSnapshot,
+    HistoricalFixture,
+    MatchPrediction,
+)
 from app.tasks.jobs import _sync_completed_matches
 
 
@@ -92,6 +97,66 @@ def test_composite_prediction_verified_against_local_history(monkeypatch) -> Non
         assert record.actual_score_home == 0
         assert record.actual_score_away == 2
         assert record.result_verification_status == "verified"
+
+
+def test_verified_result_uses_timestamped_pre_kickoff_closing_snapshot(
+    monkeypatch,
+) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+    kickoff = datetime(2026, 8, 12, 19, tzinfo=UTC)
+    fixture_id = 9_000_091
+    with session_factory() as db:
+        db.add(
+            _prediction(
+                fixture_id=fixture_id,
+                fixture_source="api_football",
+                provider_fixture_id=str(fixture_id),
+                kickoff=kickoff,
+            )
+        )
+        db.add(
+            HistoricalFixture(
+                fixture_id=fixture_id,
+                league_id=88,
+                season=2026,
+                kickoff=kickoff,
+                home_team_id=645,
+                away_team_id=11,
+                home_team="PEC Zwolle",
+                away_team="Ajax",
+                home_goals=0,
+                away_goals=2,
+                actual_result="AWAY_WIN",
+                status="FT",
+                data_source="api_football",
+            )
+        )
+        db.add(
+            FixtureOddsSnapshot(
+                fixture_id=fixture_id,
+                home_odd=3.1,
+                draw_odd=3.4,
+                away_odd=2.2,
+                source="api_football_odds",
+                captured_at=kickoff - timedelta(minutes=15),
+            )
+        )
+        db.commit()
+
+    monkeypatch.setattr("app.tasks.jobs.SessionLocal", session_factory)
+    monkeypatch.setattr("app.tasks.jobs.retrain_ml_model_task.delay", Mock())
+    api_client = Mock()
+
+    result = _sync_completed_matches(api_client, Mock())
+
+    assert result.get("verified") == 1
+    api_client.get_fixture_market.assert_not_called()
+    with session_factory() as db:
+        record = db.query(MatchPrediction).one()
+        assert record.closing_odds == 2.2
+        assert record.clv == -0.1818
 
 
 def test_composite_matching_ignores_shifted_kickoff(monkeypatch) -> None:

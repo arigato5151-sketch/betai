@@ -40,8 +40,16 @@ class Settings(BaseSettings):
     MODEL_DRIFT_WINDOW_SIZE: int = Field(default=100, ge=20, le=2000)
     MODEL_DRIFT_MIN_SAMPLES: int = Field(default=30, ge=10, le=1000)
     MODEL_DRIFT_BRIER_THRESHOLD: float = Field(default=0.04, gt=0, le=1)
+    MODEL_DRIFT_BOOTSTRAP_SAMPLES: int = Field(default=2000, ge=200, le=20000)
+    MODEL_DRIFT_CONFIDENCE: float = Field(default=0.95, ge=0.8, lt=1)
+    MODEL_DRIFT_RETRAIN_COOLDOWN_SECONDS: int = Field(
+        default=259200, ge=3600, le=2592000
+    )
     AUDIT_MIN_RELIABLE_SAMPLES: int = Field(default=30, ge=10, le=1000)
     AUDIT_BOOTSTRAP_ITERATIONS: int = Field(default=2000, ge=200, le=10000)
+    # Financial actions stay disabled until out-of-time market and realized
+    # betting audits justify enabling them explicitly.
+    FINANCIAL_RECOMMENDATIONS_ENABLED: bool = False
     JWT_ALGORITHM: Literal["HS256", "HS384", "HS512"] = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, ge=1, le=1440)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, ge=1, le=90)
@@ -120,7 +128,9 @@ class Settings(BaseSettings):
     DERIVED_XG_CONFIDENCE: float = Field(default=0.65, gt=0, lt=0.95)
     CLUBELO_ENABLED: bool = False
     CLUBELO_BASE_URL: str = "http://api.clubelo.com"
-    CLUBELO_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=120)
+    # ClubElo is an optional fallback and must not dominate interactive latency.
+    CLUBELO_TIMEOUT_SECONDS: float = Field(default=3.0, gt=0, le=30)
+    CLUBELO_FAILURE_COOLDOWN_SECONDS: int = Field(default=300, ge=30, le=3600)
     CLUBELO_CACHE_HOURS: int = Field(default=24, ge=1, le=168)
     CLUBELO_CONFIDENCE: float = Field(default=0.80, gt=0, le=1, allow_inf_nan=False)
     SPORTMONKS_ENABLED: bool = False
@@ -135,12 +145,14 @@ class Settings(BaseSettings):
     )
     ODDS_COLLECTOR_ENABLED: bool = True
     ODDS_COLLECTOR_RUN_INTERVAL_SECONDS: int = Field(
-        default=10800,
+        default=21600,
         ge=900,
         le=86400,
     )
     ODDS_COLLECTOR_HORIZON_DAYS: int = Field(default=7, ge=1, le=14)
     ODDS_COLLECTOR_MAX_FIXTURES: int = Field(default=20, ge=1, le=200)
+    ODDS_COLLECTOR_MARKET_REQUEST_BUDGET: int = Field(default=15, ge=1, le=100)
+    ODDS_COLLECTOR_DAILY_QUOTA_RESERVE: int = Field(default=20, ge=0, le=1000)
     ODDS_COLLECTOR_CLOSING_WINDOW_HOURS: int = Field(
         default=24,
         ge=1,
@@ -383,6 +395,20 @@ class Settings(BaseSettings):
     )
     MIN_TIERED_CALIBRATION_SAMPLES: int = Field(default=60, ge=30)
     TIERED_CALIBRATION_HOLDOUT_FRACTION: float = Field(default=0.15, ge=0.05, le=0.4)
+    TIERED_PROMOTION_MIN_HOLDOUT_SAMPLES: int = Field(default=30, ge=10, le=10000)
+    TIERED_PROMOTION_BOOTSTRAP_SAMPLES: int = Field(default=2000, ge=200, le=20000)
+    TIERED_PROMOTION_CONFIDENCE: float = Field(default=0.95, ge=0.8, lt=1)
+    MIN_TIERED_MARKET_LOG_LOSS_IMPROVEMENT: float = Field(default=0.005, ge=0, le=1)
+    MIN_TIERED_MARKET_BRIER_IMPROVEMENT: float = Field(default=0.002, ge=0, le=1)
+    MIN_TIERED_CHAMPION_LOG_LOSS_IMPROVEMENT: float = Field(default=0.002, ge=0, le=1)
+    MIN_TIERED_CHAMPION_BRIER_IMPROVEMENT: float = Field(default=0.001, ge=0, le=1)
+    MAX_TIERED_CHAMPION_LOG_LOSS_REGRESSION: float = Field(default=0.002, ge=0, le=1)
+    MAX_TIERED_CHAMPION_BRIER_REGRESSION: float = Field(default=0.001, ge=0, le=1)
+    DECISION_MIN_TOP_PROBABILITY_PCT: float = Field(default=40.0, ge=0, le=100)
+    DECISION_MIN_MARGIN_PCT: float = Field(default=5.0, ge=0, le=100)
+    DECISION_MAX_NORMALIZED_ENTROPY: float = Field(default=0.98, ge=0, le=1)
+    DECISION_MAX_SOURCE_JSD: float = Field(default=0.15, ge=0, le=1)
+    DECISION_SOURCE_DIVERGENCE_MAX_MARGIN_PCT: float = Field(default=10.0, ge=0, le=100)
     MIN_VALUE_EV_POINTS: float = Field(
         default=0.05,
         ge=0,

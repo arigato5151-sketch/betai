@@ -211,12 +211,18 @@ async def test_aggregator_merges_duplicates_and_isolates_source_failures(
         time(12),
         tzinfo=ISTANBUL,
     )
-    primary = fixture(101, "api_football", kickoff=kickoff)
+    primary = fixture(
+        101,
+        "api_football",
+        home="AC Horsens",
+        away="Brondby",
+        kickoff=kickoff,
+    )
     duplicate = fixture(
         1_500_000_202,
         "football_data_org",
-        home=" Arsenal ",
-        away="CHELSEA",
+        home="Horsens FC",
+        away="Brøndby IF",
         kickoff=kickoff + timedelta(minutes=30),
     )
     extra = fixture(

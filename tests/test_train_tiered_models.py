@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from app.prediction.ml.model_router import TieredModelArtifactStore
 from app.prediction.ml.train_tiered_models import (
+    ModelPromotionRejected,
+    _champion_benchmark_metrics,
+    _market_benchmark_metrics,
     normalize_pipeline_row,
     train_tiered_models,
 )
@@ -120,14 +124,29 @@ def test_training_smoke_exports_signed_tiered_artifact(tmp_path) -> None:
     ]
     store = TieredModelArtifactStore(artifacts_dir=tmp_path)
 
-    result = train_tiered_models(fixtures, artifact_store=store, backend="sklearn")
+    result = train_tiered_models(
+        fixtures,
+        artifact_store=store,
+        backend="sklearn",
+        require_market_superiority=False,
+    )
 
     assert store.active_path.is_file()
     assert store.verify(store.active_path) is True
     assert store.load_active() is not None
     assert result["tier1_metrics"]["samples"] >= 3
+    assert isinstance(result["tier1_metrics"]["beats_opening_market"], bool)
+    assert "market_log_loss" in result["tier1_metrics"]
+    assert "market_brier_score" in result["tier1_metrics"]
+    assert "log_loss_improvement_vs_market" in result["tier1_metrics"]
     assert result["tier2_metrics"]["samples"] >= 3
     assert result["metadata"]["training_source"] == "historical_fixtures"
+    assert result["metadata"]["tier1_features"] == list(
+        store.load_active().tier1_model.FEATURES
+    )
+    assert all(
+        not name.startswith("closing_") for name in result["metadata"]["tier1_features"]
+    )
 
 
 def test_pipeline_source_training_smoke_exports_signed_artifact(tmp_path) -> None:
@@ -140,6 +159,7 @@ def test_pipeline_source_training_smoke_exports_signed_artifact(tmp_path) -> Non
         enrich_odds=_alternating_odds_provider(),
         artifact_store=store,
         backend="sklearn",
+        require_market_superiority=False,
     )
 
     assert store.active_path.is_file()
@@ -192,3 +212,109 @@ def test_training_rejects_insufficient_tier_data(tmp_path) -> None:
             artifact_store=TieredModelArtifactStore(artifacts_dir=tmp_path),
             backend="sklearn",
         )
+
+
+def test_candidate_that_does_not_beat_market_is_not_promoted(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixtures = [
+        *(_fixture(index, rich=True) for index in range(18)),
+        *(_fixture(index + 40, rich=False) for index in range(18)),
+    ]
+    store = TieredModelArtifactStore(artifacts_dir=tmp_path)
+    monkeypatch.setattr(
+        "app.prediction.ml.train_tiered_models._market_benchmark_metrics",
+        lambda *_args, **_kwargs: {
+            "market_accuracy": 0.6,
+            "market_log_loss": 0.9,
+            "market_brier_score": 0.55,
+            "log_loss_improvement_vs_market": -0.1,
+            "brier_improvement_vs_market": -0.05,
+            "beats_opening_market": False,
+        },
+    )
+
+    with pytest.raises(ModelPromotionRejected) as error:
+        train_tiered_models(fixtures, artifact_store=store, backend="sklearn")
+
+    assert error.value.tier1_metrics["beats_opening_market"] is False
+    assert store.active_path.exists() is False
+
+
+def test_market_gate_requires_sample_size_and_positive_bootstrap_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_count = 60
+    actual = np.arange(sample_count, dtype=int) % 3
+    features = pd.DataFrame(
+        {
+            "opening_away_odd": np.full(sample_count, 3.0),
+            "opening_draw_odd": np.full(sample_count, 3.0),
+            "opening_home_odd": np.full(sample_count, 3.0),
+        }
+    )
+    strong = np.full((sample_count, 3), 0.05)
+    strong[np.arange(sample_count), actual] = 0.90
+    monkeypatch.setattr(
+        "app.prediction.ml.train_tiered_models.settings.TIERED_PROMOTION_MIN_HOLDOUT_SAMPLES",
+        30,
+    )
+
+    metrics = _market_benchmark_metrics(
+        features,
+        pd.Series(actual),
+        model_probabilities=strong,
+    )
+
+    assert metrics["promotion_sample_sufficient"] is True
+    assert metrics["market_log_loss_improvement_lower_bound"] > 0
+    assert metrics["market_brier_improvement_lower_bound"] > 0
+    assert metrics["beats_opening_market"] is True
+
+    too_small = _market_benchmark_metrics(
+        features.iloc[:12],
+        pd.Series(actual[:12]),
+        model_probabilities=strong[:12],
+    )
+    assert too_small["promotion_sample_sufficient"] is False
+    assert too_small["beats_opening_market"] is False
+
+
+def test_champion_gate_rejects_noise_and_accepts_material_improvement() -> None:
+    noisy_candidate = {"log_loss": 0.9995, "brier_score": 0.5998}
+    champion = {"log_loss": 1.0, "brier_score": 0.6}
+
+    rejected = _champion_benchmark_metrics(noisy_candidate, champion)
+    accepted = _champion_benchmark_metrics(
+        {"log_loss": 0.99, "brier_score": 0.595}, champion
+    )
+
+    assert rejected["beats_active_champion"] is False
+    assert accepted["beats_active_champion"] is True
+
+
+def test_equal_candidate_does_not_replace_signed_active_champion(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixtures = [
+        *(_fixture(index, rich=True) for index in range(18)),
+        *(_fixture(index + 40, rich=False) for index in range(18)),
+    ]
+    store = TieredModelArtifactStore(artifacts_dir=tmp_path)
+    first = train_tiered_models(
+        fixtures,
+        artifact_store=store,
+        backend="sklearn",
+        require_market_superiority=False,
+    )
+    active_version = first["artifact_version"]
+    monkeypatch.setattr(
+        "app.prediction.ml.train_tiered_models._market_benchmark_metrics",
+        lambda *_args, **_kwargs: {"beats_opening_market": True},
+    )
+
+    with pytest.raises(ModelPromotionRejected) as error:
+        train_tiered_models(fixtures, artifact_store=store, backend="sklearn")
+
+    assert "active_champion" in error.value.tier1_metrics["promotion_failures"]
+    assert store.load_active().artifact_version == active_version

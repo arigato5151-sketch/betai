@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -65,7 +66,16 @@ class FakeOddsHistoryService:
 
 
 @pytest.mark.asyncio
-async def test_collector_fetches_only_due_markets_with_bounded_scope() -> None:
+async def test_collector_fetches_only_due_markets_with_bounded_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.tasks import jobs
+
+    monkeypatch.setattr(
+        jobs.api_football_health,
+        "snapshot",
+        AsyncMock(return_value={"daily_remaining": None}),
+    )
     client = FakeOddsClient()
     service = FakeOddsHistoryService()
     observed_at = datetime(2030, 7, 30, 12, tzinfo=UTC)
@@ -82,6 +92,8 @@ async def test_collector_fetches_only_due_markets_with_bounded_scope() -> None:
         "eligible_fixtures": 2,
         "snapshots_recorded": 1,
         "not_due": 1,
+        "quota_deferred": 0,
+        "market_request_budget": settings.ODDS_COLLECTOR_MARKET_REQUEST_BUDGET,
         "market_unavailable": 0,
         "rejected": 0,
         "invalid_fixtures": 1,
@@ -89,6 +101,34 @@ async def test_collector_fetches_only_due_markets_with_bounded_scope() -> None:
     }
     assert client.market_calls == [100]
     assert len(service.enriched) == 1
+
+
+@pytest.mark.asyncio
+async def test_collector_reserves_daily_quota_and_defers_market_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.tasks import jobs
+
+    client = FakeOddsClient()
+    service = FakeOddsHistoryService()
+    monkeypatch.setattr(service, "should_collect", lambda **_: True)
+    monkeypatch.setattr(settings, "ODDS_COLLECTOR_DAILY_QUOTA_RESERVE", 20)
+    monkeypatch.setattr(
+        jobs.api_football_health,
+        "snapshot",
+        AsyncMock(return_value={"daily_remaining": 20}),
+    )
+
+    result = await _collect_upcoming_odds(
+        client,  # type: ignore[arg-type]
+        service,  # type: ignore[arg-type]
+        observed_at=datetime(2030, 7, 30, 12, tzinfo=UTC),
+    )
+
+    assert result["market_request_budget"] == 0
+    assert result["quota_deferred"] == 2
+    assert result["snapshots_recorded"] == 0
+    assert client.market_calls == []
 
 
 def test_collector_task_is_noop_when_disabled(

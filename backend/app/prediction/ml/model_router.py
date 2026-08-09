@@ -47,7 +47,7 @@ class RoutedPrediction:
 class TieredModelArtifactStore:
     """Persist Tier 1/2 models with the same HMAC contract as active_model.pkl."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, *, artifacts_dir: Path | str | None = None) -> None:
         root = Path(artifacts_dir or settings.MODEL_ARTIFACTS_DIR)
@@ -97,6 +97,8 @@ class TieredModelArtifactStore:
         trained_at = datetime.now(UTC).isoformat()
         bundle_metadata = {
             **dict(metadata or {}),
+            "tier1_features": list(tier1_model.FEATURES),
+            "tier2_features": list(tier2_model.FEATURES),
             "tier1_metrics": dict(tier1_metrics),
             "tier2_metrics": dict(tier2_metrics),
         }
@@ -206,6 +208,12 @@ class TieredModelArtifactStore:
             or not isinstance(metadata, dict)
         ):
             raise TieredArtifactIntegrityError("Tiered artifact metadata is invalid")
+        if metadata.get("tier1_features") != list(Tier1Model.FEATURES) or metadata.get(
+            "tier2_features"
+        ) != list(Tier2Model.FEATURES):
+            raise TieredArtifactIntegrityError(
+                "Tiered artifact feature schema is incompatible"
+            )
         return TieredModelBundle(
             tier1_model, tier2_model, version, trained_at, metadata
         )

@@ -702,6 +702,52 @@
         ]
       }
     },
+    "/api/predict/tiered": {
+      "post": {
+        "summary": "Predict With Tiered Model",
+        "description": "Run the signed tier bundle for research; never emit an actionable bet.",
+        "operationId": "predict_with_tiered_model_api_predict_tiered_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TieredPredictionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Predict With Tiered Model Api Predict Tiered Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ]
+      }
+    },
     "/api/analyze/preview": {
       "post": {
         "summary": "Preview Analysis Inputs",
@@ -784,52 +830,6 @@
             }
           }
         }
-      }
-    },
-    "/api/predict/tiered": {
-      "post": {
-        "summary": "Predict With Tiered Model",
-        "description": "Predict via the current signed tier bundle without changing legacy analysis.",
-        "operationId": "predict_with_tiered_model_api_predict_tiered_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TieredPredictionRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Predict With Tiered Model Api Predict Tiered Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "CookieAuth": []
-          }
-        ]
       }
     },
     "/api/history": {
@@ -1011,7 +1011,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MLStatusResponse"
+                }
               }
             }
           }
@@ -1158,6 +1160,27 @@
         ]
       }
     },
+    "/api/audit/leagues": {
+      "get": {
+        "summary": "Run League Audit",
+        "operationId": "run_league_audit_api_audit_leagues_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ]
+      }
+    },
     "/api/operations/data-quality": {
       "get": {
         "summary": "Get Data Quality",
@@ -1167,7 +1190,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DataQualityResponse"
+                }
               }
             }
           }
@@ -1673,6 +1698,32 @@
             "title": "Fixture Id",
             "description": "API Football fixture ID"
           },
+          "fixture_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixture Source"
+          },
+          "provider_fixture_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Fixture Id"
+          },
           "home_team_id": {
             "anyOf": [
               {
@@ -1759,6 +1810,14 @@
             },
             "type": "object",
             "title": "Feature Overrides"
+          },
+          "kelly_fraction": {
+            "type": "number",
+            "maximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Kelly Fraction",
+            "description": "Fractional Kelly stake multiplier (0-1)",
+            "default": 0.25
           }
         },
         "type": "object",
@@ -1891,6 +1950,70 @@
         ],
         "title": "CurrentUser"
       },
+      "DataQualityProvidersStatus": {
+        "properties": {
+          "api_football": {
+            "$ref": "#/components/schemas/ProviderHealthStatus"
+          },
+          "sportmonks": {
+            "$ref": "#/components/schemas/ProviderHealthStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "api_football",
+          "sportmonks"
+        ],
+        "title": "DataQualityProvidersStatus"
+      },
+      "DataQualityResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "warning",
+              "critical"
+            ],
+            "title": "Status"
+          },
+          "score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score"
+          },
+          "historical": {
+            "$ref": "#/components/schemas/HistoricalDataQualityStatus"
+          },
+          "predictions": {
+            "$ref": "#/components/schemas/PredictionDataQualityStatus"
+          },
+          "latest_sync": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncRunStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "providers": {
+            "$ref": "#/components/schemas/DataQualityProvidersStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "score",
+          "historical",
+          "predictions",
+          "latest_sync",
+          "providers"
+        ],
+        "title": "DataQualityResponse"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1903,6 +2026,183 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HistoricalDataQualityStatus": {
+        "properties": {
+          "fixtures": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Fixtures"
+          },
+          "leagues": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Leagues"
+          },
+          "seasons": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Seasons"
+          },
+          "oldest_kickoff": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Kickoff"
+          },
+          "newest_kickoff": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Newest Kickoff"
+          },
+          "last_updated": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Updated"
+          },
+          "freshness_hours": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freshness Hours"
+          },
+          "lineup_coverage_pct": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Lineup Coverage Pct"
+          },
+          "source_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Source Counts"
+          },
+          "current_season": {
+            "type": "integer",
+            "title": "Current Season"
+          },
+          "current_season_coverage": {
+            "items": {
+              "$ref": "#/components/schemas/HistoricalLeagueCoverageStatus"
+            },
+            "type": "array",
+            "title": "Current Season Coverage"
+          },
+          "current_season_covered_leagues": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Current Season Covered Leagues"
+          },
+          "current_season_missing_league_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Current Season Missing League Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fixtures",
+          "leagues",
+          "seasons",
+          "oldest_kickoff",
+          "newest_kickoff",
+          "last_updated",
+          "lineup_coverage_pct",
+          "source_counts",
+          "current_season",
+          "current_season_coverage",
+          "current_season_covered_leagues",
+          "current_season_missing_league_ids"
+        ],
+        "title": "HistoricalDataQualityStatus"
+      },
+      "HistoricalLeagueCoverageStatus": {
+        "properties": {
+          "league_id": {
+            "type": "integer",
+            "title": "League Id"
+          },
+          "league_name": {
+            "type": "string",
+            "title": "League Name"
+          },
+          "fixtures": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Fixtures"
+          },
+          "latest_kickoff": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Kickoff"
+          },
+          "expected_minimum_fixtures": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Minimum Fixtures"
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "fresh": {
+            "type": "boolean",
+            "title": "Fresh"
+          },
+          "covered": {
+            "type": "boolean",
+            "title": "Covered"
+          }
+        },
+        "type": "object",
+        "required": [
+          "league_id",
+          "league_name",
+          "fixtures",
+          "latest_kickoff",
+          "expected_minimum_fixtures",
+          "available",
+          "fresh",
+          "covered"
+        ],
+        "title": "HistoricalLeagueCoverageStatus"
       },
       "LoginRequest": {
         "properties": {
@@ -1925,6 +2225,251 @@
           "password"
         ],
         "title": "LoginRequest"
+      },
+      "MLMonitoringStatus": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "model_unavailable",
+              "insufficient_data",
+              "stable",
+              "drift"
+            ],
+            "title": "Status"
+          },
+          "drift_detected": {
+            "type": "boolean",
+            "title": "Drift Detected"
+          },
+          "samples": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Samples"
+          },
+          "required_samples": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Required Samples"
+          },
+          "window_size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Window Size"
+          },
+          "recent_brier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent Brier"
+          },
+          "baseline_brier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Brier"
+          },
+          "brier_delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brier Delta"
+          },
+          "brier_delta_lower_bound": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brier Delta Lower Bound"
+          },
+          "threshold": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Threshold"
+          },
+          "confidence": {
+            "type": "number",
+            "exclusiveMaximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence"
+          },
+          "artifact_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Version"
+          },
+          "metric_source": {
+            "type": "string",
+            "const": "ml_component",
+            "title": "Metric Source"
+          },
+          "ordering": {
+            "type": "string",
+            "const": "kickoff_desc",
+            "title": "Ordering"
+          },
+          "evaluated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Evaluated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "drift_detected",
+          "samples",
+          "required_samples",
+          "window_size",
+          "recent_brier",
+          "baseline_brier",
+          "brier_delta",
+          "brier_delta_lower_bound",
+          "threshold",
+          "confidence",
+          "artifact_version",
+          "metric_source",
+          "ordering",
+          "evaluated_at"
+        ],
+        "title": "MLMonitoringStatus"
+      },
+      "MLRuntimeStatus": {
+        "properties": {
+          "inference_success": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Inference Success"
+          },
+          "inference_failure": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Inference Failure"
+          }
+        },
+        "type": "object",
+        "required": [
+          "inference_success",
+          "inference_failure"
+        ],
+        "title": "MLRuntimeStatus"
+      },
+      "MLStatusResponse": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name"
+          },
+          "artifact_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Version"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metrics"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/MLRuntimeStatus"
+          },
+          "rollback_available": {
+            "type": "boolean",
+            "title": "Rollback Available"
+          },
+          "training_data": {
+            "$ref": "#/components/schemas/MLTrainingDataStatus"
+          },
+          "monitoring": {
+            "$ref": "#/components/schemas/MLMonitoringStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready",
+          "model_name",
+          "artifact_version",
+          "metrics",
+          "runtime",
+          "rollback_available",
+          "training_data",
+          "monitoring"
+        ],
+        "title": "MLStatusResponse"
+      },
+      "MLTrainingDataStatus": {
+        "properties": {
+          "labeled_predictions": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Labeled Predictions"
+          },
+          "historical_fixtures": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Historical Fixtures"
+          },
+          "minimum_samples": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Minimum Samples"
+          },
+          "historical_minimum_team_matches": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Historical Minimum Team Matches"
+          }
+        },
+        "type": "object",
+        "required": [
+          "labeled_predictions",
+          "historical_fixtures",
+          "minimum_samples",
+          "historical_minimum_team_matches"
+        ],
+        "title": "MLTrainingDataStatus"
       },
       "Odds1X2Input": {
         "properties": {
@@ -1979,6 +2524,224 @@
         ],
         "title": "PlatformStatusResponse"
       },
+      "PredictionDataQualityStatus": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total"
+          },
+          "excluded_from_training": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Excluded From Training"
+          },
+          "quarantined_results": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Quarantined Results"
+          },
+          "labeled": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Labeled"
+          },
+          "labeled_coverage_pct": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Labeled Coverage Pct"
+          },
+          "closing_odds_coverage_pct": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Closing Odds Coverage Pct"
+          },
+          "provenance_coverage_pct": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Provenance Coverage Pct"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "excluded_from_training",
+          "quarantined_results",
+          "labeled",
+          "labeled_coverage_pct",
+          "closing_odds_coverage_pct",
+          "provenance_coverage_pct"
+        ],
+        "title": "PredictionDataQualityStatus"
+      },
+      "ProviderHealthStatus": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "circuit_open_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Circuit Open Until"
+          },
+          "consecutive_failures": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consecutive Failures"
+          },
+          "daily_limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Limit"
+          },
+          "daily_remaining": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Remaining"
+          },
+          "minute_limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minute Limit"
+          },
+          "minute_remaining": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minute Remaining"
+          },
+          "last_status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status Code"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
+          },
+          "last_failure_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Failure At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "ProviderHealthStatus"
+      },
       "RegistrationRequest": {
         "properties": {
           "username": {
@@ -2030,6 +2793,70 @@
           "expires_in"
         ],
         "title": "SessionResponse"
+      },
+      "SyncRunStatus": {
+        "properties": {
+          "job_name": {
+            "type": "string",
+            "title": "Job Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fixtures_processed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Fixtures Processed"
+          },
+          "failures": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Failures"
+          },
+          "error_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_name",
+          "status",
+          "started_at",
+          "finished_at",
+          "fixtures_processed",
+          "failures",
+          "error_type"
+        ],
+        "title": "SyncRunStatus"
       },
       "TeamStatsInput": {
         "properties": {
@@ -2084,12 +2911,13 @@
             "title": "Features"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "league_id"
         ],
         "title": "TieredPredictionRequest",
-        "description": "Feature payload for the signed multi-tier prediction endpoint."
+        "description": "Complete research payload for the signed multi-tier predictor."
       },
       "ValidationError": {
         "properties": {

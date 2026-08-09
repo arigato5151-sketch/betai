@@ -325,7 +325,7 @@ class MLModelPipeline:
         )
 
     def rollback(self) -> bool:
-        """Atomically swap the active and previous validated model artifacts."""
+        """Promote the previous artifact and restore the champion on any failure."""
         active_path = Path(settings.ACTIVE_MODEL_PATH)
         previous_path = self._previous_model_path()
         active_signature_path = self._signature_path(active_path)
@@ -339,30 +339,61 @@ class MLModelPipeline:
         if not all(path.is_file() for path in required_paths):
             return False
 
+        active_backup = active_path.with_name(f"{active_path.name}.rollback.bak")
+        active_signature_backup = self._signature_path(active_backup)
+        candidate_path = active_path.with_name(f"{active_path.name}.rollback.candidate")
+        candidate_signature_path = self._signature_path(candidate_path)
+        temporary_paths = (
+            active_backup,
+            active_signature_backup,
+            candidate_path,
+            candidate_signature_path,
+        )
         try:
             if not self._verify_artifact(active_path) or not self._verify_artifact(
                 previous_path
             ):
                 return False
+
+            # Both artifacts must satisfy the complete runtime contract before mutation.
+            active_payload = joblib.load(active_path)
             previous_payload = joblib.load(previous_path)
-            if "model" not in previous_payload:
-                raise ValueError("Previous artifact has no model")
-            swap_path = active_path.with_suffix(".rollback.tmp")
-            swap_signature_path = self._signature_path(swap_path)
-            os.replace(active_path, swap_path)
-            os.replace(active_signature_path, swap_signature_path)
-            os.replace(previous_path, active_path)
-            os.replace(previous_signature_path, active_signature_path)
-            os.replace(swap_path, previous_path)
-            os.replace(swap_signature_path, previous_signature_path)
-            if self.load_active_model():
-                logger.warning(
-                    "Rolled back active ML model to %s", self.artifact_version
-                )
-                return True
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self._validate_loaded_payload(active_payload)
+            self._validate_loaded_payload(previous_payload)
+
+            for path in temporary_paths:
+                path.unlink(missing_ok=True)
+            shutil.copy2(active_path, active_backup)
+            shutil.copy2(active_signature_path, active_signature_backup)
+            shutil.copy2(previous_path, candidate_path)
+            shutil.copy2(previous_signature_path, candidate_signature_path)
+
+            os.replace(candidate_path, active_path)
+            os.replace(candidate_signature_path, active_signature_path)
+            if not self.load_active_model():
+                raise ValueError("Rollback candidate failed active-model loading")
+
+            # Preserve the former champion as the next rollback candidate.
+            shutil.copy2(active_backup, previous_path)
+            shutil.copy2(active_signature_backup, previous_signature_path)
+            logger.warning("Rolled back active ML model to %s", self.artifact_version)
+            return True
+        except Exception as exc:
             logger.error("ML model rollback failed: %s", exc)
-        return False
+            try:
+                if active_backup.is_file() and active_signature_backup.is_file():
+                    os.replace(active_backup, active_path)
+                    os.replace(active_signature_backup, active_signature_path)
+                    self.load_active_model()
+            except Exception as restore_exc:
+                logger.critical("ML model rollback restoration failed: %s", restore_exc)
+            return False
+        finally:
+            for path in temporary_paths:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Could not clean rollback temporary file %s", path)
 
     def _numeric_candidate(self, estimator: Any, *, scale: bool = False) -> Pipeline:
         """Keep raw categorical IDs away from estimators that treat them as ordinal."""

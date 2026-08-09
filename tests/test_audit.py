@@ -1,5 +1,5 @@
 from app.db.models import MatchPrediction
-from app.prediction.audit import PredictionAuditor
+from app.prediction.audit import FinancialRecommendationPolicy, PredictionAuditor
 
 
 def test_roi_returns_zero_for_incomplete_or_invalid_bet() -> None:
@@ -140,3 +140,49 @@ def test_reliable_sample_is_explicit(monkeypatch) -> None:
     assert result["sample_status"] == "reliable"
     assert result["decision_grade"] is True
     assert result["minimum_reliable_samples"] == 2
+
+
+def test_financial_recommendations_require_positive_roi_and_clv(monkeypatch) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "AUDIT_MIN_RELIABLE_SAMPLES", 30)
+    decision = FinancialRecommendationPolicy.evaluate(
+        {
+            "decision_grade": True,
+            "total_bets": 40,
+            "roi_confidence_interval_95_pct": {
+                "lower_pct": 1.2,
+                "upper_pct": 8.4,
+            },
+            "clv_samples": 35,
+            "avg_clv_pct": 2.1,
+        }
+    )
+
+    assert decision["eligible"] is True
+    assert decision["reasons"] == []
+
+
+def test_financial_recommendations_fail_closed_on_weak_evidence(monkeypatch) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "AUDIT_MIN_RELIABLE_SAMPLES", 30)
+    decision = FinancialRecommendationPolicy.evaluate(
+        {
+            "decision_grade": True,
+            "total_bets": 40,
+            "roi_confidence_interval_95_pct": {
+                "lower_pct": -3.5,
+                "upper_pct": 9.0,
+            },
+            "clv_samples": 12,
+            "avg_clv_pct": -0.4,
+        }
+    )
+
+    assert decision["eligible"] is False
+    assert decision["reasons"] == [
+        "roi_confidence_interval_not_positive",
+        "insufficient_closing_odds_samples",
+        "average_clv_not_positive",
+    ]

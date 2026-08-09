@@ -157,3 +157,72 @@ def test_retraining_task_calibrates_ensemble_before_training(monkeypatch) -> Non
     )
     calibrate.assert_called_once_with(labeled_rows)
     train.assert_called_once_with(labeled_rows)
+
+
+def test_drift_monitor_queues_once_and_sets_artifact_cooldown(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from app.tasks import jobs
+
+    session_context = MagicMock()
+    monitor = Mock(
+        snapshot=Mock(
+            return_value={
+                "status": "drift",
+                "drift_detected": True,
+                "artifact_version": "artifact-v1",
+            }
+        )
+    )
+    queue = Mock()
+    cache_get = AsyncMock(return_value=None)
+    cache_set = AsyncMock()
+    monkeypatch.setattr(jobs, "SessionLocal", Mock(return_value=session_context))
+    monkeypatch.setattr(jobs, "ModelMonitoringService", Mock(return_value=monitor))
+    monkeypatch.setattr(
+        jobs.ml_pipeline,
+        "status",
+        Mock(return_value={"artifact_version": "artifact-v1"}),
+    )
+    monkeypatch.setattr(jobs.retrain_ml_model_task, "delay", queue)
+    monkeypatch.setattr(jobs.cache, "get", cache_get)
+    monkeypatch.setattr(jobs.cache, "set", cache_set)
+
+    result = jobs.monitor_model_drift_task.run()
+
+    monitor.snapshot.assert_called_once_with("artifact-v1")
+    queue.assert_called_once_with()
+    cache_set.assert_awaited_once()
+    assert result["retraining_queued"] is True
+    assert result["retraining_suppressed_by_cooldown"] is False
+
+
+def test_drift_monitor_suppresses_repeated_queue_during_cooldown(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from app.tasks import jobs
+
+    monitor = Mock(
+        snapshot=Mock(return_value={"status": "drift", "drift_detected": True})
+    )
+    queue = Mock()
+    monkeypatch.setattr(jobs, "SessionLocal", Mock(return_value=MagicMock()))
+    monkeypatch.setattr(jobs, "ModelMonitoringService", Mock(return_value=monitor))
+    monkeypatch.setattr(
+        jobs.ml_pipeline,
+        "status",
+        Mock(return_value={"artifact_version": "artifact-v1"}),
+    )
+    monkeypatch.setattr(jobs.retrain_ml_model_task, "delay", queue)
+    monkeypatch.setattr(
+        jobs.cache, "get", AsyncMock(return_value={"reason": "confirmed_drift"})
+    )
+    cache_set = AsyncMock()
+    monkeypatch.setattr(jobs.cache, "set", cache_set)
+
+    result = jobs.monitor_model_drift_task.run()
+
+    queue.assert_not_called()
+    cache_set.assert_not_awaited()
+    assert result["retraining_queued"] is False
+    assert result["retraining_suppressed_by_cooldown"] is True

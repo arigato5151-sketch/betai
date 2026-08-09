@@ -96,13 +96,18 @@ def liveness():
 @app.get("/health/ready", include_in_schema=False)
 def readiness(response: Response):
     database = get_database_status()
-    ready = database["status"] in {"ready", "degraded"}
+    cache_state = cache.status()
+    database_ready = database["status"] == "ready"
+    cache_ready = (
+        cache_state["status"] == "ready" or settings.ENVIRONMENT != "production"
+    )
+    ready = database_ready and cache_ready
     if not ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return {
         "status": "ready" if ready else "not_ready",
         "database": database["status"],
-        "cache": cache.status()["status"],
+        "cache": cache_state["status"],
     }
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Mapping
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -155,6 +155,30 @@ class OddsSnapshotRepository:
         if elapsed < minimum_interval_seconds:
             return None
         return OddsSnapshotWindow(opening=opening, current=current)
+
+    def closing_snapshot(
+        self,
+        *,
+        fixture_id: int,
+        kickoff: datetime,
+        closing_window_hours: int,
+    ) -> FixtureOddsSnapshot | None:
+        """Return only a timestamped pre-kickoff price inside the closing window."""
+        if closing_window_hours <= 0:
+            raise ValueError("closing_window_hours must be positive")
+        normalized_kickoff = _utc(kickoff)
+        snapshot = self.latest(
+            fixture_id=fixture_id,
+            before=normalized_kickoff,
+        )
+        if snapshot is None:
+            return None
+        captured_at = _utc(snapshot.captured_at)
+        if captured_at >= normalized_kickoff:
+            return None
+        if normalized_kickoff - captured_at > timedelta(hours=closing_window_hours):
+            return None
+        return snapshot
 
     @staticmethod
     def _same_odds(

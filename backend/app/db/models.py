@@ -247,6 +247,9 @@ class MatchPrediction(Base):
         String(100), nullable=True
     )
     data_quality: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    provenance_manifest: Mapped[dict[str, object] | None] = mapped_column(
+        JSON, nullable=True
+    )
     kickoff: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

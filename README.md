@@ -358,10 +358,12 @@ oluştuğunda `odds_movement_home`, `odds_movement_draw` ve
 `ODDS_SNAPSHOT_CONFIDENCE` ile yönetilir. Formda oranlar manuel değiştirilirse eski
 otomatik snapshot çifti temizlenir ve yanlış provenance kullanılmaz.
 
-Celery Beat aynı akışı kullanıcı fikstürü açmadan da besler. Varsayılan üç saatte
+Celery Beat aynı akışı kullanıcı fikstürü açmadan da besler. Varsayılan altı saatte
 bir çalışan `collect_upcoming_odds_task`, yedi günlük penceredeki en fazla 20 maçı
 inceler. Her maç için ilk gözlemi alır; sonraki API çağrılarını kickoff'a son 24 saat
-kalana kadar erteler ve bu pencere içinde de üç saatten sık sorgulamaz. Böylece
+kalana kadar erteler ve bu pencere içinde de altı saatten sık sorgulamaz. Her çalışma
+en fazla 15 piyasa isteği yapar, sağlayıcının bildirdiği günlük kotadan 20 istek rezerv
+bırakır ve kota daraldığında kickoff'a en yakın maçları önceler. Böylece
 açılış/güncel oran çifti otomatik oluşurken API kotası sınırlı tutulur. Davranış
 `ODDS_COLLECTOR_*` ortam değişkenleriyle ayarlanabilir veya
 `ODDS_COLLECTOR_ENABLED=false` ile kapatılabilir. Demo verisi hiçbir zaman kalıcı
@@ -423,7 +425,37 @@ diske atomik yazılmadan süreç içi model değiştirilmez. Her model dosyası
 `MODEL_SIGNING_KEY` ile HMAC-SHA256 olarak imzalanır ve detached `.sig` dosyasıyla
 birlikte saklanır. Aktif model yükleme ve rollback işlemleri imzayı `joblib.load`
 çağrısından önce doğrular; eksik veya uyuşmayan imza ERROR loglanır ve istatistik
-motoru güvenli fallback olarak kullanılmaya devam eder.
+motoru güvenli fallback olarak kullanılmaya devam eder. Rollback adayı tam feature
+şeması ve probability smoke testiyle doğrulanmadan aktif dosyaya dokunulmaz; adayın
+yüklenmesi yine de başarısız olursa eski champion artifact ve imzası geri yüklenir.
+
+Drift izleme final ensemble'ı değil yalnızca aktif artifact sürümünün saklanmış
+ML bileşenini ölçer. Doğrulanmış ve eğitime uygun tahminler kickoff zamanına göre
+iki kronolojik pencereye ayrılır; Brier bozulması ancak bootstrap güven alt sınırı
+eşiği de geçerse drift sayılır. Aynı artifact için tekrar eğitim kuyruğu varsayılan
+olarak üç günlük Redis cooldown ile bastırılır.
+
+`/api/ml/status` ve `/api/operations/data-quality` yanıtları Pydantic response
+modelleriyle doğrulanır ve OpenAPI şemasında alan bazında belgelenir. Operasyon ekranı
+artifact sürümü, drift örnek yeterliliği, bootstrap güven alt sınırı, inference
+hataları ve rollback adayını birlikte gösterir. Giriş ve yönetim formları kalıcı
+etiketler, `aria-invalid`, bağlı hata açıklamaları ve canlı yükleme durumları kullanır.
+
+Tier-1 promotion kararı son kronolojik holdout üzerinde de-vigged açılış piyasasına
+karşı paired bootstrap güven alt sınırlarıyla verilir. Varsayılan olarak en az 30
+holdout maçı, pozitif `%95` tek taraflı güven alt sınırı ve anlamlı log-loss/Brier
+marjı gerekir. Aktif tiered champion varsa aday aynı holdout'ta ayrıca champion ile
+karşılaştırılır; yalnızca sınırlı metric trade-off ile anlamlı iyileşme gösteren
+aday imzalı artifact olarak yayına alınır. Aynı kickoff zamanındaki maçlar feature
+state'i güncellenmeden topluca işlenir; böylece eşzamanlı sonuç leakage'ı engellenir.
+
+Olasılık tahmini ile karar önerisi ayrı kavramlardır. Karar politikası en yüksek
+olasılık, ilk iki sonuç arasındaki marj, normalize entropy ve ensemble kaynakları
+arasındaki Jensen-Shannon divergence değerlerini birlikte denetler. Kararsız dağılım
+`ABSTAIN` olarak gösterilir; ham forecast kalibrasyon ve tarafsız performans ölçümü
+için saklanmaya devam eder. Value araştırmasında piyasa, tahmin ensemble'ına dahil
+edilmez; marketten bağımsız stats/ML olasılığı gerçek 1X2 piyasasıyla karşılaştırılır.
+Tek bir oran eksik iki sonucu sentetik olarak uydurmak için kullanılmaz.
 
 Ensemble ağırlıkları kaynak setine ve `league_id` değerine göre prequential Bayesian
 Model Averaging ile güncellenir. Yüksek kaliteli ve düşük sürprizli liglerde ML,

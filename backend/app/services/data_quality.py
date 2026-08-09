@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from collections.abc import Mapping, Set
 from typing import Any, cast
 
 from sqlalchemy import func
@@ -34,6 +35,43 @@ def _valid_starting_xi(value: object) -> bool:
     )
 
 
+def _complete_prediction_provenance(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if value.get("schema_version") != "prediction_provenance_v1":
+        return False
+    fixture = value.get("fixture")
+    analysis = value.get("analysis")
+    market = value.get("market")
+    features = value.get("features")
+    decision = value.get("decision")
+    if not all(
+        isinstance(section, Mapping)
+        for section in (fixture, analysis, market, features, decision)
+    ):
+        return False
+    fixture = cast(Mapping[str, object], fixture)
+    analysis = cast(Mapping[str, object], analysis)
+    market = cast(Mapping[str, object], market)
+    features = cast(Mapping[str, object], features)
+    decision = cast(Mapping[str, object], decision)
+    return bool(
+        fixture.get("fixture_source")
+        and fixture.get("league_id")
+        and fixture.get("kickoff")
+        and analysis.get("model_name")
+        and analysis.get("model_artifact_version")
+        and analysis.get("ensemble_version")
+        and market.get("available") is True
+        and market.get("source") not in {None, "", "unavailable"}
+        and market.get("snapshot_at")
+        and features.get("schema_version")
+        and features.get("snapshot_at")
+        and decision.get("analysis_origin") in {"automatic", "fixture_user"}
+        and decision.get("training_eligible") is True
+    )
+
+
 def _expected_current_season_fixtures(current_time: datetime) -> int:
     """Require gradual evidence early in a season without demanding a full season."""
     season_start = datetime(current_time.year, 8, 1, tzinfo=UTC)
@@ -42,6 +80,53 @@ def _expected_current_season_fixtures(current_time: datetime) -> int:
     elapsed_days = max(0, (current_time - season_start).days)
     elapsed_weeks = elapsed_days // 7 + 1
     return min(30, max(1, elapsed_weeks * 5))
+
+
+class AnalysisQualityScorer:
+    """Weighted coverage score for one prediction's decision-grade inputs."""
+
+    WEIGHTS: dict[str, float] = {
+        "fixture_identified": 8.0,
+        "fixture_source_identified": 2.0,
+        "provider_fixture_identified": 2.0,
+        "league_identified": 6.0,
+        "kickoff_known": 8.0,
+        "market_available": 14.0,
+        "h2h_available": 2.0,
+        "home_history_available": 3.0,
+        "away_history_available": 3.0,
+        "home_history_sufficient": 10.0,
+        "away_history_sufficient": 10.0,
+        "home_elo_available": 4.0,
+        "away_elo_available": 4.0,
+        "availability_available": 3.0,
+        "lineups_available": 4.0,
+        "home_player_impact_available": 3.0,
+        "away_player_impact_available": 3.0,
+        "travel_context_available": 2.0,
+        "odds_movement_available": 6.0,
+        "weather_available": 3.0,
+    }
+
+    @classmethod
+    def score(
+        cls,
+        checks: Mapping[str, object],
+        *,
+        excluded: Set[str] = frozenset(),
+    ) -> float:
+        active_weights = {
+            name: weight for name, weight in cls.WEIGHTS.items() if name not in excluded
+        }
+        denominator = sum(active_weights.values())
+        if denominator <= 0:
+            return 0.0
+        earned = sum(
+            weight
+            for name, weight in active_weights.items()
+            if checks.get(name) is True
+        )
+        return round(earned / denominator * 100.0, 2)
 
 
 class DataQualityService:
@@ -161,16 +246,11 @@ class DataQualityService:
             .scalar()
             or 0
         )
-        provenance_total = (
-            self.db.query(func.count(MatchPrediction.id))
-            .filter(
-                production_filter,
-                MatchPrediction.feature_schema_version.isnot(None),
-                MatchPrediction.ensemble_version.isnot(None),
-                MatchPrediction.analyzed_at.isnot(None),
-            )
-            .scalar()
-            or 0
+        provenance_total = sum(
+            _complete_prediction_provenance(manifest)
+            for (manifest,) in self.db.query(MatchPrediction.provenance_manifest)
+            .filter(production_filter)
+            .all()
         )
 
         latest_run = (

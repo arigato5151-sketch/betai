@@ -1,9 +1,14 @@
+import asyncio
 from datetime import UTC, date, datetime
 
 import httpx
 import pytest
 
-from app.providers.clubelo import ClubEloClient, ClubEloFormatError
+from app.providers.clubelo import (
+    ClubEloClient,
+    ClubEloDownloadError,
+    ClubEloFormatError,
+)
 
 
 def _csv(*rows: str) -> str:
@@ -87,3 +92,35 @@ async def test_clubelo_fails_closed_on_out_of_range_rating() -> None:
             team_name="Unsafe FC",
             as_of=datetime(2026, 7, 30, tzinfo=UTC),
         )
+
+
+@pytest.mark.asyncio
+async def test_clubelo_failure_cooldown_prevents_duplicate_provider_waits() -> None:
+    calls = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)
+        return httpx.Response(503)
+
+    client = ClubEloClient(
+        base_url="http://api.clubelo.com",
+        failure_cooldown_seconds=60,
+        transport=httpx.MockTransport(handler),
+    )
+
+    results = await asyncio.gather(
+        client.resolve_elo(
+            team_name="Home",
+            as_of=datetime(2026, 7, 30, tzinfo=UTC),
+        ),
+        client.resolve_elo(
+            team_name="Away",
+            as_of=datetime(2026, 7, 30, tzinfo=UTC),
+        ),
+        return_exceptions=True,
+    )
+
+    assert calls == 1
+    assert all(isinstance(result, ClubEloDownloadError) for result in results)

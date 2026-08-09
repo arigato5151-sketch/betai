@@ -11,7 +11,7 @@ import httpx
 
 from app.core.allowed_leagues import ALLOWED_LEAGUE_IDS, LEAGUE_PRIORITY
 from app.core.config import settings
-from app.core.team_identity import stable_team_name_key
+from app.core.team_identity import normalize_team_name, stable_team_name_key
 from app.providers.openligadb import ID_OFFSET as OPENLIGADB_ID_OFFSET
 from app.providers.openligadb import OpenLigaDBClient
 from app.services.api_football import APIFootballClient
@@ -29,6 +29,10 @@ SOURCE_ID_OFFSETS = {
     "fixture_download": 1_750_000_000,
 }
 MAX_PROVIDER_ID = 249_999_999
+_FIXTURE_CLUB_MARKERS = frozenset({"ac", "afc", "bk", "cf", "fc", "if", "sc", "sl"})
+_FIXTURE_LETTER_FOLD = str.maketrans(
+    {"æ": "ae", "đ": "d", "ð": "d", "ł": "l", "ø": "o", "œ": "oe", "ß": "ss", "þ": "th"}
+)
 
 LEAGUE_ALIASES: dict[tuple[str, str], int] = {
     ("uefa champions league", ""): 2,
@@ -127,6 +131,18 @@ def canonical_league_id(name: object, country: object = "") -> int | None:
     return LEAGUE_ALIASES.get((league_key, country_key)) or LEAGUE_ALIASES.get(
         (league_key, "")
     )
+
+
+def _fixture_team_key(value: object) -> str:
+    """Normalize cosmetic provider prefixes/suffixes only for fixture merging."""
+    tokens = (
+        normalize_team_name(str(value or "")).translate(_FIXTURE_LETTER_FOLD).split()
+    )
+    while tokens and tokens[0] in _FIXTURE_CLUB_MARKERS:
+        tokens.pop(0)
+    while tokens and tokens[-1] in _FIXTURE_CLUB_MARKERS:
+        tokens.pop()
+    return " ".join(tokens)
 
 
 def _parse_datetime(value: object, *, assume_utc: bool = True) -> datetime | None:
@@ -573,7 +589,7 @@ class FixtureAggregator:
         self, days: int = 7, limit: int = 100
     ) -> list[dict[str, Any]]:
         # Versioned cache prevents a stale pre-expansion league allowlist result.
-        cache_key = f"merged-upcoming:v5:{days}:{limit}"
+        cache_key = f"merged-upcoming:v7:{days}:{limit}"
         cached = await cache.get("fixtures", cache_key)
         if isinstance(cached, list):
             return cached
@@ -716,8 +732,8 @@ class FixtureAggregator:
             for row in rows:
                 league_id = row.get("league_id")
                 kickoff = _parse_datetime(row.get("kickoff"), assume_utc=False)
-                home_key = stable_team_name_key(str(row.get("home_team") or ""))
-                away_key = stable_team_name_key(str(row.get("away_team") or ""))
+                home_key = _fixture_team_key(row.get("home_team"))
+                away_key = _fixture_team_key(row.get("away_team"))
                 if (
                     not isinstance(league_id, int)
                     or league_id not in ALLOWED_LEAGUE_IDS

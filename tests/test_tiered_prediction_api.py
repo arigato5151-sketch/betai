@@ -42,6 +42,7 @@ def _tier1_features() -> dict[str, object]:
             else "Team" if name in model.CATEGORICAL_FEATURES else 1.5
         )
         for name in model.FEATURES
+        if name != "league_id"
     }
 
 
@@ -54,6 +55,7 @@ def _tier2_features() -> dict[str, object]:
             else "Team" if name in model.CATEGORICAL_FEATURES else 1.5
         )
         for name in model.FEATURES
+        if name != "league_id"
     }
 
 
@@ -88,9 +90,22 @@ def test_endpoint_routes_data_rich_league_to_tier1() -> None:
 
     assert response.status_code == 200
     assert response.json() == {
+        "decision_use": "research_only",
         "used_tier": "Tier 1",
         "confidence_scores": {"0": 0.15, "1": 0.25, "2": 0.6},
         "confidence": 0.6,
+        "decision_status": "eligible",
+        "decision_reasons": [],
+        "uncertainty": {
+            "status": "eligible",
+            "reasons": [],
+            "confidence_tier": "high",
+            "top_probability_pct": 60.0,
+            "probability_margin_pct": 35.0,
+            "normalized_entropy": 0.853474,
+            "max_source_js_divergence": 0.0,
+            "source_count": 0,
+        },
         "artifact_version": None,
     }
     assert tier1.calls == 1
@@ -132,5 +147,44 @@ def test_endpoint_reads_signed_artifact_and_predicts_tier1(tmp_path) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["used_tier"] == "Tier 1"
+    assert body["decision_use"] == "research_only"
     assert body["artifact_version"] == predictor.artifact_version
     assert body["confidence_scores"]["2"] == 0.6
+
+
+def test_endpoint_rejects_partial_or_unknown_research_features() -> None:
+    predictor = Predictor(
+        StubTier1Model(), StubTier2Model(), tier1_league_ids=frozenset({39})
+    )
+    client = _make_client(predictor)
+
+    partial = client.post(
+        "/predict/tiered",
+        json={"league_id": 39, "features": {"home_team": "Home"}},
+    )
+    unknown = client.post(
+        "/predict/tiered",
+        json={
+            "league_id": 39,
+            "features": {**_tier2_features(), "leaked_target": 1.0},
+        },
+    )
+
+    assert partial.status_code == 422
+    assert unknown.status_code == 422
+
+
+def test_endpoint_rejects_nested_league_override() -> None:
+    predictor = Predictor(
+        StubTier1Model(), StubTier2Model(), tier1_league_ids=frozenset({39})
+    )
+
+    response = _make_client(predictor).post(
+        "/predict/tiered",
+        json={
+            "league_id": 39,
+            "features": {**_tier2_features(), "league_id": 2},
+        },
+    )
+
+    assert response.status_code == 422

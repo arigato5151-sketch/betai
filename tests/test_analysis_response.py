@@ -26,6 +26,38 @@ from app.prediction.value_calc import ValueCalc
 from app.providers.base import ExternalDataPoint
 
 
+def test_manual_result_rejects_future_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    class FutureRecordRepository:
+        def __init__(self, _db: object) -> None:
+            pass
+
+        @staticmethod
+        def get_by_id(_record_id: int) -> SimpleNamespace:
+            return SimpleNamespace(
+                kickoff=datetime.now(UTC) + timedelta(hours=1),
+            )
+
+    monkeypatch.setattr(
+        endpoints,
+        "MatchPredictionRepository",
+        FutureRecordRepository,
+    )
+
+    with pytest.raises(endpoints.HTTPException) as error:
+        endpoints.update_actual_result(
+            42,
+            endpoints.ActualResultUpdate(actual_result="HOME_WIN"),
+            db=object(),  # type: ignore[arg-type]
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.detail == "Maç başlamadan gerçek sonuç girilemez."
+
+
 @pytest.mark.asyncio
 async def test_external_elo_fallback_updates_missing_historical_context(
     monkeypatch: pytest.MonkeyPatch,
@@ -501,6 +533,69 @@ async def test_analysis_response_exposes_feature_snapshot(
     assert response["feature_snapshot"]["home_form_ema"] == 100.0
     assert capture_persist["feature_snapshot"] is response["feature_snapshot"]
     assert response["provenance"]["model_artifact_version"] is None
+
+
+@pytest.mark.asyncio
+async def test_interactive_relaxation_never_admits_sample_to_training(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import endpoints
+
+    computed = {
+        "analysis": {"model": "poisson", "ensemble": {"version": "v1"}},
+        "value_data": {},
+        "ml_result": {"ready": False},
+        "feature_vector": {},
+        "insights": [],
+        "data_quality": {
+            "score": 40.0,
+            "interactive_score": 95.0,
+            "checks": {
+                "fixture_identified": True,
+                "fixture_source_identified": False,
+                "provider_fixture_identified": False,
+                "league_identified": True,
+                "kickoff_known": True,
+                "market_available": False,
+                "home_history_sufficient": True,
+                "away_history_sufficient": True,
+            },
+            "manual_feature_override_count": 0,
+        },
+    }
+    captured: dict[str, bool] = {}
+
+    async def fake_compute(_payload, *, interactive=False):
+        assert interactive is True
+        return computed
+
+    def fake_persist(_payload, _computed, *, analysis_origin, training_eligible):
+        captured["training_eligible"] = training_eligible
+        return (
+            SimpleNamespace(
+                id=1,
+                analyzed_at=datetime.now(UTC),
+                kickoff=datetime.now(UTC) + timedelta(hours=2),
+                analysis_lead_minutes=120.0,
+                analysis_origin=analysis_origin,
+                eligibility_status="eligible",
+                training_eligible=training_eligible,
+            ),
+            0,
+        )
+
+    monkeypatch.setattr(endpoints, "_compute_analysis", fake_compute)
+    monkeypatch.setattr(endpoints, "_persist_analysis", fake_persist)
+    monkeypatch.setattr(endpoints, "_build_analysis_response", lambda *_args: {})
+
+    await endpoints._run_analysis(
+        _base_payload(),
+        analysis_origin="fixture_user",
+        interactive=True,
+    )
+
+    assert computed["data_quality"]["prediction_eligibility"]["status"] == "eligible"
+    assert captured["training_eligible"] is False
 
 
 @pytest.mark.asyncio
@@ -1004,7 +1099,7 @@ async def test_recent_point_in_time_uses_local_history_without_api(
 
 
 @pytest.mark.asyncio
-async def test_value_evaluation_uses_ensemble_probabilities(
+async def test_value_evaluation_excludes_market_from_ensemble_probabilities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.api import endpoints
@@ -1062,7 +1157,15 @@ async def test_value_evaluation_uses_ensemble_probabilities(
 
     assert computed["analysis"]["prediction"] == "HOME_WIN"
     assert computed["analysis"]["all_probabilities"]["HOME_WIN"] == 37.34
-    assert computed["value_data"]["edge"] == -25.32
+    assert computed["value_data"]["edge"] == 0.0
+    assert computed["value_data"]["research_edge"] == -20.0
+    assert computed["value_data"]["evaluation_probabilities"]["HOME_WIN"] == 40.0
+    assert (
+        computed["value_data"]["probability_source"]
+        == "market_independent_stats_ml_ensemble"
+    )
+    assert computed["value_data"]["recommendation_status"] == "disabled"
+    assert computed["data_quality"]["financial_recommendation"]["status"] == "disabled"
     assert computed["analysis"]["ensemble"]["applied"] is True
 
 
@@ -1088,19 +1191,37 @@ def _base_payload() -> AnalysisRequest:
 
 def test_training_eligible_with_composite_key() -> None:
     payload = _base_payload()
-    assert _is_training_eligible(_eligible_computed(), payload, "manual") is True
+    assert _is_training_eligible(_eligible_computed(), payload, "automatic") is True
+
+
+def test_uncertain_forecast_remains_trainable_to_prevent_selection_bias() -> None:
+    computed = _eligible_computed()
+    computed["analysis"] = {
+        "decision": {
+            "status": "abstain",
+            "reasons": ["probability_margin_too_low"],
+        }
+    }
+
+    assert _is_training_eligible(computed, _base_payload(), "automatic") is True
 
 
 def test_training_eligible_with_provider_fixture_id() -> None:
     payload = _base_payload()
     payload.provider_fixture_id = "1234567"
-    assert _is_training_eligible(_eligible_computed(), payload, "manual") is True
+    assert _is_training_eligible(_eligible_computed(), payload, "fixture_user") is True
+
+
+def test_training_eligible_rejects_manual_analysis() -> None:
+    assert (
+        _is_training_eligible(_eligible_computed(), _base_payload(), "manual") is False
+    )
 
 
 def test_training_eligible_rejected_without_fixture_key() -> None:
     payload = _base_payload()
     payload.league_id = None
-    assert _is_training_eligible(_eligible_computed(), payload, "manual") is False
+    assert _is_training_eligible(_eligible_computed(), payload, "automatic") is False
 
 
 def test_training_eligible_rejects_scenario() -> None:
@@ -1113,7 +1234,7 @@ def test_training_eligible_rejects_scenario() -> None:
 def test_training_eligible_rejects_feature_overrides() -> None:
     payload = _base_payload()
     payload.feature_overrides = {"form": 99.0}
-    assert _is_training_eligible(_eligible_computed(), payload, "manual") is False
+    assert _is_training_eligible(_eligible_computed(), payload, "automatic") is False
 
 
 def test_training_eligible_rejects_unhealthy_prediction() -> None:
@@ -1122,4 +1243,4 @@ def test_training_eligible_rejects_unhealthy_prediction() -> None:
         "status": "limited",
         "reason": "insufficient_data",
     }
-    assert _is_training_eligible(computed, _base_payload(), "manual") is False
+    assert _is_training_eligible(computed, _base_payload(), "automatic") is False

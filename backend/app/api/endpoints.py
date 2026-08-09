@@ -36,8 +36,9 @@ from app.db.models import HistoricalFixture
 from app.services.api_football import APIFootballClient
 from app.services.fixture_aggregator import FixtureAggregator
 from app.services.fixture_context import fixture_context_service
-from app.services.data_quality import DataQualityService
+from app.services.data_quality import AnalysisQualityScorer, DataQualityService
 from app.services.external_features import external_feature_service
+from app.services.financial_recommendations import financial_recommendation_service
 from app.services.odds_history import odds_history_service
 from app.services.sportmonks_players import sportmonks_player_service
 from app.services.travel_context import travel_context_service
@@ -50,6 +51,7 @@ from app.prediction.stats_engine import StatsEngine
 from app.prediction.ensemble import ProbabilityEnsembler
 from app.prediction.value_calc import ValueCalc
 from app.prediction.ml.model import ml_pipeline
+from app.prediction.ml.ml_pipeline import Tier1Model, Tier2Model
 from app.prediction.ml.model_router import (
     Predictor,
     TieredArtifactIntegrityError,
@@ -66,6 +68,7 @@ from app.prediction.eligibility import (
     PredictionEligibilityPolicy,
     PredictionIneligibleError,
 )
+from app.prediction.decision import PredictionDecisionPolicy
 from app.prediction.input_catalog import AnalysisInputCatalog
 from app.prediction.ml.explain import ExplainabilityService
 from app.prediction.ml.active_learning import ActiveLearningSelector
@@ -105,6 +108,125 @@ router.include_router(admin_router)
 class PlatformStatusResponse(BaseModel):
     api_mode: ApiMode
     registration_enabled: bool
+
+
+class MLRuntimeStatus(BaseModel):
+    inference_success: int = Field(ge=0)
+    inference_failure: int = Field(ge=0)
+
+
+class MLTrainingDataStatus(BaseModel):
+    labeled_predictions: int = Field(ge=0)
+    historical_fixtures: int = Field(ge=0)
+    minimum_samples: int = Field(ge=1)
+    historical_minimum_team_matches: int = Field(ge=1)
+
+
+class MLMonitoringStatus(BaseModel):
+    status: Literal["model_unavailable", "insufficient_data", "stable", "drift"]
+    drift_detected: bool
+    samples: int = Field(ge=0)
+    required_samples: int = Field(ge=1)
+    window_size: int = Field(ge=0)
+    recent_brier: float | None
+    baseline_brier: float | None
+    brier_delta: float | None
+    brier_delta_lower_bound: float | None
+    threshold: float = Field(gt=0)
+    confidence: float = Field(ge=0, lt=1)
+    artifact_version: str | None
+    metric_source: Literal["ml_component"]
+    ordering: Literal["kickoff_desc"]
+    evaluated_at: datetime
+
+
+class MLStatusResponse(BaseModel):
+    ready: bool
+    model_name: str | None
+    artifact_version: str | None
+    metrics: dict[str, Any]
+    runtime: MLRuntimeStatus
+    rollback_available: bool
+    training_data: MLTrainingDataStatus
+    monitoring: MLMonitoringStatus
+
+
+class HistoricalLeagueCoverageStatus(BaseModel):
+    league_id: int
+    league_name: str
+    fixtures: int = Field(ge=0)
+    latest_kickoff: datetime | None
+    expected_minimum_fixtures: int = Field(ge=0)
+    available: bool
+    fresh: bool
+    covered: bool
+
+
+class HistoricalDataQualityStatus(BaseModel):
+    fixtures: int = Field(ge=0)
+    leagues: int = Field(ge=0)
+    seasons: int = Field(ge=0)
+    oldest_kickoff: datetime | None
+    newest_kickoff: datetime | None
+    last_updated: datetime | None
+    freshness_hours: float | None = Field(default=None, ge=0)
+    lineup_coverage_pct: float = Field(ge=0, le=100)
+    source_counts: dict[str, int]
+    current_season: int
+    current_season_coverage: list[HistoricalLeagueCoverageStatus]
+    current_season_covered_leagues: int = Field(ge=0)
+    current_season_missing_league_ids: list[int]
+
+
+class PredictionDataQualityStatus(BaseModel):
+    total: int = Field(ge=0)
+    excluded_from_training: int = Field(ge=0)
+    quarantined_results: int = Field(ge=0)
+    labeled: int = Field(ge=0)
+    labeled_coverage_pct: float = Field(ge=0, le=100)
+    closing_odds_coverage_pct: float = Field(ge=0, le=100)
+    provenance_coverage_pct: float = Field(ge=0, le=100)
+
+
+class SyncRunStatus(BaseModel):
+    job_name: str
+    status: str
+    started_at: datetime
+    finished_at: datetime | None
+    fixtures_processed: int = Field(ge=0)
+    failures: list[dict[str, Any]]
+    error_type: str | None
+
+
+class ProviderHealthStatus(BaseModel):
+    status: str
+    enabled: bool | None = None
+    provider: str | None = None
+    circuit_open_until: datetime | None = None
+    consecutive_failures: int | None = Field(default=None, ge=0)
+    daily_limit: int | None = Field(default=None, ge=0)
+    daily_remaining: int | None = Field(default=None, ge=0)
+    minute_limit: int | None = Field(default=None, ge=0)
+    minute_remaining: int | None = Field(default=None, ge=0)
+    last_status_code: int | None = None
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    last_error: str | None = None
+    updated_at: datetime | None = None
+
+
+class DataQualityProvidersStatus(BaseModel):
+    api_football: ProviderHealthStatus
+    sportmonks: ProviderHealthStatus
+
+
+class DataQualityResponse(BaseModel):
+    status: Literal["healthy", "warning", "critical"]
+    score: float = Field(ge=0, le=100)
+    historical: HistoricalDataQualityStatus
+    predictions: PredictionDataQualityStatus
+    latest_sync: SyncRunStatus | None
+    providers: DataQualityProvidersStatus
 
 
 class RegistrationRequest(BaseModel):
@@ -423,7 +545,9 @@ class AnalysisRequest(BaseModel):
 
 
 class TieredPredictionRequest(BaseModel):
-    """Feature payload for the signed multi-tier prediction endpoint."""
+    """Complete research payload for the signed multi-tier predictor."""
+
+    model_config = ConfigDict(extra="forbid")
 
     league_id: int = Field(..., gt=0)
     features: Dict[str, Any] = Field(default_factory=dict)
@@ -431,9 +555,29 @@ class TieredPredictionRequest(BaseModel):
     @field_validator("features")
     @classmethod
     def validate_features(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        if "league_id" in value:
+            raise ValueError("league_id must be supplied only as the top-level field")
+        allowed = (set(Tier1Model.FEATURES) | set(Tier2Model.FEATURES)) - {"league_id"}
+        unknown = set(value) - allowed
+        if unknown:
+            raise ValueError(f"Unsupported tier features: {sorted(unknown)}")
+        tier1_required = set(Tier1Model.FEATURES) - {"league_id"}
+        tier2_required = set(Tier2Model.FEATURES) - {"league_id"}
+        if not tier1_required.issubset(value) and not tier2_required.issubset(value):
+            raise ValueError("A complete Tier 1 or Tier 2 feature contract is required")
+
         for name, feature in value.items():
-            if isinstance(feature, float) and not math.isfinite(feature):
+            if name in {"home_team", "away_team"}:
+                if not isinstance(feature, str) or not feature.strip():
+                    raise ValueError(f"Feature {name} must be a non-empty string")
+                value[name] = feature.strip()[:100]
+                continue
+            if isinstance(feature, bool) or not isinstance(feature, (int, float)):
+                raise ValueError(f"Feature {name} must be numeric")
+            if not math.isfinite(float(feature)):
                 raise ValueError(f"Feature {name} must be finite")
+            if name.startswith("opening_") and not 1.0 < float(feature) <= 1000.0:
+                raise ValueError(f"Feature {name} must be a valid decimal odd")
         return value
 
 
@@ -512,6 +656,7 @@ def _build_payload_from_prefill(prefill: Dict[str, Any]) -> AnalysisRequest:
         home_stats=TeamStatsInput(**prefill["home_stats"]),
         away_stats=TeamStatsInput(**prefill["away_stats"]),
         odd=prefill["odd"],
+        kelly_fraction=prefill.get("kelly_fraction", 0.25),
         market_1x2=market or None,
         opening_odds_1x2=prefill.get("opening_odds_1x2"),
         current_odds_1x2=prefill.get("current_odds_1x2"),
@@ -643,6 +788,9 @@ def _build_analysis_response(
         "value_assessment": value_data,
         "ml_safety_trigger": ml_assessment["trigger"],
         "ml_safety_details": ml_assessment,
+        "decision_status": (analysis.get("decision") or {}).get("status", "abstain"),
+        "decision_reasons": (analysis.get("decision") or {}).get("reasons", []),
+        "uncertainty": analysis.get("decision"),
         "ml_confidence": (
             ml_result.get("probability", 0.0) if ml_result.get("ready") else 0.0
         ),
@@ -1194,12 +1342,36 @@ async def _compute_analysis(
         market=payload.market_1x2,
         league_id=payload.league_id,
     )
+    decision_recommendation = PredictionDecisionPolicy.evaluate(analysis)
+    analysis["decision"] = decision_recommendation
+    # Value must be estimated from a market-independent forecast. Blending the
+    # market into the forecast and comparing it back to the same market is circular.
+    value_analysis = ProbabilityEnsembler.apply(
+        stats_analysis,
+        ml_result=ml_result,
+        market=None,
+        league_id=payload.league_id,
+    )
     value_data = ValueCalc.calculate_professional(
-        analysis,
+        value_analysis,
         payload.market_1x2,
         fallback_odd=payload.odd,
         kelly_fraction=payload.kelly_fraction,
     )
+    value_data["probability_source"] = "market_independent_stats_ml_ensemble"
+    value_data["evaluation_probabilities"] = value_analysis["all_probabilities"]
+    financial_decision = financial_recommendation_service.evaluate()
+    value_data["recommendation_evidence"] = financial_decision
+    if financial_decision.get("eligible") is not True:
+        reasons = financial_decision.get("reasons")
+        reason = (
+            str(reasons[0])
+            if isinstance(reasons, list) and reasons
+            else "financial_validation_failed"
+        )
+        value_data = ValueCalc.suppress_financial_recommendations(
+            value_data, reason=reason
+        )
     if payload.market_1x2:
         value_data["data_methodology"] = {
             "stats": "Zaman ağırlıklı geçmiş + sezon profili fallback + form decay",
@@ -1313,12 +1485,8 @@ async def _compute_analysis(
             }
         )
     data_quality = {
-        "score": round(
-            100.0
-            * sum(1 for passed in quality_checks.values() if passed)
-            / len(quality_checks),
-            2,
-        ),
+        "score": AnalysisQualityScorer.score(quality_checks),
+        "score_method": "weighted_input_coverage_v1",
         "checks": quality_checks,
         "home_history_matches": history_home_count,
         "away_history_matches": history_away_count,
@@ -1374,19 +1542,18 @@ async def _compute_analysis(
             "secondary_markets": analysis.get("secondary_markets", []),
             "match_profile": analysis.get("match_profile"),
         },
+        "financial_recommendation": {
+            "status": value_data.get("recommendation_status", "eligible"),
+            "reason": value_data.get("recommendation_reason"),
+            "evidence": value_data.get("recommendation_evidence"),
+        },
+        "decision_recommendation": decision_recommendation,
     }
     data_quality["ml_assessment"] = _assess_ml_safety(ml_result, analysis, data_quality)
     if interactive:
-        interactive_checks = {
-            name: passed
-            for name, passed in quality_checks.items()
-            if name not in _INTERACTIVE_EXCLUDED_CHECKS
-        }
-        data_quality["interactive_score"] = round(
-            100.0
-            * sum(1 for passed in interactive_checks.values() if passed)
-            / len(interactive_checks),
-            2,
+        data_quality["interactive_score"] = AnalysisQualityScorer.score(
+            quality_checks,
+            excluded=_INTERACTIVE_EXCLUDED_CHECKS,
         )
     data_quality["prediction_eligibility"] = PredictionEligibilityPolicy.evaluate(
         data_quality, interactive=interactive
@@ -1426,6 +1593,60 @@ def _persist_analysis(
         if kickoff is not None
         else None
     )
+    model_name = ml_result.get("model_name") or analysis.get("model")
+    ensemble_version = (analysis.get("ensemble") or {}).get("version")
+    market_source = (
+        "api_football_odds"
+        if payload.market_1x2 is not None and payload.fixture_source == "api_football"
+        else "request_payload" if payload.market_1x2 is not None else "unavailable"
+    )
+    provenance_manifest = {
+        "schema_version": "prediction_provenance_v1",
+        "fixture": {
+            "fixture_id": payload.fixture_id,
+            "fixture_source": payload.fixture_source or "composite_identity",
+            "provider_fixture_id": payload.provider_fixture_id,
+            "league_id": payload.league_id,
+            "kickoff": kickoff.isoformat() if kickoff is not None else None,
+        },
+        "analysis": {
+            "model_name": model_name,
+            "model_artifact_version": ml_result.get("artifact_version")
+            or "not_applicable",
+            "ensemble_version": ensemble_version,
+        },
+        "market": {
+            "available": payload.market_1x2 is not None,
+            "source": market_source,
+            "snapshot_at": (
+                (payload.current_odds_at or analyzed_at).isoformat()
+                if payload.market_1x2 is not None
+                else None
+            ),
+            "opening_snapshot_at": (
+                payload.opening_odds_at.isoformat()
+                if payload.opening_odds_at is not None
+                else None
+            ),
+        },
+        "features": {
+            "schema_version": FeatureEngine.SCHEMA_VERSION,
+            "snapshot_at": analyzed_at.isoformat(),
+            "sources": data_quality.get("feature_provenance", {}),
+            "manual_overrides": sorted(payload.feature_overrides),
+        },
+        "decision": {
+            "analysis_origin": analysis_origin,
+            "data_eligibility_status": (
+                data_quality.get("prediction_eligibility") or {}
+            ).get("status"),
+            "forecast_decision_status": (analysis.get("decision") or {}).get("status"),
+            "forecast_decision_reasons": (analysis.get("decision") or {}).get(
+                "reasons", []
+            ),
+            "training_eligible": training_eligible,
+        },
+    }
 
     record_data = {
         "fixture_id": payload.fixture_id,
@@ -1441,6 +1662,7 @@ def _persist_analysis(
             "eligible"
             if (data_quality.get("prediction_eligibility") or {}).get("status")
             == "eligible"
+            and (analysis.get("decision") or {}).get("status") == "eligible"
             else "abstain"
         ),
         "training_eligible": training_eligible,
@@ -1469,10 +1691,11 @@ def _persist_analysis(
         "feature_schema_version": FeatureEngine.SCHEMA_VERSION,
         "feature_snapshot_at": datetime.now(timezone.utc),
         "probability_components": analysis.get("ensemble"),
-        "ensemble_version": (analysis.get("ensemble") or {}).get("version"),
-        "model_name": ml_result.get("model_name") or analysis.get("model"),
+        "ensemble_version": ensemble_version,
+        "model_name": model_name,
         "model_artifact_version": ml_result.get("artifact_version"),
         "data_quality": data_quality,
+        "provenance_manifest": provenance_manifest,
         "kickoff": kickoff,
         "analyzed_at": analyzed_at,
         "analysis_lead_minutes": analysis_lead_minutes,
@@ -1491,14 +1714,19 @@ def _is_training_eligible(
     payload: AnalysisRequest,
     analysis_origin: str,
 ) -> bool:
-    """A prediction is trainable when it is actionable AND the fixture can be
-    deterministically identified so a verified result can later be attached.
+    """A prediction is trainable when its data is complete and the fixture can
+    be deterministically identified so a verified result can later be attached.
 
     Provider identity (API fixture id) is not required: the composite key
     (league + both teams + kickoff) is equally deterministic. Scenario runs and
-    manual feature overrides are never training sample material.
+    manual feature overrides are never training sample material. Forecast
+    uncertainty deliberately does not exclude a row: doing so would bias future
+    calibration and evaluation toward easy, high-confidence matches.
     """
-    if payload.feature_overrides or analysis_origin == "scenario":
+    if payload.feature_overrides or analysis_origin not in {
+        "automatic",
+        "fixture_user",
+    }:
         return False
     eligibility = (computed.get("data_quality") or {}).get(
         "prediction_eligibility"
@@ -1535,7 +1763,10 @@ async def _run_analysis(
     )
     if require_eligible and not strict_decision.eligible:
         raise PredictionIneligibleError(strict_decision)
-    training_eligible = _is_training_eligible(
+    # Interactive eligibility controls presentation only. Training admission
+    # always uses the strict production policy so relaxed UI rules cannot leak
+    # incomplete samples into evaluation or retraining.
+    training_eligible = strict_decision.eligible and _is_training_eligible(
         computed,
         payload,
         analysis_origin,
@@ -1623,16 +1854,16 @@ def get_tiered_predictor() -> Predictor:
 
 @router.post(
     "/predict/tiered",
-    dependencies=[Depends(require_permission("analysis:create"))],
+    dependencies=[Depends(require_permission("audit:read"))],
 )
 def predict_with_tiered_model(
     payload: TieredPredictionRequest,
     predictor: Predictor = Depends(get_tiered_predictor),
 ) -> dict[str, object]:
-    """Predict via the current signed tier bundle without changing legacy analysis."""
+    """Run the signed tier bundle for research; never emit an actionable bet."""
     try:
         prediction = predictor.predict(
-            {"league_id": payload.league_id, **payload.features}
+            {**payload.features, "league_id": payload.league_id}
         )
     except TieredArtifactIntegrityError as exc:
         raise HTTPException(
@@ -1646,7 +1877,17 @@ def predict_with_tiered_model(
         ) from exc
 
     used_tier = "Tier 1" if prediction.tier == "tier1" else "Tier 2"
+    decision = PredictionDecisionPolicy.evaluate(
+        {
+            "all_probabilities": {
+                "AWAY_WIN": prediction.probabilities[0],
+                "DRAW": prediction.probabilities[1],
+                "HOME_WIN": prediction.probabilities[2],
+            }
+        }
+    )
     return {
+        "decision_use": "research_only",
         "used_tier": used_tier,
         "confidence_scores": {
             "0": prediction.probabilities[0],
@@ -1654,6 +1895,9 @@ def predict_with_tiered_model(
             "2": prediction.probabilities[2],
         },
         "confidence": max(prediction.probabilities),
+        "decision_status": decision["status"],
+        "decision_reasons": decision["reasons"],
+        "uncertainty": decision,
         "artifact_version": prediction.artifact_version,
     }
 
@@ -1780,9 +2024,10 @@ def get_ml_labeling_queue(
 
 @router.get(
     "/ml/status",
+    response_model=MLStatusResponse,
     dependencies=[Depends(require_permission("history:read"))],
 )
-def get_ml_status(db: Session = Depends(get_db)):
+def get_ml_status(db: Session = Depends(get_db)) -> dict[str, Any]:
     from app.services.model_monitoring import ModelMonitoringService
 
     result = ml_pipeline.status()
@@ -1796,7 +2041,10 @@ def get_ml_status(db: Session = Depends(get_db)):
             settings.HISTORICAL_TRAINING_MIN_TEAM_MATCHES
         ),
     }
-    result["monitoring"] = ModelMonitoringService(db).snapshot()
+    active_artifact_version = result.get("artifact_version")
+    result["monitoring"] = ModelMonitoringService(db).snapshot(
+        active_artifact_version if isinstance(active_artifact_version, str) else None
+    )
     return result
 
 
@@ -1826,6 +2074,15 @@ def update_actual_result(
     record = repo.get_by_id(record_id)
     if not record:
         raise HTTPException(status_code=404, detail="Kayıt bulunamadı.")
+    kickoff = record.kickoff
+    if kickoff is not None:
+        if kickoff.tzinfo is None:
+            kickoff = kickoff.replace(tzinfo=timezone.utc)
+        if kickoff > datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=409,
+                detail="Maç başlamadan gerçek sonuç girilemez.",
+            )
 
     roi = PredictionAuditor.calculate_bet_roi(
         record.prediction, body.actual_result, record.odd
@@ -1909,9 +2166,10 @@ def run_league_audit(db: Session = Depends(get_db)):
 
 @router.get(
     "/operations/data-quality",
+    response_model=DataQualityResponse,
     dependencies=[Depends(require_permission("audit:read"))],
 )
-async def get_data_quality(db: Session = Depends(get_db)):
+async def get_data_quality(db: Session = Depends(get_db)) -> dict[str, Any]:
     from app.services.api_provider_health import api_football_health
 
     snapshot = DataQualityService(db).snapshot()

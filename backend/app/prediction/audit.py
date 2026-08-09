@@ -262,3 +262,47 @@ class PredictionAuditor:
             "leagues": leagues,
             "unassigned_predictions": unassigned,
         }
+
+
+class FinancialRecommendationPolicy:
+    """Require statistically positive realized ROI and CLV before activation."""
+
+    @staticmethod
+    def evaluate(audit: Mapping[str, object]) -> dict[str, object]:
+        minimum = settings.AUDIT_MIN_RELIABLE_SAMPLES
+        reasons: list[str] = []
+        total_bets_value = audit.get("total_bets")
+        clv_samples_value = audit.get("clv_samples")
+        total_bets = (
+            int(total_bets_value) if isinstance(total_bets_value, (int, float)) else 0
+        )
+        clv_samples = (
+            int(clv_samples_value) if isinstance(clv_samples_value, (int, float)) else 0
+        )
+        roi_interval = audit.get("roi_confidence_interval_95_pct")
+        roi_lower = (
+            float(roi_interval.get("lower_pct", 0.0))
+            if isinstance(roi_interval, Mapping)
+            else 0.0
+        )
+        avg_clv = audit.get("avg_clv_pct")
+        avg_clv_value = float(avg_clv) if isinstance(avg_clv, (int, float)) else 0.0
+
+        if audit.get("decision_grade") is not True or total_bets < minimum:
+            reasons.append("insufficient_verified_bets")
+        if roi_lower <= 0:
+            reasons.append("roi_confidence_interval_not_positive")
+        if clv_samples < minimum:
+            reasons.append("insufficient_closing_odds_samples")
+        if avg_clv_value <= 0:
+            reasons.append("average_clv_not_positive")
+
+        return {
+            "eligible": not reasons,
+            "reasons": reasons,
+            "minimum_samples": minimum,
+            "total_bets": total_bets,
+            "clv_samples": clv_samples,
+            "roi_lower_95_pct": roi_lower,
+            "avg_clv_pct": avg_clv_value,
+        }

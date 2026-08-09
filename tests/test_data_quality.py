@@ -3,8 +3,26 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from app.api.endpoints import DataQualityResponse
 from app.db.models import Base, HistoricalFixture, MatchPrediction
-from app.services.data_quality import DataQualityService
+from app.services.data_quality import AnalysisQualityScorer, DataQualityService
+
+
+def test_analysis_quality_score_weights_decision_critical_inputs() -> None:
+    checks = {name: False for name in AnalysisQualityScorer.WEIGHTS}
+    checks["market_available"] = True
+    checks["weather_available"] = True
+
+    assert AnalysisQualityScorer.score(checks) == 17.0
+
+
+def test_analysis_quality_score_renormalizes_excluded_interactive_inputs() -> None:
+    checks = {name: True for name in AnalysisQualityScorer.WEIGHTS}
+    excluded = frozenset({"market_available", "weather_available"})
+    checks["market_available"] = False
+    checks["weather_available"] = False
+
+    assert AnalysisQualityScorer.score(checks, excluded=excluded) == 100.0
 
 
 def test_data_quality_snapshot_reports_coverage_and_freshness() -> None:
@@ -42,6 +60,32 @@ def test_data_quality_snapshot_reports_coverage_and_freshness() -> None:
                 feature_schema_version="v1",
                 ensemble_version="v1",
                 analyzed_at=now - timedelta(days=1),
+                provenance_manifest={
+                    "schema_version": "prediction_provenance_v1",
+                    "fixture": {
+                        "fixture_source": "api_football",
+                        "league_id": 203,
+                        "kickoff": (now - timedelta(days=1)).isoformat(),
+                    },
+                    "analysis": {
+                        "model_name": "test-model",
+                        "model_artifact_version": "artifact-v1",
+                        "ensemble_version": "v1",
+                    },
+                    "market": {
+                        "available": True,
+                        "source": "api_football_odds",
+                        "snapshot_at": (now - timedelta(days=1)).isoformat(),
+                    },
+                    "features": {
+                        "schema_version": "v1",
+                        "snapshot_at": (now - timedelta(days=1)).isoformat(),
+                    },
+                    "decision": {
+                        "analysis_origin": "automatic",
+                        "training_eligible": True,
+                    },
+                },
             )
         )
         session.commit()
@@ -59,6 +103,27 @@ def test_data_quality_snapshot_reports_coverage_and_freshness() -> None:
     assert snapshot["predictions"]["closing_odds_coverage_pct"] == 100.0
     assert snapshot["predictions"]["provenance_coverage_pct"] == 100.0
     assert snapshot["status"] == "healthy"
+
+
+def test_provenance_coverage_rejects_legacy_partial_fields() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    now = datetime(2026, 7, 23, 12, tzinfo=UTC)
+
+    with Session(engine) as session:
+        session.add(
+            MatchPrediction(
+                training_eligible=True,
+                feature_schema_version="v1",
+                ensemble_version="v1",
+                analyzed_at=now,
+                provenance_manifest=None,
+            )
+        )
+        session.commit()
+        snapshot = DataQualityService(session).snapshot(now)
+
+    assert snapshot["predictions"]["provenance_coverage_pct"] == 0.0
 
 
 def test_sync_run_lifecycle_is_visible_in_snapshot() -> None:
@@ -177,3 +242,22 @@ def test_current_season_coverage_requires_volume_and_freshness() -> None:
     assert coverage[203]["fresh"] is True
     assert coverage[203]["fixtures"] < coverage[203]["expected_minimum_fixtures"]
     assert coverage[203]["covered"] is False
+
+
+def test_data_quality_api_contract_accepts_empty_operational_snapshot() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        snapshot = DataQualityService(session).snapshot(
+            datetime(2026, 8, 9, 12, tzinfo=UTC)
+        )
+    snapshot["providers"] = {
+        "api_football": {"status": "unknown", "provider": "api_football"},
+        "sportmonks": {"status": "disabled", "enabled": False},
+    }
+
+    response = DataQualityResponse.model_validate(snapshot)
+
+    assert response.historical.fixtures == 0
+    assert response.predictions.total == 0
+    assert response.providers.sportmonks.enabled is False

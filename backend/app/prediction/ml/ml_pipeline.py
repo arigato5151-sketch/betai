@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import groupby
 from typing import Any, Literal, TypeAlias
 
 import numpy as np
@@ -75,21 +76,12 @@ class _TeamState:
 class MultiTierDatasetBuilder:
     """Build leak-free Tier 1 and Tier 2 samples from historical fixtures."""
 
+    # Tier 1 is market-aware. Only opening prices are used because they are
+    # observable before kickoff; closing prices would create train/serve skew.
     _RICH_SOURCE_COLUMNS = (
-        "home_shots",
-        "away_shots",
-        "home_shots_on_target",
-        "away_shots_on_target",
-        "home_corners",
-        "away_corners",
-        "home_fouls",
-        "away_fouls",
         "opening_home_odd",
         "opening_draw_odd",
         "opening_away_odd",
-        "closing_home_odd",
-        "closing_draw_odd",
-        "closing_away_odd",
     )
 
     def build(self, fixtures: Sequence[object]) -> TierDatasets:
@@ -100,30 +92,53 @@ class MultiTierDatasetBuilder:
         tier2_rows: list[dict[str, object]] = []
         tier2_targets: list[Outcome] = []
 
-        for fixture in sorted(fixtures, key=self._kickoff_sort_key):
-            result = str(self._value(fixture, "actual_result") or "").upper()
-            target = TARGET_BY_RESULT.get(result)
-            league_id = self._as_int(self._value(fixture, "league_id"))
-            home_team = self._team_name(fixture, "home_team")
-            away_team = self._team_name(fixture, "away_team")
-            if target is None or league_id is None or not home_team or not away_team:
-                continue
+        ordered_fixtures = sorted(
+            (
+                (kickoff, fixture)
+                for fixture in fixtures
+                if (kickoff := self._kickoff_sort_key(fixture)) is not None
+            ),
+            key=lambda item: item[0],
+        )
+        for _, kickoff_group in groupby(ordered_fixtures, key=lambda item: item[0]):
+            pending_updates: list[tuple[object, _TeamState, _TeamState]] = []
+            for _, fixture in kickoff_group:
+                result = str(self._value(fixture, "actual_result") or "").upper()
+                target = TARGET_BY_RESULT.get(result)
+                league_id = self._as_int(self._value(fixture, "league_id"))
+                home_team = self._team_name(fixture, "home_team")
+                away_team = self._team_name(fixture, "away_team")
+                if (
+                    target is None
+                    or league_id is None
+                    or not home_team
+                    or not away_team
+                ):
+                    continue
 
-            home = states[(league_id, home_team)]
-            away = states[(league_id, away_team)]
-            common = self._common_features(league_id, home_team, away_team, home, away)
-            if self._has_rich_data(fixture):
-                tier1_rows.append(
-                    {**common, **self._tier1_features(fixture, home, away)}
+                home = states[(league_id, home_team)]
+                away = states[(league_id, away_team)]
+                common = self._common_features(
+                    league_id, home_team, away_team, home, away
                 )
-                tier1_targets.append(target)
-            else:
-                tier2_rows.append(
-                    {**common, **self._tier2_features(league_id, home, away, states)}
-                )
-                tier2_targets.append(target)
+                if self._has_rich_data(fixture):
+                    tier1_rows.append(
+                        {**common, **self._tier1_features(fixture, home, away)}
+                    )
+                    tier1_targets.append(target)
+                else:
+                    tier2_rows.append(
+                        {
+                            **common,
+                            **self._tier2_features(league_id, home, away, states),
+                        }
+                    )
+                    tier2_targets.append(target)
+                pending_updates.append((fixture, home, away))
 
-            self._update_states(fixture, home, away)
+            # Results at the same kickoff are not observable to one another.
+            for fixture, home, away in pending_updates:
+                self._update_states(fixture, home, away)
 
         return TierDatasets(
             tier1_features=pd.DataFrame(tier1_rows, columns=Tier1Model.FEATURES),
@@ -139,23 +154,21 @@ class MultiTierDatasetBuilder:
         return getattr(fixture, name, None)
 
     @classmethod
-    def _kickoff_sort_key(cls, fixture: object) -> int:
+    def _kickoff_sort_key(cls, fixture: object) -> int | None:
         value = cls._value(fixture, "kickoff")
         try:
-            return int(pd.Timestamp(value).value)
+            timestamp = pd.Timestamp(value)
         except (TypeError, ValueError):
-            return 0
+            return None
+        return None if pd.isna(timestamp) else int(timestamp.value)
 
     @classmethod
     def _has_rich_data(cls, fixture: object) -> bool:
         return all(
-            cls._valid_number(cls._value(fixture, name))
+            (value := cls._as_float(cls._value(fixture, name))) is not None
+            and value > 1.0
             for name in cls._RICH_SOURCE_COLUMNS
         )
-
-    @staticmethod
-    def _valid_number(value: object) -> bool:
-        return MultiTierDatasetBuilder._as_float(value) is not None
 
     @staticmethod
     def _as_float(value: object) -> float | None:
@@ -190,36 +203,23 @@ class MultiTierDatasetBuilder:
             "away_team": away_team,
             "home_form_last5": home.form_average,
             "away_form_last5": away.form_average,
+            "home_avg_goals": home.goals_for_average,
+            "away_avg_goals": away.goals_for_average,
+            "home_elo": home.elo,
+            "away_elo": away.elo,
         }
 
     @classmethod
     def _tier1_features(
         cls, fixture: object, home: _TeamState, away: _TeamState
     ) -> dict[str, object]:
-        odds: dict[str, float] = {}
-        for name in (
-            "opening_home_odd",
-            "opening_draw_odd",
-            "opening_away_odd",
-            "closing_home_odd",
-            "closing_draw_odd",
-            "closing_away_odd",
-        ):
+        odds: dict[str, object] = {}
+        for name in cls._RICH_SOURCE_COLUMNS:
             value = cls._as_float(cls._value(fixture, name))
             if value is None:  # Protected by _has_rich_data; preserve the invariant.
                 raise ValueError(f"Tier 1 fixture is missing {name}")
             odds[name] = value
-        return {
-            "home_avg_shots": home.average("shots"),
-            "away_avg_shots": away.average("shots"),
-            "home_avg_shots_on_target": home.average("shots_on_target"),
-            "away_avg_shots_on_target": away.average("shots_on_target"),
-            "home_avg_corners": home.average("corners"),
-            "away_avg_corners": away.average("corners"),
-            "home_avg_fouls": home.average("fouls"),
-            "away_avg_fouls": away.average("fouls"),
-            **odds,
-        }
+        return odds
 
     @staticmethod
     def _tier2_features(
@@ -230,14 +230,10 @@ class MultiTierDatasetBuilder:
     ) -> dict[str, object]:
         ranks = MultiTierDatasetBuilder._league_ranks(league_id, states)
         return {
-            "home_avg_goals": home.goals_for_average,
-            "away_avg_goals": away.goals_for_average,
             "home_league_points": float(home.points),
             "away_league_points": float(away.points),
             "home_league_position": float(ranks.get(id(home), len(ranks) + 1)),
             "away_league_position": float(ranks.get(id(away), len(ranks) + 1)),
-            "home_elo": home.elo,
-            "away_elo": away.elo,
         }
 
     @staticmethod
@@ -449,6 +445,14 @@ class _BaseTierModel:
                 )
             ),
             "log_loss": float(log_loss(target, probabilities, labels=[0, 1, 2])),
+            "brier_score": float(
+                np.mean(
+                    np.sum(
+                        (probabilities - np.eye(3, dtype=float)[target]) ** 2,
+                        axis=1,
+                    )
+                )
+            ),
             "calibration_applied": self.calibration_applied,
             "calibration_method": self.calibration_method,
             "calibration_samples": float(self.calibration_samples),
@@ -543,28 +547,21 @@ class _BaseTierModel:
 
 
 class Tier1Model(_BaseTierModel):
-    """LightGBM model for fixtures with statistics and pre-match odds."""
+    """Market-aware model using only features observable before kickoff."""
 
     FEATURES = (
         "league_id",
         "home_team",
         "away_team",
-        "home_avg_shots",
-        "away_avg_shots",
-        "home_avg_shots_on_target",
-        "away_avg_shots_on_target",
-        "home_avg_corners",
-        "away_avg_corners",
-        "home_avg_fouls",
-        "away_avg_fouls",
         "home_form_last5",
         "away_form_last5",
+        "home_avg_goals",
+        "away_avg_goals",
+        "home_elo",
+        "away_elo",
         "opening_home_odd",
         "opening_draw_odd",
         "opening_away_odd",
-        "closing_home_odd",
-        "closing_draw_odd",
-        "closing_away_odd",
     )
 
 

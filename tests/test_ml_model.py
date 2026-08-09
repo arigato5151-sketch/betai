@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import joblib
 import numpy as np
 import pytest
 from sklearn.base import BaseEstimator, clone
@@ -550,3 +551,54 @@ def test_rollback_rejects_tampered_previous_artifact(
     assert pipeline.load_active_model() is True
     assert pipeline.active_model_name == "Second"
     assert "signature verification failed" in caplog.text
+
+
+def test_rollback_rejects_signed_but_runtime_invalid_previous_artifact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    artifacts_dir = tmp_path / "models"
+    active_path = artifacts_dir / "active_model.pkl"
+    previous_path = artifacts_dir / "previous_model.pkl"
+    monkeypatch.setattr(settings, "MODEL_ARTIFACTS_DIR", str(artifacts_dir))
+    monkeypatch.setattr(settings, "ACTIVE_MODEL_PATH", str(active_path))
+    pipeline = MLModelPipeline()
+    pipeline._save_active_model(
+        ProbabilityModel([0.7, 0.2, 0.1]), None, "First", {"brier_score": 0.2}
+    )
+    pipeline._save_active_model(
+        ProbabilityModel([0.1, 0.2, 0.7]), None, "Second", {"brier_score": 0.1}
+    )
+    active_before = active_path.read_bytes()
+    invalid_payload = joblib.load(previous_path)
+    invalid_payload["feature_names"] = []
+    joblib.dump(invalid_payload, previous_path)
+    pipeline._write_signature(previous_path, pipeline._signature_path(previous_path))
+
+    assert pipeline.rollback() is False
+    assert active_path.read_bytes() == active_before
+    assert pipeline.load_active_model() is True
+    assert pipeline.active_model_name == "Second"
+
+
+def test_rollback_restores_active_artifact_when_candidate_load_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    artifacts_dir = tmp_path / "models"
+    active_path = artifacts_dir / "active_model.pkl"
+    monkeypatch.setattr(settings, "MODEL_ARTIFACTS_DIR", str(artifacts_dir))
+    monkeypatch.setattr(settings, "ACTIVE_MODEL_PATH", str(active_path))
+    pipeline = MLModelPipeline()
+    pipeline._save_active_model(
+        ProbabilityModel([0.7, 0.2, 0.1]), None, "First", {"brier_score": 0.2}
+    )
+    pipeline._save_active_model(
+        ProbabilityModel([0.1, 0.2, 0.7]), None, "Second", {"brier_score": 0.1}
+    )
+    active_before = active_path.read_bytes()
+    load_active_model = Mock(side_effect=[False, True])
+    monkeypatch.setattr(pipeline, "load_active_model", load_active_model)
+
+    assert pipeline.rollback() is False
+    assert active_path.read_bytes() == active_before
+    assert pipeline._verify_artifact(active_path) is True
+    assert load_active_model.call_count == 2

@@ -6,6 +6,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 from app.db.models import Base, FixtureOddsSnapshot
+from app.db.odds_snapshot_repository import OddsSnapshotRepository
 from app.services.odds_history import OddsHistoryService
 
 
@@ -144,3 +145,37 @@ def test_background_collection_rejects_rapid_or_post_kickoff_polling() -> None:
         refresh_interval_seconds=10800,
         closing_window_hours=24,
     )
+
+
+def test_closing_snapshot_requires_pre_kickoff_observation_inside_window() -> None:
+    service, factory = _service()
+    kickoff = datetime(2030, 7, 30, 18, tzinfo=UTC)
+    service.enrich_prefill(
+        _prefill(kickoff),
+        captured_at=kickoff - timedelta(hours=25),
+    )
+
+    with factory() as db:
+        repository = OddsSnapshotRepository(db)
+        assert (
+            repository.closing_snapshot(
+                fixture_id=1556549,
+                kickoff=kickoff,
+                closing_window_hours=24,
+            )
+            is None
+        )
+
+    service.enrich_prefill(
+        _prefill(kickoff),
+        captured_at=kickoff - timedelta(minutes=30),
+    )
+    with factory() as db:
+        snapshot = OddsSnapshotRepository(db).closing_snapshot(
+            fixture_id=1556549,
+            kickoff=kickoff,
+            closing_window_hours=24,
+        )
+
+    assert snapshot is not None
+    assert snapshot.captured_at.replace(tzinfo=UTC) == kickoff - timedelta(minutes=30)

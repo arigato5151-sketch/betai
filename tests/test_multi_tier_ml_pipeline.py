@@ -60,8 +60,46 @@ def test_builder_splits_rich_and_result_only_fixtures_without_current_stat_leaka
 
     assert len(datasets.tier1_features) == 1
     assert len(datasets.tier2_features) == 1
-    assert datasets.tier1_features.iloc[0]["home_avg_shots"] == 0.0
+    assert datasets.tier1_features.iloc[0]["home_avg_goals"] == 0.0
+    assert "closing_home_odd" not in datasets.tier1_features.columns
     assert datasets.tier1_target.tolist() == [HOME_WIN]
+    assert datasets.tier2_target.tolist() == [DRAW]
+
+
+def test_builder_does_not_leak_results_between_equal_kickoff_fixtures() -> None:
+    kickoff = datetime(2025, 8, 1, tzinfo=UTC)
+    first = _fixture(0, rich=False, result="HOME_WIN")
+    second = _fixture(1, rich=False, result="DRAW")
+    first.update(
+        kickoff=kickoff,
+        home_team="Shared Team",
+        away_team="Opponent A",
+        home_goals=4,
+        away_goals=0,
+    )
+    second.update(
+        kickoff=kickoff,
+        home_team="Shared Team",
+        away_team="Opponent B",
+    )
+
+    datasets = MultiTierDatasetBuilder().build([first, second])
+
+    assert datasets.tier2_features.iloc[0]["home_avg_goals"] == 0.0
+    assert datasets.tier2_features.iloc[1]["home_avg_goals"] == 0.0
+    assert datasets.tier2_features.iloc[1]["home_elo"] == 1500.0
+
+
+def test_builder_rejects_invalid_kickoff_and_non_market_odds() -> None:
+    invalid_kickoff = _fixture(0, rich=True, result="HOME_WIN")
+    invalid_kickoff["kickoff"] = None
+    invalid_odds = _fixture(1, rich=True, result="DRAW")
+    invalid_odds["opening_home_odd"] = 1.0
+
+    datasets = MultiTierDatasetBuilder().build([invalid_kickoff, invalid_odds])
+
+    assert datasets.tier1_features.empty
+    assert len(datasets.tier2_features) == 1
     assert datasets.tier2_target.tolist() == [DRAW]
 
 
@@ -93,6 +131,7 @@ def test_tier_models_train_predict_and_evaluate_three_outcomes(
         "accuracy",
         "f1_macro",
         "log_loss",
+        "brier_score",
         "calibration_applied",
         "calibration_method",
         "calibration_samples",

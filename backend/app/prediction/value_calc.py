@@ -189,15 +189,6 @@ class ValueCalc:
                 model_probs, market, kelly_fraction=kelly_fraction
             )
 
-        if fallback_odd and fallback_odd > 1.0:
-            synthetic = ValueCalc.default_market(fallback_odd, model_probs=model_probs)
-            synthetic["raw_odds"]["HOME_WIN"] = fallback_odd
-            result = ValueCalc._evaluate_with_market(
-                model_probs, synthetic, kelly_fraction=kelly_fraction
-            )
-            result["market"] = "SINGLE_ODD"
-            return result
-
         return {
             "value_bet": False,
             "edge": 0.0,
@@ -206,7 +197,42 @@ class ValueCalc:
             "best_pick": None,
             "value_options": [],
             "market": None,
+            "market_status": (
+                "incomplete_1x2_market" if fallback_odd else "market_unavailable"
+            ),
         }
+
+    @staticmethod
+    def suppress_financial_recommendations(
+        assessment: dict,
+        *,
+        reason: str = "market_superiority_not_validated",
+    ) -> dict:
+        """Retain research diagnostics while removing actionable bet signals."""
+        result = dict(assessment)
+        research_pick = result.get("best_pick")
+        research_options = [dict(item) for item in result.get("value_options", [])]
+        for item in research_options:
+            item["kelly_stake_pct"] = 0.0
+
+        result.update(
+            {
+                "research_value_bet": bool(result.get("value_bet")),
+                "research_edge": result.get("edge", 0.0),
+                "research_ev": result.get("ev", 0.0),
+                "research_best_pick": research_pick,
+                "research_value_options": research_options,
+                "value_bet": False,
+                "edge": 0.0,
+                "ev": 0.0,
+                "ev_points": 0.0,
+                "best_pick": None,
+                "value_options": [],
+                "recommendation_status": "disabled",
+                "recommendation_reason": reason,
+            }
+        )
+        return result
 
     @staticmethod
     def _evaluate_with_market(

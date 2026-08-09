@@ -200,7 +200,9 @@ def test_kelly_fraction_parameter_scales_stake_before_caps() -> None:
         ValueCalc._kelly_stake(70.0, 1.5, 1.5)
 
 
-def test_professional_evaluation_selects_best_value_and_single_odd_fallback() -> None:
+def test_professional_evaluation_selects_best_value_and_rejects_single_odd_fallback() -> (
+    None
+):
     analysis = {"all_probabilities": {"HOME_WIN": 60.0, "DRAW": 20.0, "AWAY_WIN": 20.0}}
     market = ValueCalc.devig_1x2(2.0, 3.5, 4.0)
 
@@ -214,7 +216,9 @@ def test_professional_evaluation_selects_best_value_and_single_odd_fallback() ->
     assert evaluated["value_options"] == sorted(
         evaluated["value_options"], key=lambda option: option["edge"], reverse=True
     )
-    assert fallback["market"] == "SINGLE_ODD"
+    assert fallback["market"] is None
+    assert fallback["market_status"] == "incomplete_1x2_market"
+    assert fallback["value_bet"] is False
 
 
 def test_professional_evaluation_returns_neutral_result_without_market() -> None:
@@ -231,6 +235,7 @@ def test_professional_evaluation_returns_neutral_result_without_market() -> None
         "best_pick": None,
         "value_options": [],
         "market": None,
+        "market_status": "market_unavailable",
     }
 
 
@@ -309,3 +314,26 @@ def test_quarter_kelly_fraction_is_applied_before_cap(
 
     assert full_kelly * ValueCalc.KELLY_FRACTION * 100 == pytest.approx(expected_stake)
     assert ValueCalc._kelly_stake(probability_pct, odd) == expected_stake
+
+
+def test_unvalidated_financial_signal_is_retained_only_as_research() -> None:
+    assessment = {
+        "value_bet": True,
+        "edge": 12.5,
+        "ev": 0.08,
+        "ev_points": 8.0,
+        "best_pick": {"outcome": "HOME_WIN", "kelly_stake_pct": 3.0},
+        "value_options": [
+            {"outcome": "HOME_WIN", "kelly_stake_pct": 3.0, "edge": 12.5}
+        ],
+    }
+
+    result = ValueCalc.suppress_financial_recommendations(assessment)
+
+    assert result["value_bet"] is False
+    assert result["best_pick"] is None
+    assert result["edge"] == 0.0
+    assert result["recommendation_status"] == "disabled"
+    assert result["research_value_bet"] is True
+    assert result["research_edge"] == 12.5
+    assert result["research_value_options"][0]["kelly_stake_pct"] == 0.0

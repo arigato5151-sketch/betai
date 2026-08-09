@@ -120,3 +120,29 @@ async def test_automatic_predictions_report_abstention_without_failure() -> None
     assert result["predictions_generated"] == 0
     assert result["abstained"] == 1
     assert result["failed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_automatic_predictions_count_persisted_uncertain_decision_as_abstain() -> (
+    None
+):
+    now = datetime(2030, 8, 1, 12, tzinfo=UTC)
+    fixtures = [{"fixture_id": 100, "kickoff": now + timedelta(hours=2)}]
+
+    async def analyzer(fixture_id: int) -> object:
+        return {
+            "prediction_id": fixture_id,
+            "decision_status": "abstain",
+            "decision_reasons": ["probability_margin_too_low"],
+        }
+
+    result = await _generate_upcoming_predictions(
+        FakeFixtureAggregator(fixtures),  # type: ignore[arg-type]
+        analyzer,
+        set(),
+        observed_at=now,
+    )
+
+    assert result["predictions_generated"] == 0
+    assert result["abstained"] == 1
+    assert result["failed"] == 0

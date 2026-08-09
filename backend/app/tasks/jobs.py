@@ -14,10 +14,12 @@ from app.db.player_context_repository import (
     PlayerContextRepository,
     is_fixture_player_context_complete,
 )
+from app.db.odds_snapshot_repository import OddsSnapshotRepository, OddsSnapshotWindow
 from app.db.session import SessionLocal
 from app.db.repository import MatchPredictionRepository
 from app.db.models import HistoricalFixture, MatchPrediction, TeamLocation
 from app.services.api_football import APIFootballClient
+from app.services.api_provider_health import api_football_health
 from app.services.football_data_csv import (
     FootballDataCSVClient,
     FootballDataDownloadError,
@@ -43,6 +45,7 @@ from app.services.model_monitoring import ModelMonitoringService
 from app.services.fixture_aggregator import FixtureAggregator
 from app.services.fixture_context import fixture_context_service
 from app.services.task_lock import DistributedTaskLock
+from app.services.cache import cache
 from app.services.result_verification import (
     ResultVerificationService,
     canonical_result_source,
@@ -121,7 +124,17 @@ async def _generate_upcoming_predictions(
     async def analyze(fixture_id: int) -> str:
         try:
             async with semaphore:
-                await analyzer(fixture_id)
+                result = await analyzer(fixture_id)
+            if (
+                isinstance(result, Mapping)
+                and result.get("decision_status") == "abstain"
+            ):
+                logger.info(
+                    "Automatic prediction decision abstained for fixture_id=%s reasons=%s",
+                    fixture_id,
+                    result.get("decision_reasons", []),
+                )
+                return "abstained"
             return "generated"
         except PredictionIneligibleError as exc:
             logger.info(
@@ -232,7 +245,6 @@ async def _collect_upcoming_odds(
         days=settings.ODDS_COLLECTOR_HORIZON_DAYS,
         limit=settings.ODDS_COLLECTOR_MAX_FIXTURES,
     )
-    semaphore = asyncio.Semaphore(settings.ODDS_COLLECTOR_CONCURRENCY)
     invalid_fixtures = 0
     candidates: list[tuple[int, datetime]] = []
     for fixture in fixtures:
@@ -249,15 +261,33 @@ async def _collect_upcoming_odds(
             continue
         candidates.append((fixture_id, kickoff))
 
-    async def collect(fixture_id: int, kickoff: datetime) -> str:
-        if not service.should_collect(
+    due_candidates = [
+        (fixture_id, kickoff)
+        for fixture_id, kickoff in candidates
+        if service.should_collect(
             fixture_id=fixture_id,
             kickoff=kickoff,
             observed_at=captured_at,
             refresh_interval_seconds=settings.ODDS_COLLECTOR_RUN_INTERVAL_SECONDS,
             closing_window_hours=settings.ODDS_COLLECTOR_CLOSING_WINDOW_HOURS,
-        ):
-            return "not_due"
+        )
+    ]
+    # Closing observations have priority when the provider quota is constrained.
+    due_candidates.sort(key=lambda candidate: candidate[1])
+
+    provider_health = await api_football_health.snapshot()
+    daily_remaining = provider_health.get("daily_remaining")
+    market_budget = settings.ODDS_COLLECTOR_MARKET_REQUEST_BUDGET
+    if isinstance(daily_remaining, int) and not isinstance(daily_remaining, bool):
+        market_budget = min(
+            market_budget,
+            max(0, daily_remaining - settings.ODDS_COLLECTOR_DAILY_QUOTA_RESERVE),
+        )
+    selected_candidates = due_candidates[:market_budget]
+    quota_deferred = len(due_candidates) - len(selected_candidates)
+    semaphore = asyncio.Semaphore(settings.ODDS_COLLECTOR_CONCURRENCY)
+
+    async def collect(fixture_id: int, kickoff: datetime) -> str:
         async with semaphore:
             market = await client.get_fixture_market(fixture_id)
         if not isinstance(market, Mapping):
@@ -275,7 +305,7 @@ async def _collect_upcoming_odds(
         return "recorded" if "odds_history" in enriched else "rejected"
 
     outcomes = await asyncio.gather(
-        *(collect(fixture_id, kickoff) for fixture_id, kickoff in candidates)
+        *(collect(fixture_id, kickoff) for fixture_id, kickoff in selected_candidates)
     )
     counts = Counter(outcomes)
     return {
@@ -283,7 +313,9 @@ async def _collect_upcoming_odds(
         "fixtures_seen": len(fixtures),
         "eligible_fixtures": len(candidates),
         "snapshots_recorded": counts["recorded"],
-        "not_due": counts["not_due"],
+        "not_due": len(candidates) - len(due_candidates),
+        "quota_deferred": quota_deferred,
+        "market_request_budget": market_budget,
         "market_unavailable": counts["market_unavailable"],
         "rejected": counts["rejected"],
         "invalid_fixtures": invalid_fixtures,
@@ -1418,10 +1450,22 @@ def _run_model_retraining() -> str:
             try:
                 # Local import keeps the tiered stack (lightgbm/sklearn) off the
                 # worker hot path until a retrain actually runs.
-                from app.prediction.ml.train_tiered_models import train_tiered_models
+                from app.prediction.ml.train_tiered_models import (
+                    ModelPromotionRejected,
+                    train_tiered_models,
+                )
 
                 tiered_report = train_tiered_models(fixtures=historical_fixtures)
                 logger.info("Tiered model retraining completed: %s", tiered_report)
+            except ModelPromotionRejected as exc:
+                tiered_report = {
+                    "status": "promotion_rejected",
+                    "tier1_metrics": exc.tier1_metrics,
+                }
+                logger.warning(
+                    "Tiered model candidate rejected by market gate: %s",
+                    exc.tier1_metrics,
+                )
             except Exception:
                 logger.exception("Tiered model retraining failed.")
 
@@ -1457,12 +1501,31 @@ def retrain_ml_model_task() -> str:
 @shared_task(name="app.tasks.jobs.monitor_model_drift_task", base=TransientTask)
 def monitor_model_drift_task() -> dict[str, object]:
     """Queue a challenger training run when recent calibration materially degrades."""
+    active_artifact_version = ml_pipeline.status().get("artifact_version")
+    artifact_version = (
+        active_artifact_version if isinstance(active_artifact_version, str) else None
+    )
     with SessionLocal() as db:
-        status = ModelMonitoringService(db).snapshot()
-    retraining_queued = bool(status["drift_detected"])
+        status = ModelMonitoringService(db).snapshot(artifact_version)
+    cooldown_key = f"drift-retraining:{artifact_version or 'unavailable'}"
+    cooldown_active = bool(_run_async(cache.get("operations", cooldown_key)))
+    retraining_queued = bool(status["drift_detected"]) and not cooldown_active
     if retraining_queued:
         retrain_ml_model_task.delay()
-    return {**status, "retraining_queued": retraining_queued}
+        _run_async(
+            cache.set(
+                "operations",
+                cooldown_key,
+                {"artifact_version": artifact_version, "reason": "confirmed_drift"},
+                settings.MODEL_DRIFT_RETRAIN_COOLDOWN_SECONDS,
+            )
+        )
+    return {
+        **status,
+        "retraining_queued": retraining_queued,
+        "retraining_suppressed_by_cooldown": bool(status["drift_detected"])
+        and cooldown_active,
+    }
 
 
 @shared_task(name="app.tasks.jobs.sync_completed_matches_task", base=TransientTask)
@@ -1490,6 +1553,7 @@ def _sync_completed_matches(
     with SessionLocal() as db:
         repo = MatchPredictionRepository(db)
         historical_repo = HistoricalFixtureRepository(db)
+        odds_repo = OddsSnapshotRepository(db)
 
         # Get all predictions where actual outcome is not resolved yet
         predictions = (
@@ -1558,11 +1622,24 @@ def _sync_completed_matches(
                     pred.prediction, verified.actual_result, pred.odd
                 )
 
-                # Fetch closing odds dynamically if available to compute CLV
+                # A post-match provider response is not evidence of the closing
+                # price. Only use a collector snapshot timestamped shortly
+                # before kickoff.
+                closing_snapshot = (
+                    odds_repo.closing_snapshot(
+                        fixture_id=pred.fixture_id,
+                        kickoff=pred.kickoff,
+                        closing_window_hours=(
+                            settings.ODDS_COLLECTOR_CLOSING_WINDOW_HOURS
+                        ),
+                    )
+                    if pred.fixture_id is not None and pred.kickoff is not None
+                    else None
+                )
                 market = (
-                    None
-                    if source != "api_football" or request_id is None
-                    else _run_async(api_client.get_fixture_market(request_id))
+                    {"raw_odds": OddsSnapshotWindow.outcome_dict(closing_snapshot)}
+                    if closing_snapshot is not None
+                    else None
                 )
                 closing_odd = PredictionAuditor.select_closing_odd(
                     market, pred.prediction

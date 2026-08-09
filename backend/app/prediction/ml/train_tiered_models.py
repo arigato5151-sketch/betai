@@ -5,9 +5,9 @@ The training task can source its completed-match data from two places:
 * ``database`` -- completed fixtures already persisted by the fixture data
   pipeline (see ``HistoricalFixtureRepository``); used by default.
 * ``pipeline`` -- raw league-season CSVs fetched live via
-  ``data_pipeline.FootballDataFetcher``.  Optional odds enrichment merges
-  opening/closing 1X2 odds from the historical database so fixtures with
-  bookmaker odds are promoted to the data-rich Tier 1 set.
+  ``data_pipeline.FootballDataFetcher``. Optional odds enrichment merges
+  opening 1X2 odds from the historical database so fixtures with information
+  available before kickoff are promoted to the market-aware Tier 1 set.
 
 Run from the repository root with:
 ``python -m backend.app.prediction.ml.train_tiered_models``.
@@ -29,7 +29,9 @@ if __package__ and __package__.startswith("backend."):
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import accuracy_score, log_loss
 
+from app.core.config import settings
 from app.db.historical_repository import HistoricalFixtureRepository
 from app.db.session import SessionLocal
 from app.prediction.ml.ml_pipeline import (
@@ -61,6 +63,14 @@ PIPELINE_LEAGUE_IDS: dict[str, int] = {
 }
 
 _FTR_TO_RESULT = {"H": "HOME_WIN", "D": "DRAW", "A": "AWAY_WIN"}
+
+
+class ModelPromotionRejected(RuntimeError):
+    """Raised when a candidate fails the production promotion gate."""
+
+    def __init__(self, tier1_metrics: dict[str, object]) -> None:
+        super().__init__("Tier 1 candidate failed the production promotion gate")
+        self.tier1_metrics = dict(tier1_metrics)
 
 
 def load_historical_fixtures() -> list[object]:
@@ -121,11 +131,11 @@ def normalize_pipeline_row(row: object, league_id: int) -> dict[str, object]:
 
 
 def build_odds_provider_from_database() -> object:
-    """Return a best-effort odds provider keyed by (league, home, away).
+    """Return a best-effort opening-odds provider keyed by team identity.
 
     The provider reads a pipeline fixture dict and returns opening/closing 1X2
     odds previously persisted for the matching teams, or an empty mapping when
-    no data-rich counterpart exists.
+    no pre-kickoff market counterpart exists.
     """
     with SessionLocal() as db:
         supplements = list(HistoricalFixtureRepository(db).get_all())
@@ -143,9 +153,6 @@ def build_odds_provider_from_database() -> object:
             "opening_home_odd",
             "opening_draw_odd",
             "opening_away_odd",
-            "closing_home_odd",
-            "closing_draw_odd",
-            "closing_away_odd",
         ):
             value = _optional_float(getattr(fixture, name, None))
             if value is None:
@@ -225,6 +232,145 @@ def _temporal_split(
     )
 
 
+def _market_benchmark_metrics(
+    features: pd.DataFrame,
+    target: pd.Series,
+    *,
+    model_probabilities: np.ndarray,
+) -> dict[str, object]:
+    """Compare Tier 1 with the market using paired holdout loss differences."""
+    columns = ("opening_away_odd", "opening_draw_odd", "opening_home_odd")
+    odds = features.loc[:, columns].apply(pd.to_numeric, errors="coerce").to_numpy()
+    if len(odds) == 0 or not np.isfinite(odds).all() or np.any(odds <= 1.0):
+        raise ValueError("Tier 1 holdout requires valid opening 1X2 odds")
+
+    inverse = 1.0 / odds
+    market_probabilities = inverse / inverse.sum(axis=1, keepdims=True)
+    actual = target.to_numpy(dtype=int)
+    candidate_probabilities = np.asarray(model_probabilities, dtype=float)
+    if (
+        candidate_probabilities.shape != market_probabilities.shape
+        or not np.isfinite(candidate_probabilities).all()
+        or np.any(candidate_probabilities < 0)
+        or np.any(candidate_probabilities.sum(axis=1) <= 0)
+    ):
+        raise ValueError("Tier 1 candidate returned invalid holdout probabilities")
+    candidate_probabilities = candidate_probabilities / candidate_probabilities.sum(
+        axis=1, keepdims=True
+    )
+
+    market_log_loss = float(log_loss(actual, market_probabilities, labels=[0, 1, 2]))
+    market_brier = float(
+        np.mean(
+            np.sum(
+                (market_probabilities - np.eye(3, dtype=float)[actual]) ** 2,
+                axis=1,
+            )
+        )
+    )
+    model_log_loss = float(log_loss(actual, candidate_probabilities, labels=[0, 1, 2]))
+    one_hot = np.eye(3, dtype=float)[actual]
+    model_brier = float(
+        np.mean(np.sum((candidate_probabilities - one_hot) ** 2, axis=1))
+    )
+    log_loss_improvement = market_log_loss - model_log_loss
+    brier_improvement = market_brier - model_brier
+
+    indices = np.arange(len(actual))
+    clipped_market = np.clip(market_probabilities[indices, actual], 1e-15, 1.0)
+    clipped_candidate = np.clip(candidate_probabilities[indices, actual], 1e-15, 1.0)
+    per_sample_log_improvement = np.log(clipped_candidate) - np.log(clipped_market)
+    per_sample_brier_improvement = np.sum(
+        (market_probabilities - one_hot) ** 2
+        - (candidate_probabilities - one_hot) ** 2,
+        axis=1,
+    )
+    rng = np.random.default_rng(42)
+    bootstrap_indices = rng.integers(
+        0,
+        len(actual),
+        size=(settings.TIERED_PROMOTION_BOOTSTRAP_SAMPLES, len(actual)),
+    )
+    lower_percentile = (1.0 - settings.TIERED_PROMOTION_CONFIDENCE) * 100.0
+    log_loss_lower_bound = float(
+        np.percentile(
+            per_sample_log_improvement[bootstrap_indices].mean(axis=1),
+            lower_percentile,
+        )
+    )
+    brier_lower_bound = float(
+        np.percentile(
+            per_sample_brier_improvement[bootstrap_indices].mean(axis=1),
+            lower_percentile,
+        )
+    )
+    sample_sufficient = len(actual) >= settings.TIERED_PROMOTION_MIN_HOLDOUT_SAMPLES
+    beats_market = (
+        sample_sufficient
+        and log_loss_improvement >= settings.MIN_TIERED_MARKET_LOG_LOSS_IMPROVEMENT
+        and brier_improvement >= settings.MIN_TIERED_MARKET_BRIER_IMPROVEMENT
+        and log_loss_lower_bound > 0.0
+        and brier_lower_bound > 0.0
+    )
+    return {
+        "market_accuracy": float(
+            accuracy_score(actual, market_probabilities.argmax(axis=1))
+        ),
+        "market_log_loss": market_log_loss,
+        "market_brier_score": market_brier,
+        "log_loss_improvement_vs_market": log_loss_improvement,
+        "brier_improvement_vs_market": brier_improvement,
+        "market_log_loss_improvement_lower_bound": log_loss_lower_bound,
+        "market_brier_improvement_lower_bound": brier_lower_bound,
+        "promotion_holdout_samples": len(actual),
+        "promotion_sample_sufficient": sample_sufficient,
+        "beats_opening_market": beats_market,
+    }
+
+
+def _champion_benchmark_metrics(
+    candidate_metrics: dict[str, object], champion_metrics: dict[str, object]
+) -> dict[str, object]:
+    """Require a material gain over the active model with bounded trade-offs."""
+
+    def metric(source: dict[str, object], name: str) -> float:
+        value = source.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("Champion comparison metrics are incomplete")
+        return float(value)
+
+    candidate_log_loss = metric(candidate_metrics, "log_loss")
+    candidate_brier = metric(candidate_metrics, "brier_score")
+    champion_log_loss = metric(champion_metrics, "log_loss")
+    champion_brier = metric(champion_metrics, "brier_score")
+    values = (
+        candidate_log_loss,
+        candidate_brier,
+        champion_log_loss,
+        champion_brier,
+    )
+    if not all(np.isfinite(value) for value in values):
+        raise ValueError("Champion comparison metrics must be finite")
+
+    log_loss_improvement = champion_log_loss - candidate_log_loss
+    brier_improvement = champion_brier - candidate_brier
+    log_loss_path = (
+        log_loss_improvement >= settings.MIN_TIERED_CHAMPION_LOG_LOSS_IMPROVEMENT
+        and brier_improvement >= -settings.MAX_TIERED_CHAMPION_BRIER_REGRESSION
+    )
+    brier_path = (
+        brier_improvement >= settings.MIN_TIERED_CHAMPION_BRIER_IMPROVEMENT
+        and log_loss_improvement >= -settings.MAX_TIERED_CHAMPION_LOG_LOSS_REGRESSION
+    )
+    return {
+        "champion_log_loss": champion_log_loss,
+        "champion_brier_score": champion_brier,
+        "log_loss_improvement_vs_champion": log_loss_improvement,
+        "brier_improvement_vs_champion": brier_improvement,
+        "beats_active_champion": log_loss_path or brier_path,
+    }
+
+
 def train_tiered_models(
     fixtures: Sequence[object] | None = None,
     *,
@@ -235,6 +381,7 @@ def train_tiered_models(
     leagues: Sequence[str] | None = None,
     pipeline_fetcher: object | None = None,
     enrich_odds: object | None = None,
+    require_market_superiority: bool = True,
 ) -> dict[str, object]:
     """Build, evaluate, sign, and promote a Tier 1/Tier 2 model bundle."""
     if fixtures is None:
@@ -255,16 +402,41 @@ def train_tiered_models(
         datasets.tier2_features, datasets.tier2_target
     )
 
-    tier1 = cast(Tier1Model, Tier1Model(backend=backend))
-    tier2 = cast(Tier2Model, Tier2Model(backend=backend))
+    tier1 = Tier1Model(backend=backend)
+    tier2 = Tier2Model(backend=backend)
     if calibration_method in ("isotonic", "platt", "auto", "none"):
         tier1.calibration_method = calibration_method
         tier2.calibration_method = calibration_method
     tier1 = cast(Tier1Model, tier1.train(tier1_train_x, tier1_train_y))
     tier2 = cast(Tier2Model, tier2.train(tier2_train_x, tier2_train_y))
     tier1_metrics = tier1.evaluate(tier1_test_x, tier1_test_y)
+    tier1_metrics.update(
+        _market_benchmark_metrics(
+            tier1_test_x,
+            tier1_test_y,
+            model_probabilities=tier1.predict_proba(tier1_test_x),
+        )
+    )
     tier2_metrics = tier2.evaluate(tier2_test_x, tier2_test_y)
     store = artifact_store or TieredModelArtifactStore()
+    active_bundle = store.load_active()
+    if active_bundle is not None:
+        champion_metrics = active_bundle.tier1_model.evaluate(
+            tier1_test_x, tier1_test_y
+        )
+        tier1_metrics.update(
+            _champion_benchmark_metrics(tier1_metrics, champion_metrics)
+        )
+    else:
+        tier1_metrics["beats_active_champion"] = None
+    promotion_failures = []
+    if tier1_metrics["beats_opening_market"] is not True:
+        promotion_failures.append("opening_market")
+    if tier1_metrics["beats_active_champion"] is False:
+        promotion_failures.append("active_champion")
+    tier1_metrics["promotion_failures"] = promotion_failures
+    if require_market_superiority and promotion_failures:
+        raise ModelPromotionRejected(tier1_metrics)
     source = "pipeline" if seasons else "historical_fixtures"
     bundle = store.export(
         tier1,
