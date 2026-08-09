@@ -16,6 +16,7 @@ from app.api.endpoints import (
     _derive_reference_lineup,
     _fetch_ml_match_data,
     _fetch_player_rating_data,
+    _is_training_eligible,
     _select_reference_lineup,
 )
 from app.core.config import settings
@@ -1063,3 +1064,62 @@ async def test_value_evaluation_uses_ensemble_probabilities(
     assert computed["analysis"]["all_probabilities"]["HOME_WIN"] == 37.34
     assert computed["value_data"]["edge"] == -25.32
     assert computed["analysis"]["ensemble"]["applied"] is True
+
+
+def _eligible_computed() -> dict:
+    return {
+        "data_quality": {
+            "prediction_eligibility": {"status": "eligible", "reason": None}
+        }
+    }
+
+
+def _base_payload() -> AnalysisRequest:
+    return AnalysisRequest(
+        home_team="Home",
+        away_team="Away",
+        league_id=203,
+        kickoff=datetime(2026, 8, 9, 18, tzinfo=UTC),
+        home_stats={"form": 70, "attack": 70, "defense": 70, "xg": 1.5},
+        away_stats={"form": 70, "attack": 70, "defense": 70, "xg": 1.5},
+        odd=2.0,
+    )
+
+
+def test_training_eligible_with_composite_key() -> None:
+    payload = _base_payload()
+    assert _is_training_eligible(_eligible_computed(), payload, "manual") is True
+
+
+def test_training_eligible_with_provider_fixture_id() -> None:
+    payload = _base_payload()
+    payload.provider_fixture_id = "1234567"
+    assert _is_training_eligible(_eligible_computed(), payload, "manual") is True
+
+
+def test_training_eligible_rejected_without_fixture_key() -> None:
+    payload = _base_payload()
+    payload.league_id = None
+    assert _is_training_eligible(_eligible_computed(), payload, "manual") is False
+
+
+def test_training_eligible_rejects_scenario() -> None:
+    assert (
+        _is_training_eligible(_eligible_computed(), _base_payload(), "scenario")
+        is False
+    )
+
+
+def test_training_eligible_rejects_feature_overrides() -> None:
+    payload = _base_payload()
+    payload.feature_overrides = {"form": 99.0}
+    assert _is_training_eligible(_eligible_computed(), payload, "manual") is False
+
+
+def test_training_eligible_rejects_unhealthy_prediction() -> None:
+    computed = _eligible_computed()
+    computed["data_quality"]["prediction_eligibility"] = {
+        "status": "limited",
+        "reason": "insufficient_data",
+    }
+    assert _is_training_eligible(computed, _base_payload(), "manual") is False

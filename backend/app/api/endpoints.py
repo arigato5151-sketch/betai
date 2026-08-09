@@ -1486,6 +1486,38 @@ def _persist_analysis(
         return record, repo.count_labeled()
 
 
+def _is_training_eligible(
+    computed: dict,
+    payload: AnalysisRequest,
+    analysis_origin: str,
+) -> bool:
+    """A prediction is trainable when it is actionable AND the fixture can be
+    deterministically identified so a verified result can later be attached.
+
+    Provider identity (API fixture id) is not required: the composite key
+    (league + both teams + kickoff) is equally deterministic. Scenario runs and
+    manual feature overrides are never training sample material.
+    """
+    if payload.feature_overrides or analysis_origin == "scenario":
+        return False
+    eligibility = (computed.get("data_quality") or {}).get(
+        "prediction_eligibility"
+    ) or {}
+    if eligibility.get("status") != "eligible":
+        return False
+    has_fixture_identity = bool(
+        payload.provider_fixture_id
+        or (
+            bool(payload.home_team)
+            and bool(payload.away_team)
+            and bool(payload.league_id)
+            and payload.kickoff is not None
+        )
+        or bool(payload.fixture_id and payload.fixture_source)
+    )
+    return has_fixture_identity
+
+
 async def _run_analysis(
     payload: AnalysisRequest,
     *,
@@ -1503,10 +1535,10 @@ async def _run_analysis(
     )
     if require_eligible and not strict_decision.eligible:
         raise PredictionIneligibleError(strict_decision)
-    training_eligible = (
-        strict_decision.eligible
-        and not payload.feature_overrides
-        and analysis_origin != "scenario"
+    training_eligible = _is_training_eligible(
+        computed,
+        payload,
+        analysis_origin,
     )
     db_record, labeled_samples_count = _persist_analysis(
         payload,
