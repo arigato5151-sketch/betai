@@ -121,6 +121,74 @@ def test_historical_upsert_is_idempotent_and_updates_scores(
     assert historical_repository.db.query(stored.__class__).count() == 1
 
 
+def test_get_by_composite_key_requires_single_row(
+    historical_repository: HistoricalFixtureRepository,
+) -> None:
+    kickoff = datetime(2026, 8, 12, 19, tzinfo=UTC)
+    historical_repository.upsert_many(
+        [
+            fixture_row(100, kickoff, home_team_id=645, away_team_id=11),
+            fixture_row(
+                101,
+                kickoff + timedelta(minutes=5),
+                home_team_id=645,
+                away_team_id=11,
+                home_goals=1,
+                away_goals=0,
+            ),
+        ]
+    )
+
+    assert (
+        historical_repository.get_by_composite_key(
+            league_id=203, home_team_id=645, away_team_id=11, kickoff=kickoff
+        )
+        is None
+    )
+
+
+def test_get_by_composite_key_matches_window_and_returns_none_for_gaps(
+    historical_repository: HistoricalFixtureRepository,
+) -> None:
+    kickoff = datetime(2026, 8, 12, 19, tzinfo=UTC)
+    historical_repository.upsert_many(
+        [
+            fixture_row(200, kickoff, home_team_id=645, away_team_id=11),
+            fixture_row(
+                201, kickoff + timedelta(hours=48), home_team_id=645, away_team_id=11
+            ),
+        ]
+    )
+
+    matched = historical_repository.get_by_composite_key(
+        league_id=203, home_team_id=645, away_team_id=11, kickoff=kickoff
+    )
+    assert matched is not None
+    assert matched.fixture_id == 200
+
+    assert (
+        historical_repository.get_by_composite_key(
+            league_id=203,
+            home_team_id=645,
+            away_team_id=11,
+            kickoff=kickoff + timedelta(hours=48),
+        )
+        is not None
+    )
+    assert (
+        historical_repository.get_by_composite_key(
+            league_id=203, home_team_id=645, away_team_id=99, kickoff=kickoff
+        )
+        is None
+    )
+    assert (
+        historical_repository.get_by_composite_key(
+            league_id=203, home_team_id=645, away_team_id=11, kickoff=None
+        )
+        is None
+    )
+
+
 def test_history_upsert_many_chunks_large_batches_without_sqlite_bind_limit(
     historical_repository: HistoricalFixtureRepository,
 ) -> None:

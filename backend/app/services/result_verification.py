@@ -154,6 +154,62 @@ class ResultVerificationService:
         )
 
     @staticmethod
+    def verify_composite(
+        prediction: MatchPrediction,
+        fixture: HistoricalFixture | None,
+        *,
+        kickoff_max_gap_minutes: int = 30,
+    ) -> ResultVerificationDecision:
+        """Verify a local fixture that was resolved by the composite key only
+        (league + teams + kickoff window) because the prediction has no
+        provider identity. Strictly returns 'pending' on any ambiguity or
+        mismatch so a provider-less label is never force-attached."""
+        if fixture is None:
+            return ResultVerificationDecision("pending", "composite_fixture_not_found")
+        if fixture.status not in _FINAL_STATUSES:
+            return ResultVerificationDecision("pending", "composite_fixture_not_final")
+        if prediction.kickoff is None or not isinstance(fixture.kickoff, datetime):
+            return ResultVerificationDecision("pending", "composite_kickoff_unknown")
+
+        prediction_kickoff = prediction.kickoff.replace(tzinfo=None)
+        fixture_kickoff = fixture.kickoff.replace(tzinfo=None)
+        gap_minutes = (fixture_kickoff - prediction_kickoff).total_seconds() / 60.0
+        if abs(gap_minutes) > kickoff_max_gap_minutes:
+            return ResultVerificationDecision("pending", "composite_kickoff_mismatch")
+
+        identity = {
+            "league_id": fixture.league_id,
+            "home_team_id": fixture.home_team_id,
+            "away_team_id": fixture.away_team_id,
+            "home_team": fixture.home_team,
+            "away_team": fixture.away_team,
+        }
+        identity_error = ResultVerificationService._identity_error(prediction, identity)
+        if identity_error:
+            return ResultVerificationDecision("pending", identity_error)
+
+        actual_result = (
+            "HOME_WIN"
+            if fixture.home_goals > fixture.away_goals
+            else "AWAY_WIN" if fixture.home_goals < fixture.away_goals else "DRAW"
+        )
+        if fixture.actual_result != actual_result:
+            return ResultVerificationDecision(
+                "pending", "composite_result_status_mismatch"
+            )
+        return ResultVerificationDecision(
+            "verified",
+            result=VerifiedResult(
+                actual_result=actual_result,
+                home_score=fixture.home_goals,
+                away_score=fixture.away_goals,
+                source=f"historical:{fixture.data_source}"[:50],
+                provider_fixture_id=str(fixture.fixture_id),
+                verified_at=datetime.now(UTC),
+            ),
+        )
+
+    @staticmethod
     def _identity_error(
         prediction: MatchPrediction,
         fixture: Mapping[str, object],

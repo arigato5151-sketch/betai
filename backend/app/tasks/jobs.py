@@ -44,7 +44,6 @@ from app.services.fixture_aggregator import FixtureAggregator
 from app.services.fixture_context import fixture_context_service
 from app.services.task_lock import DistributedTaskLock
 from app.services.result_verification import (
-    ResultVerificationDecision,
     ResultVerificationService,
     canonical_result_source,
     provider_request_fixture_id,
@@ -1531,8 +1530,14 @@ def _sync_completed_matches(
                         fixture = _run_async(api_client.get_fixture_by_id(request_id))
                         decision = ResultVerificationService.verify(pred, fixture)
                     else:
-                        decision = ResultVerificationDecision(
-                            "pending", "no_provider_identity"
+                        composite = historical_repo.get_by_composite_key(
+                            league_id=pred.league_id,
+                            home_team_id=pred.home_team_id,
+                            away_team_id=pred.away_team_id,
+                            kickoff=pred.kickoff,
+                        )
+                        decision = ResultVerificationService.verify_composite(
+                            pred, composite
                         )
                 counters[decision.status] += 1
                 if decision.status != "verified" or decision.result is None:

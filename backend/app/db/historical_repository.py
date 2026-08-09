@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable, Mapping
 
 from sqlalchemy import and_, or_
@@ -95,6 +95,42 @@ class HistoricalFixtureRepository:
             .filter(HistoricalFixture.fixture_id == fixture_id)
             .first()
         )
+
+    def get_by_composite_key(
+        self,
+        *,
+        league_id: int | None,
+        home_team_id: int | None,
+        away_team_id: int | None,
+        kickoff: datetime | None,
+        tolerance_minutes: int = 30,
+    ) -> HistoricalFixture | None:
+        """Resolve a single, unambiguous local fixture from a provider-less
+        prediction. Returns None when the key is incomplete or matches more
+        than one row so a label is never attached ambiguously."""
+        if (
+            league_id is None
+            or home_team_id is None
+            or away_team_id is None
+            or not isinstance(kickoff, datetime)
+        ):
+            return None
+        window = timedelta(minutes=tolerance_minutes)
+        candidates = (
+            self.db.query(HistoricalFixture)
+            .filter(
+                HistoricalFixture.league_id == league_id,
+                HistoricalFixture.home_team_id == home_team_id,
+                HistoricalFixture.away_team_id == away_team_id,
+                HistoricalFixture.kickoff >= kickoff - window,
+                HistoricalFixture.kickoff <= kickoff + window,
+            )
+            .all()
+        )
+        unique_fixture_ids = {fixture.fixture_id for fixture in candidates}
+        if len(unique_fixture_ids) != 1:
+            return None
+        return candidates[0]
 
     def get_all(self) -> list[HistoricalFixture]:
         return (
