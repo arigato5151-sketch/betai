@@ -11,6 +11,7 @@ from app.prediction.eligibility import (
     PredictionIneligibleError,
 )
 from app.tasks.jobs import _generate_upcoming_predictions
+from app.tasks.predictions import _validate_automatic_prefill
 
 
 class FakeFixtureAggregator:
@@ -25,6 +26,29 @@ class FakeFixtureAggregator:
         assert days == settings.AUTO_PREDICTION_HORIZON_DAYS
         assert limit == settings.AUTO_PREDICTION_MAX_FIXTURES
         return self.fixtures
+
+
+@pytest.mark.parametrize(
+    ("prefill", "expected_reason"),
+    [
+        (None, "fixture_prefill_unavailable"),
+        ({"odd": None}, "market_unavailable"),
+        ({"odd": float("nan")}, "market_unavailable"),
+        ({"odd": 1.0}, "market_unavailable"),
+    ],
+)
+def test_automatic_prefill_gaps_abstain_instead_of_failing(
+    prefill: object,
+    expected_reason: str,
+) -> None:
+    with pytest.raises(PredictionIneligibleError) as exc_info:
+        _validate_automatic_prefill(prefill)
+
+    assert exc_info.value.decision.reasons == (expected_reason,)
+
+
+def test_automatic_prefill_accepts_real_decimal_market() -> None:
+    _validate_automatic_prefill({"odd": "2.15"})
 
 
 @pytest.mark.asyncio
@@ -61,6 +85,7 @@ async def test_automatic_predictions_skip_existing_demo_and_near_kickoff() -> No
         "eligible_fixtures": 1,
         "predictions_generated": 1,
         "abstained": 0,
+        "conditional": 0,
         "failed": 0,
         "skipped_existing": 1,
         "skipped_invalid": 3,

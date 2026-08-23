@@ -49,6 +49,10 @@ function UpcomingFixturesContainer({
         throw new Error("Haftalık fikstür alınamadı.");
       }
       setFixtures(normalizeUpcomingFixtures(await response.json()));
+      // Historical downloads run in a worker; rendering never waits for them.
+      request("/fixtures/history/sync-missing", { method: "POST" }).catch(
+        () => undefined,
+      );
     } catch (requestError) {
       setError(requestError.message || "Haftalık fikstür alınamadı.");
     } finally {

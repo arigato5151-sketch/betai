@@ -197,6 +197,80 @@ def test_performance_queries_enforce_strict_point_in_time_cutoff() -> None:
         session.close()
 
 
+def test_selected_fixture_performances_are_bounded_and_chronological() -> None:
+    session, repository = build_repository()
+    kickoff = datetime(2026, 7, 1, 18, tzinfo=UTC)
+    for fixture_id, fixture_kickoff in ((1303, kickoff + timedelta(days=2)), (1301, kickoff)):
+        add_fixture(session, fixture_id=fixture_id, kickoff=fixture_kickoff)
+    try:
+        repository.upsert_performances(
+            [
+                performance_row(1303, kickoff + timedelta(days=2), player_id=12),
+                performance_row(1301, kickoff, player_id=11),
+                performance_row(1301, kickoff, player_id=10),
+            ]
+        )
+
+        rows = repository.get_performances_for_fixture_ids(
+            [1303, 1301], max_results=2
+        )
+
+        assert [(row.fixture_id, row.player_id) for row in rows] == [
+            (1301, 10),
+            (1301, 11),
+        ]
+        with pytest.raises(ValueError, match="positive integer"):
+            repository.get_performances_for_fixture_ids([1301], max_results=0)
+    finally:
+        session.close()
+
+
+def test_missing_location_targets_are_distinct_and_exclude_complete_locations() -> None:
+    session, repository = build_repository()
+    kickoff = datetime(2026, 7, 1, 18, tzinfo=UTC)
+    add_fixture(session, fixture_id=1401, kickoff=kickoff)
+    session.add(
+        HistoricalFixture(
+            fixture_id=1402,
+            league_id=203,
+            season=2026,
+            kickoff=kickoff + timedelta(days=1),
+            home_team_id=3,
+            away_team_id=2,
+            home_team="Third",
+            away_team="Away",
+            home_goals=1,
+            away_goals=0,
+            actual_result="HOME_WIN",
+            status="FT",
+        )
+    )
+    session.commit()
+    try:
+        repository.upsert_team_locations(
+            [
+                {
+                    "data_source": "api_football",
+                    "team_id": 1,
+                    "name": "Home",
+                    "latitude": 41.0,
+                    "longitude": 29.0,
+                }
+            ]
+        )
+
+        targets = repository.list_missing_team_location_targets(
+            seasons=[2026], limit=10
+        )
+
+        assert {(target["team_id"], target["name"]) for target in targets} == {
+            (2, "Away"),
+            (3, "Third"),
+        }
+    finally:
+        session.close()
+
+
 def test_performance_rows_are_deleted_with_their_fixture() -> None:
     session, repository = build_repository()
     kickoff = datetime(2026, 7, 1, 18, tzinfo=UTC)

@@ -95,7 +95,7 @@ def test_lineup_collector_task_is_noop_when_disabled(
 def test_lineup_collector_task_is_noop_for_demo_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.tasks import jobs
+    from app.tasks import jobs  # noqa: F401 -- load task module before monkeypatching
 
     class DemoClient:
         @staticmethod
@@ -103,6 +103,6 @@ def test_lineup_collector_task_is_noop_for_demo_data(
             return True
 
     monkeypatch.setattr(settings, "LINEUP_COLLECTOR_ENABLED", True)
-    monkeypatch.setattr(jobs, "APIFootballClient", DemoClient)
+    monkeypatch.setattr("app.tasks.predictions.APIFootballClient", DemoClient)
 
     assert collect_upcoming_lineups_task.run() == {"status": "demo_disabled"}

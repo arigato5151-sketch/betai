@@ -27,6 +27,13 @@ const status = {
     brier_delta_lower_bound: null,
     confidence: 0.95,
   },
+  live_evaluation: {
+    status: "insufficient_data",
+    verified_samples: 18,
+    required_samples: 60,
+    claims_enabled: false,
+    artifact_version: "model-v1",
+  },
 };
 
 describe("ModelStatusCard", () => {
@@ -45,6 +52,11 @@ describe("ModelStatusCard", () => {
     expect(screen.getByText("18/60")).toBeInTheDocument();
     expect(screen.getByText("%95")).toBeInTheDocument();
     expect(screen.getByText("Hazır")).toBeInTheDocument();
+    expect(screen.getByText("Test Doğruluğu")).toBeInTheDocument();
+    expect(screen.getByText("Ölçüm kapalı")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "aktif artifact için 18/60 doğrulanmış tahmin",
+    );
   });
 
   it("yenileme ve hata durumlarını erişilebilir duyurur", () => {

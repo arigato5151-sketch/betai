@@ -54,8 +54,8 @@ function UpcomingFixtures({
             Haftalık Maç Fikstürü
           </h2>
           <p className="mt-1 text-sm text-slate-400">
-            Maçlar Türkiye saatine göre kronolojik sıralanır. Analiz formuna
-            aktarmak için bir maça dokunun.
+            Yalnızca iki takım için de yeterli yakın dönem geçmişi bulunan
+            maçlar analize seçilebilir.
           </p>
         </div>
         <button
@@ -103,10 +103,16 @@ function UpcomingFixtures({
                 {dayLabel}
               </h3>
               <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {dayFixtures.map((fixture) => (
+                {dayFixtures.map((fixture) => {
+                  const readiness = fixture.data_readiness;
+                  const ready = readiness?.status === "sufficient";
+                  const required = readiness?.required_history_matches ?? 0;
+                  const homeCount = readiness?.home_history_matches ?? 0;
+                  const awayCount = readiness?.away_history_matches ?? 0;
+                  return (
                   <article
                     key={fixture.fixture_id}
-                    className={`rounded-lg border bg-slate-950/70 transition ${
+                    className={`rounded-lg border bg-slate-950/70 transition ${!ready ? "opacity-70" : ""} ${
                       selectedFixtureId === fixture.fixture_id
                         ? "border-emerald-500 ring-1 ring-emerald-500/50"
                         : "border-slate-800 hover:border-slate-600"
@@ -114,8 +120,12 @@ function UpcomingFixtures({
                   >
                     <button
                       type="button"
-                      aria-label={`${fixture.home_team} – ${fixture.away_team} maçını analiz formuna taşı`}
-                      disabled={!onSelectFixture}
+                      aria-label={
+                        ready
+                          ? `${fixture.home_team} – ${fixture.away_team} maçını analiz formuna taşı`
+                          : `${fixture.home_team} – ${fixture.away_team} maçı için veri yetersiz`
+                      }
+                      disabled={!onSelectFixture || !ready}
                       onClick={() => onSelectFixture?.(fixture)}
                       className="w-full rounded-lg p-4 text-left disabled:cursor-not-allowed"
                     >
@@ -144,6 +154,14 @@ function UpcomingFixtures({
                           {fixture.away_team}
                         </span>
                       </div>
+                      <div className="mt-3 flex items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-widest">
+                        <span className={ready ? "text-emerald-400" : "text-amber-500"}>
+                          {ready ? "Yeterli veri" : "Yetersiz veri"}
+                        </span>
+                        <span className="text-slate-500">
+                          Ev {homeCount}/{required} · Dep {awayCount}/{required}
+                        </span>
+                      </div>
                       {(fixture.is_demo ||
                         fixture.sources?.length > 1 ||
                         selectedFixtureId === fixture.fixture_id) && (
@@ -165,7 +183,8 @@ function UpcomingFixtures({
                       )}
                     </button>
                   </article>
-                ))}
+                  );
+                })}
               </div>
             </section>
           ))}

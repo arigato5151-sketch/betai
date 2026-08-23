@@ -48,6 +48,68 @@ export function getResultVerificationBadge(item) {
   };
 }
 
+export function getPredictionStatusBadge(item) {
+  if (
+    item.analysis_origin === "scenario" ||
+    item.eligibility_status !== "abstain"
+  ) {
+    return null;
+  }
+
+  const dataEligibility = item.data_quality?.prediction_eligibility;
+  if (dataEligibility?.status !== "eligible") {
+    return {
+      text: "Sınırlı veri",
+      className: "border-amber-800 bg-amber-950/50 text-amber-300",
+    };
+  }
+
+  const decision = item.data_quality?.decision_recommendation;
+  if (decision?.status === "conditional") {
+    return {
+      text: "Koşullu tahmin",
+      className: "border-violet-800 bg-violet-950/50 text-violet-300",
+    };
+  }
+
+  const decisionReasons = decision?.reasons;
+  const reasons = Array.isArray(decisionReasons) ? decisionReasons : [];
+  if (reasons.includes("market_edge_insufficient")) {
+    return {
+      text: "Piyasa avantajı yok",
+      className: "border-sky-800 bg-sky-950/50 text-sky-300",
+    };
+  }
+  if (reasons.includes("market_unavailable")) {
+    return {
+      text: "Piyasa oranı yok",
+      className: "border-amber-800 bg-amber-950/50 text-amber-300",
+    };
+  }
+  if (reasons.includes("probability_margin_too_low")) {
+    return {
+      text: "Olasılıklar birbirine çok yakın",
+      className: "border-slate-700 bg-slate-900 text-slate-400",
+    };
+  }
+  if (reasons.includes("top_probability_too_low")) {
+    return {
+      text: "En yüksek olasılık düşük",
+      className: "border-slate-700 bg-slate-900 text-slate-400",
+    };
+  }
+  if (reasons.includes("prediction_sources_diverge")) {
+    return {
+      text: "Tahmin modelleri ayrışıyor",
+      className: "border-slate-700 bg-slate-900 text-slate-400",
+    };
+  }
+  return {
+    text: "Tahmin eşiği geçilmedi",
+    className: "border-slate-700 bg-slate-900 text-slate-400",
+  };
+}
+
 function HistoryTable({
   filters,
   history,
@@ -108,6 +170,7 @@ function HistoryTable({
         {history.map((item) => {
           const predictionResult = getPredictionResult(item);
           const verificationBadge = getResultVerificationBadge(item);
+          const predictionStatusBadge = getPredictionStatusBadge(item);
           const actionableValueBet =
             item.is_value_bet === 1 &&
             item.data_quality?.financial_recommendation?.status === "eligible";
@@ -128,9 +191,9 @@ function HistoryTable({
                     Senaryo · eğitim dışı
                   </span>
                 )}
-                {item.eligibility_status === "abstain" && item.analysis_origin !== "scenario" && (
-                  <span className="rounded border border-amber-800 bg-amber-950/50 px-2 py-1 text-xs font-semibold text-amber-300">
-                    Sınırlı veri
+                {predictionStatusBadge && (
+                  <span className={`rounded border px-2 py-1 text-xs font-semibold ${predictionStatusBadge.className}`}>
+                    {predictionStatusBadge.text}
                   </span>
                 )}
                 {item.eligibility_status === "eligible" &&

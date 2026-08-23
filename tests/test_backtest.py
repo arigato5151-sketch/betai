@@ -80,6 +80,8 @@ def test_kelly_strategies_apply_fraction_and_five_percent_cap() -> None:
     full_kelly = BacktestEngine.run_simulation(
         [prediction(kelly=80)], initial_bankroll=1000, strategy="kelly"
     )
+    # kelly_stake is already fractioned by the production KELLY_FRACTION, so
+    # fractional_kelly at the same fraction must NOT shrink it a second time.
     fractional = BacktestEngine.run_simulation(
         [prediction(kelly=80)],
         initial_bankroll=1000,
@@ -88,7 +90,45 @@ def test_kelly_strategies_apply_fraction_and_five_percent_cap() -> None:
     )
 
     assert full_kelly["final_bankroll"] == 1050
-    assert fractional["final_bankroll"] == 1012.5
+    assert fractional["final_bankroll"] == 1050
+
+
+def test_fractional_kelly_scales_relative_to_production_fraction() -> None:
+    baseline = BacktestEngine.run_simulation(
+        [prediction(kelly=4.0)],
+        initial_bankroll=1000,
+        strategy="fractional_kelly",
+        kelly_fraction=0.25,
+    )
+    half = BacktestEngine.run_simulation(
+        [prediction(kelly=4.0)],
+        initial_bankroll=1000,
+        strategy="fractional_kelly",
+        kelly_fraction=0.125,
+    )
+    doubled = BacktestEngine.run_simulation(
+        [prediction(kelly=4.0)],
+        initial_bankroll=1000,
+        strategy="fractional_kelly",
+        kelly_fraction=0.5,
+    )
+
+    assert baseline["total_staked"] == 40
+    assert half["total_staked"] == 20
+    assert doubled["total_staked"] == 50  # five percent cap on bankroll
+
+
+def test_fractioned_kelly_stake_is_not_fractioned_again() -> None:
+    # A production record stores a 1.25% quarter-Kelly stake; fractional_kelly
+    # at the default fraction must bet 1.25%, not 0.3125%.
+    result = BacktestEngine.run_simulation(
+        [prediction(kelly=1.25)],
+        initial_bankroll=1000,
+        strategy="fractional_kelly",
+        kelly_fraction=0.25,
+    )
+
+    assert result["total_staked"] == 12.5
 
 
 def test_flat_stake_is_capped_and_bankruptcy_stops_simulation() -> None:
@@ -195,6 +235,34 @@ def test_required_closing_reference_settles_at_closing_price() -> None:
     assert stale_price_win["final_bankroll"] == 105
     assert stale_price_win["closing_reference_settlement"] is True
     assert with_closing["final_bankroll"] == 105
+
+
+def test_required_closing_reference_skips_stale_snapshots() -> None:
+    kickoff = datetime(2026, 8, 9, 18, tzinfo=UTC)
+    stale_snapshot = MatchPrediction(
+        prediction="HOME_WIN",
+        actual_result="HOME_WIN",
+        odd=2.0,
+        edge=5.0,
+        closing_odds=2.0,
+        kickoff=kickoff,
+        closing_odds_snapshot_at=kickoff - timedelta(hours=30),
+        closing_odds_snapshot_id=7,
+        created_at=kickoff - timedelta(hours=40),
+    )
+
+    result = BacktestEngine.run_simulation(
+        [stale_snapshot],
+        initial_bankroll=100,
+        strategy="flat",
+        flat_stake_amount=10,
+        require_closing_odds=True,
+    )
+
+    assert result["total_bets"] == 0
+    assert result["final_bankroll"] == 100
+    assert result["skipped_reasons"] == {"stale_closing_odds": 1}
+    assert result["closing_odds_coverage_pct"] == 0
 
 
 def test_default_engine_keeps_bet_time_settlement() -> None:

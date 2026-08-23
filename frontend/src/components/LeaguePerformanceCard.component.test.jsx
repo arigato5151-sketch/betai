@@ -7,6 +7,7 @@ test("lig performans metriklerini ve örnek güvenini gösterir", () => {
   render(
     <LeaguePerformanceCard
       data={{
+        artifact_version: "model-v2",
         leagues: [
           {
             league_id: 39,
@@ -38,4 +39,5 @@ test("lig performans metriklerini ve örnek güvenini gösterir", () => {
   expect(screen.getByText("Süper Lig")).toBeInTheDocument();
   expect(screen.getByText("Yeterli")).toBeInTheDocument();
   expect(screen.getByText("Düşük örnek")).toBeInTheDocument();
+  expect(screen.getByText(/Aktif model artifact: model-v2/)).toBeInTheDocument();
 });

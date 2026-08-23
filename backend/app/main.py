@@ -1,14 +1,14 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+import secrets
 
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.core.api_mode import get_api_mode
-from app.core.config import SECRET_SOURCE_STATUS, settings
+from app.core.config import settings
 from app.core.logging_config import logger
 from app.core.security import OriginValidationMiddleware
 from app.core.observability import ObservabilityMiddleware, request_metrics
@@ -73,18 +73,6 @@ def health_check():
     return {
         "status": "ok",
         "service": "Bet AI Pro Platform",
-        "api_mode": get_api_mode(settings.API_FOOTBALL_KEY),
-        "frontend_url": settings.FRONTEND_URL,
-        "ml_ready": ml_pipeline.is_ready,
-        "ml_samples": ml_pipeline.metrics.get("samples", 0),
-        "ml_min_samples": settings.MIN_TRAINING_SAMPLES,
-        "active_model": ml_pipeline.active_model_name,
-        "ml": ml_pipeline.status(),
-        "allowed_origins": settings.BACKEND_CORS_ORIGINS,
-        "cache": cache.status(),
-        "secrets": SECRET_SOURCE_STATUS,
-        "database": get_database_status(),
-        "database_fallback_active": get_database_status()["fallback_active"],
     }
 
 
@@ -112,7 +100,13 @@ def readiness(response: Response):
 
 
 @app.get("/metrics", include_in_schema=False)
-def metrics():
+def metrics(request: Request):
+    if settings.ENVIRONMENT == "production":
+        token = request.headers.get("Authorization", "").removeprefix("Bearer ")
+        if not settings.METRICS_TOKEN or not secrets.compare_digest(
+            token, settings.METRICS_TOKEN
+        ):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return PlainTextResponse(
         request_metrics.render_prometheus(),
         media_type="text/plain; version=0.0.4",

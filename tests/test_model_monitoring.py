@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -28,6 +29,22 @@ def _prediction(index: int, *, correct: bool) -> MatchPrediction:
                 }
             }
         },
+        model_artifact_version="model-v1",
+        kickoff=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index),
+        analyzed_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index),
+    )
+
+
+def _prediction_with_ml(index: int, ml: dict[str, float]) -> MatchPrediction:
+    return MatchPrediction(
+        fixture_id=index,
+        training_eligible=True,
+        result_verification_status="verified",
+        actual_result="HOME_WIN",
+        prob_home=80.0,
+        prob_draw=10.0,
+        prob_away=10.0,
+        probability_components={"components": {"ml": ml}},
         model_artifact_version="model-v1",
         kickoff=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index),
         analyzed_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index),
@@ -122,8 +139,63 @@ def test_ml_status_contract_accepts_complete_monitoring_snapshot() -> None:
                 "historical_minimum_team_matches": 3,
             },
             "monitoring": monitoring,
+            "live_evaluation": {
+                "status": "insufficient_data",
+                "verified_samples": monitoring["samples"],
+                "required_samples": monitoring["required_samples"],
+                "claims_enabled": False,
+                "artifact_version": "model-v1",
+            },
         }
     )
 
     assert response.monitoring.status == "insufficient_data"
     assert response.monitoring.artifact_version == response.artifact_version
+    assert response.live_evaluation.claims_enabled is False
+    assert response.live_evaluation.verified_samples == 0
+
+
+def test_monitor_flags_drift_on_total_deviation_even_with_stable_brier(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings, "MODEL_DRIFT_MIN_SAMPLES", 10)
+    monkeypatch.setattr(settings, "MODEL_DRIFT_WINDOW_SIZE", 10)
+    monkeypatch.setattr(settings, "MODEL_DRIFT_TOTAL_DEVIATION_THRESHOLD", 0.10)
+    normal = {"HOME_WIN": 80.0, "DRAW": 10.0, "AWAY_WIN": 10.0}
+    # Uniformly inflated mass: normalization keeps the Brier identical, so only
+    # the raw total-deviation signal can catch the calibration collapse.
+    inflated = {"HOME_WIN": 120.0, "DRAW": 15.0, "AWAY_WIN": 15.0}
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        db.add_all(
+            [_prediction_with_ml(index, normal) for index in range(1, 11)]
+            + [_prediction_with_ml(index, inflated) for index in range(11, 21)]
+        )
+        db.commit()
+        result = ModelMonitoringService(db).snapshot("model-v1")
+
+    assert result["status"] == "drift"
+    assert result["drift_detected"] is True
+    assert result["brier_delta"] == 0.0
+    assert result["recent_abs_total_deviation"] >= result["total_deviation_threshold"]
+    assert result["recent_total_deviation"] == pytest.approx(0.5)
+    assert result["baseline_total_deviation"] == 0.0
+
+
+def test_monitor_reports_total_deviation_statistics_when_stable(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "MODEL_DRIFT_MIN_SAMPLES", 10)
+    monkeypatch.setattr(settings, "MODEL_DRIFT_WINDOW_SIZE", 10)
+    monkeypatch.setattr(settings, "MODEL_DRIFT_TOTAL_DEVIATION_THRESHOLD", 0.30)
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        db.add_all([_prediction(index, correct=True) for index in range(1, 21)])
+        db.commit()
+        result = ModelMonitoringService(db).snapshot("model-v1")
+
+    assert result["status"] == "stable"
+    assert result["drift_detected"] is False
+    assert result["recent_total_deviation"] == 0.0
+    assert result["baseline_total_deviation"] == 0.0
+    assert result["recent_abs_total_deviation"] == 0.0

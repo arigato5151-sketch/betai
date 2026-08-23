@@ -1,0 +1,16 @@
+{
+  "name": "bet-ai-odds-collector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "deploy": "wrangler deploy",
+    "db:migrate:remote": "wrangler d1 migrations apply bet-ai-odds --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260813.1",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.123.0"
+  }
+}

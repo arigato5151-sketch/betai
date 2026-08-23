@@ -69,7 +69,7 @@ class FakeOddsHistoryService:
 async def test_collector_fetches_only_due_markets_with_bounded_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.tasks import jobs
+    from app.tasks import jobs  # noqa: F401 -- load task module before monkeypatching
 
     monkeypatch.setattr(
         jobs.api_football_health,
@@ -142,7 +142,7 @@ def test_collector_task_is_noop_when_disabled(
 def test_collector_task_is_noop_for_demo_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.tasks import jobs
+    from app.tasks import jobs  # noqa: F401 -- load task module before monkeypatching
 
     class DemoClient:
         @staticmethod
@@ -150,6 +150,6 @@ def test_collector_task_is_noop_for_demo_data(
             return True
 
     monkeypatch.setattr(settings, "ODDS_COLLECTOR_ENABLED", True)
-    monkeypatch.setattr(jobs, "APIFootballClient", DemoClient)
+    monkeypatch.setattr("app.tasks.predictions.APIFootballClient", DemoClient)
 
     assert collect_upcoming_odds_task.run() == {"status": "demo_disabled"}

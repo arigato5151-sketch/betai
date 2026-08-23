@@ -138,7 +138,7 @@ def test_azure_key_vault_uses_managed_identity_and_allowlisted_names(
         azure_client_factory=client_factory,
     )
 
-    assert status == {"provider": "azure_key_vault", "loaded_keys": 9}
+    assert status == {"provider": "azure_key_vault", "loaded_keys": 10}
     credential_factory.assert_called_once_with()
     client_factory.assert_called_once_with(
         vault_url="https://bets.vault.azure.net", credential=credential

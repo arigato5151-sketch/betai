@@ -249,7 +249,7 @@ def test_repository_persists_xg_with_provenance() -> None:
 def test_understat_sync_task_updates_matching_fixture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.tasks import jobs
+    from app.tasks import jobs  # noqa: F401 -- load task module before monkeypatching
 
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -269,8 +269,8 @@ def test_understat_sync_task_updates_matching_fixture(
             return [provider_fixture()]
 
     monkeypatch.setattr(settings, "UNDERSTAT_ENABLED", True)
-    monkeypatch.setattr(jobs, "UnderstatClient", FakeClient)
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: Session(engine))
+    monkeypatch.setattr("app.tasks.enrichment.UnderstatClient", FakeClient)
+    monkeypatch.setattr("app.tasks.enrichment.SessionLocal", lambda: Session(engine))
 
     result = sync_understat_xg_task.run([2025])
 

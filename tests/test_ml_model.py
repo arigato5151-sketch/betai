@@ -143,10 +143,14 @@ def test_inference_rejects_non_finite_features() -> None:
 def test_candidate_pool_registers_enabled_native_boosters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.prediction.ml import model
+    from app.prediction.ml import model  # noqa: F401 -- initialize optional backends
 
-    monkeypatch.setattr(model, "CATBOOST_AVAILABLE", True)
-    monkeypatch.setattr(model, "LGBM_AVAILABLE", True)
+    monkeypatch.setattr(
+        "app.prediction.ml._legacy_model.CATBOOST_AVAILABLE", True
+    )
+    monkeypatch.setattr(
+        "app.prediction.ml._legacy_model.LGBM_AVAILABLE", True
+    )
     monkeypatch.setattr(settings, "ENABLE_CATBOOST_CANDIDATE", True)
     monkeypatch.setattr(settings, "ENABLE_LIGHTGBM_CANDIDATE", True)
 
@@ -166,10 +170,14 @@ def test_candidate_pool_registers_enabled_native_boosters(
 def test_candidate_pool_skips_unavailable_native_boosters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.prediction.ml import model
+    from app.prediction.ml import model  # noqa: F401 -- initialize optional backends
 
-    monkeypatch.setattr(model, "CATBOOST_AVAILABLE", False)
-    monkeypatch.setattr(model, "LGBM_AVAILABLE", False)
+    monkeypatch.setattr(
+        "app.prediction.ml._legacy_model.CATBOOST_AVAILABLE", False
+    )
+    monkeypatch.setattr(
+        "app.prediction.ml._legacy_model.LGBM_AVAILABLE", False
+    )
 
     candidates = dict(MLModelPipeline()._get_candidate_models())
 
@@ -310,7 +318,7 @@ def test_load_model_clears_stale_state_when_artifact_is_missing(
     pipeline.model = ProbabilityModel([0.3, 0.4, 0.3])
     pipeline.calibrator = object()
     pipeline.is_ready = True
-    monkeypatch.setattr("app.prediction.ml.model.os.path.exists", lambda _: False)
+    monkeypatch.setattr("app.prediction.ml._legacy_model.os.path.exists", lambda _: False)
 
     assert pipeline.load_active_model() is False
     assert pipeline.model is None
@@ -602,3 +610,32 @@ def test_rollback_restores_active_artifact_when_candidate_load_fails(
     assert active_path.read_bytes() == active_before
     assert pipeline._verify_artifact(active_path) is True
     assert load_active_model.call_count == 2
+
+
+def test_save_failure_never_publishes_or_litters_temporary_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    artifacts_dir = tmp_path / "models"
+    active_path = artifacts_dir / "active_model.pkl"
+    monkeypatch.setattr(settings, "MODEL_ARTIFACTS_DIR", str(artifacts_dir))
+    monkeypatch.setattr(settings, "ACTIVE_MODEL_PATH", str(active_path))
+    pipeline = MLModelPipeline()
+    pipeline._save_active_model(
+        ProbabilityModel([0.7, 0.2, 0.1]), None, "Champion", {"brier_score": 0.2}
+    )
+    champion_bytes = active_path.read_bytes()
+
+    def explode(payload, handle, *args, **kwargs):
+        handle.write(b"partial artifact")
+        raise OSError("disk full")
+
+    monkeypatch.setattr("app.prediction.ml._legacy_model.joblib.dump", explode)
+    with pytest.raises(Exception):
+        pipeline._save_active_model(
+            ProbabilityModel([0.1, 0.2, 0.7]), None, "Challenger", {"brier_score": 0.1}
+        )
+
+    monkeypatch.undo()
+    assert active_path.read_bytes() == champion_bytes
+    assert pipeline._verify_artifact(active_path) is True
+    assert list(artifacts_dir.rglob("*.tmp.*")) == []

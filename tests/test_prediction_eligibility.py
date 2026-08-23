@@ -42,6 +42,37 @@ def test_missing_market_and_history_force_abstention() -> None:
     assert "home_history_insufficient" in decision.reasons
 
 
+def test_market_confirmed_fixture_without_local_outcome_abstains() -> None:
+    decision = PredictionEligibilityPolicy.evaluate(
+        quality_payload(
+            market_available=True,
+            h2h_available=False,
+            home_history_sufficient=False,
+            away_history_sufficient=False,
+        )
+    )
+
+    assert decision.eligible is False
+    assert "home_history_insufficient" in decision.reasons
+    assert "away_history_insufficient" in decision.reasons
+    assert "local_h2h_unavailable" in decision.reasons
+    assert "market_unavailable" not in decision.reasons
+
+
+def test_market_confirmed_fixture_with_local_h2h_is_eligible() -> None:
+    decision = PredictionEligibilityPolicy.evaluate(
+        quality_payload(
+            market_available=True,
+            h2h_available=True,
+            home_history_sufficient=False,
+            away_history_sufficient=False,
+        )
+    )
+
+    assert decision.eligible is True
+    assert decision.reasons == ()
+
+
 def test_missing_provider_identity_force_abstention() -> None:
     decision = PredictionEligibilityPolicy.evaluate(
         quality_payload(provider_fixture_identified=False)

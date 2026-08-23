@@ -296,24 +296,6 @@
         }
       }
     },
-    "/api/status": {
-      "get": {
-        "summary": "Get Platform Status",
-        "operationId": "get_platform_status_api_status_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PlatformStatusResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/auth/register": {
       "post": {
         "summary": "Register",
@@ -556,6 +538,24 @@
         }
       }
     },
+    "/api/status": {
+      "get": {
+        "summary": "Get Platform Status",
+        "operationId": "get_platform_status_api_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/leagues": {
       "get": {
         "summary": "List Allowed Leagues",
@@ -569,13 +569,23 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ]
       }
     },
     "/api/fixtures/upcoming": {
       "get": {
         "summary": "List Upcoming Fixtures",
         "operationId": "list_upcoming_fixtures_api_fixtures_upcoming_get",
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "days",
@@ -624,10 +634,41 @@
         }
       }
     },
+    "/api/fixtures/history/sync-missing": {
+      "post": {
+        "summary": "Sync Missing Fixture History",
+        "description": "Queue a bounded history backfill after the fixture panel is loaded.",
+        "operationId": "sync_missing_fixture_history_api_fixtures_history_sync_missing_post",
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Sync Missing Fixture History Api Fixtures History Sync Missing Post"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ]
+      }
+    },
     "/api/fixtures/{fixture_id}/prefill": {
       "get": {
         "summary": "Fixture Prefill",
         "operationId": "fixture_prefill_api_fixtures__fixture_id__prefill_get",
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "fixture_id",
@@ -726,6 +767,56 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response Predict With Tiered Model Api Predict Tiered Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ]
+      }
+    },
+    "/api/predictions/batch": {
+      "post": {
+        "summary": "Batch Predict",
+        "operationId": "batch_predict_api_predictions_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array",
+                "maxItems": 20,
+                "title": "Fixture Ids"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Batch Predict Api Predictions Batch Post"
                 }
               }
             }
@@ -1143,6 +1234,43 @@
       "get": {
         "summary": "Run Audit",
         "operationId": "run_audit_api_audit_get",
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50000,
+              "minimum": 1,
+              "default": 5000,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "artifact_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Artifact Version"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1151,19 +1279,61 @@
                 "schema": {}
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
-        },
-        "security": [
-          {
-            "CookieAuth": []
-          }
-        ]
+        }
       }
     },
     "/api/audit/leagues": {
       "get": {
         "summary": "Run League Audit",
         "operationId": "run_league_audit_api_audit_leagues_get",
+        "security": [
+          {
+            "CookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50000,
+              "minimum": 1,
+              "default": 5000,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "artifact_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Artifact Version"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1172,13 +1342,18 @@
                 "schema": {}
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
-        },
-        "security": [
-          {
-            "CookieAuth": []
-          }
-        ]
+        }
       }
     },
     "/api/operations/data-quality": {
@@ -1898,14 +2073,22 @@
           "require_closing_odds": {
             "type": "boolean",
             "title": "Require Closing Odds",
-            "description": "Skip records without a valid closing price",
-            "default": false
+            "description": "Settle at closing price and skip records without one",
+            "default": true
           },
           "exclude_post_kickoff": {
             "type": "boolean",
             "title": "Exclude Post Kickoff",
             "description": "Exclude analyses generated at or after kickoff",
             "default": true
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 50000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "description": "Maximum predictions to include",
+            "default": 5000
           }
         },
         "type": "object",
@@ -2226,6 +2409,53 @@
         ],
         "title": "LoginRequest"
       },
+      "MLLiveEvaluationStatus": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "model_unavailable",
+              "insufficient_data",
+              "available"
+            ],
+            "title": "Status"
+          },
+          "verified_samples": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Verified Samples"
+          },
+          "required_samples": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Required Samples"
+          },
+          "claims_enabled": {
+            "type": "boolean",
+            "title": "Claims Enabled"
+          },
+          "artifact_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "verified_samples",
+          "required_samples",
+          "claims_enabled",
+          "artifact_version"
+        ],
+        "title": "MLLiveEvaluationStatus"
+      },
       "MLMonitoringStatus": {
         "properties": {
           "status": {
@@ -2424,6 +2654,9 @@
           },
           "monitoring": {
             "$ref": "#/components/schemas/MLMonitoringStatus"
+          },
+          "live_evaluation": {
+            "$ref": "#/components/schemas/MLLiveEvaluationStatus"
           }
         },
         "type": "object",
@@ -2435,7 +2668,8 @@
           "runtime",
           "rollback_available",
           "training_data",
-          "monitoring"
+          "monitoring",
+          "live_evaluation"
         ],
         "title": "MLStatusResponse"
       },
@@ -2499,17 +2733,12 @@
           "DRAW",
           "AWAY_WIN"
         ],
-        "title": "Odds1X2Input",
-        "description": "Validated decimal 1X2 snapshot using public API outcome aliases."
+        "title": "Odds1X2Input"
       },
       "PlatformStatusResponse": {
         "properties": {
           "api_mode": {
             "type": "string",
-            "enum": [
-              "demo",
-              "live"
-            ],
             "title": "Api Mode"
           },
           "registration_enabled": {
@@ -2916,8 +3145,7 @@
         "required": [
           "league_id"
         ],
-        "title": "TieredPredictionRequest",
-        "description": "Complete research payload for the signed multi-tier predictor."
+        "title": "TieredPredictionRequest"
       },
       "ValidationError": {
         "properties": {

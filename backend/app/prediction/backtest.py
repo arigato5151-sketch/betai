@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime
 from typing import List, Dict, Any, Tuple
 from app.db.models import MatchPrediction
 from app.prediction.audit import PredictionAuditor
+from app.prediction.value_calc import ValueCalc
 
 logger = logging.getLogger("bet-ai-pro.backtest")
 
@@ -164,6 +165,13 @@ class BacktestEngine:
             ):
                 skipped["missing_closing_odds"] += 1
                 continue
+            if require_closing_odds and not PredictionAuditor._is_fresh_closing_evidence(
+                p
+            ):
+                # A closing price captured long before kickoff is not closing
+                # evidence at all; settling at it would mint fake CLV.
+                skipped["stale_closing_odds"] += 1
+                continue
 
             # Determine bet stake
             if strategy == "flat":
@@ -173,8 +181,21 @@ class BacktestEngine:
                 stake_pct = min(max(p.kelly_stake or 0.0, 0.0), 5.0)
                 stake = current_bankroll * (stake_pct / 100.0)
             elif strategy == "fractional_kelly":
-                full_kelly_pct = min(max(p.kelly_stake or 0.0, 0.0), 5.0)
-                stake_pct = full_kelly_pct * kelly_fraction
+                # p.kelly_stake is already fractioned at write time by the
+                # production KELLY_FRACTION (value_calc._kelly_stake). Scaling
+                # it by kelly_fraction again double-fractioned the stake, so
+                # instead scale relative to the production fraction. This keeps
+                # the historical record authoritative and the operator's
+                # kelly_fraction meaningful (tighten/loosen, not double-fraction).
+                reference_fraction = ValueCalc.KELLY_FRACTION
+                relative_scale = (
+                    kelly_fraction / reference_fraction
+                    if reference_fraction > 0
+                    else 1.0
+                )
+                stake_pct = min(
+                    max(p.kelly_stake or 0.0, 0.0) * relative_scale, 5.0
+                )
                 stake = current_bankroll * (stake_pct / 100.0)
 
             # Portfolio-level guards prevent a single signal or busy day from
@@ -272,7 +293,10 @@ class BacktestEngine:
         # Calibration score: ECE (Expected Calibration Error)
         calibration_score = BacktestEngine._compute_calibration_error(calibration_data)
         closing_count = sum(
-            1 for prediction in resolved if (prediction.closing_odds or 0.0) > 1.0
+            1
+            for prediction in resolved
+            if (prediction.closing_odds or 0.0) > 1.0
+            and PredictionAuditor._is_fresh_closing_evidence(prediction)
         )
         closing_coverage = closing_count / len(resolved) * 100.0
         profit_factor = (

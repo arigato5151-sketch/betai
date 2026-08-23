@@ -145,6 +145,42 @@ class ValueCalc:
         return ValueCalc.default_market_from_model(neutral, home_odd_hint=home_odd)
 
     @staticmethod
+    def evaluate_secondary_market(
+        model_prob: float,
+        bookmaker_odd: float,
+        market_name: str,
+    ) -> dict:
+        if (
+            not math.isfinite(model_prob)
+            or not math.isfinite(bookmaker_odd)
+            or bookmaker_odd <= 1.0
+            or model_prob <= 0
+        ):
+            return {
+                "market": market_name,
+                "value_bet": False,
+                "edge": 0.0,
+                "ev": 0.0,
+            }
+        implied = 1.0 / bookmaker_odd
+        edge = model_prob - implied
+        ev = model_prob * bookmaker_odd - 1.0
+        edge_pct = round(edge * 100, 2)
+        ev_pct = round(ev * 100, 2)
+        implied_pct = round(implied * 100, 2)
+        model_pct = round(model_prob * 100, 2)
+        return {
+            "market": market_name,
+            "model_probability": model_pct,
+            "implied_probability": implied_pct,
+            "edge": edge_pct,
+            "ev": ev_pct,
+            "fair_odd": round(1.0 / model_prob, 2) if model_prob > 0 else 0.0,
+            "raw_odd": round(bookmaker_odd, 2),
+            "value_bet": ev >= ValueCalc.MINIMUM_EV and edge >= 0.05,
+        }
+
+    @staticmethod
     def _edge_threshold_ratio(implied_probability: float) -> float:
         """ROI based minimum edge threshold ratio."""
         if implied_probability > 60.0:

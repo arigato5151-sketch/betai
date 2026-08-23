@@ -46,11 +46,15 @@ def test_audit_handles_legacy_resolved_row_with_nullable_bet_fields() -> None:
 
 
 def test_audit_normalizes_probabilities_and_reports_sample_counts() -> None:
+    kickoff = datetime(2026, 8, 9, 18, tzinfo=UTC)
     prediction = MatchPrediction(
         actual_result="HOME_WIN",
         prediction="HOME_WIN",
         odd=2.5,
         closing_odds=2.0,
+        kickoff=kickoff,
+        closing_odds_snapshot_at=kickoff - timedelta(hours=2),
+        closing_odds_snapshot_id=11,
         prob_home=60.0,
         prob_draw=25.0,
         prob_away=15.0,
@@ -201,6 +205,21 @@ def test_financial_recommendations_fail_closed_on_weak_evidence(monkeypatch) -> 
     ]
 
 
+def test_closing_roi_never_pushed_as_zero_without_evidence() -> None:
+    prediction = MatchPrediction(
+        actual_result="HOME_WIN",
+        prediction="HOME_WIN",
+        odd=2.5,
+    )
+
+    result = PredictionAuditor.audit_predictions([prediction])
+
+    assert result["closing_bets"] == 0
+    assert result["closing_roi_pct"] is None
+    assert result["closing_vs_opening_roi_delta_pct"] is None
+    assert result["closing_roi_confidence_interval_95_pct"] is None
+
+
 def test_financial_recommendations_require_closing_roi_samples_and_gain() -> None:
     subject = {
         "decision_grade": True,
@@ -239,7 +258,8 @@ def test_stale_closing_odds_are_excluded_from_closing_evidence() -> None:
     result = PredictionAuditor.audit_predictions([stale])
 
     assert result["closing_bets"] == 0
-    assert result["closing_roi_pct"] == 0.0
+    assert result["closing_roi_pct"] is None
+    assert result["closing_vs_opening_roi_delta_pct"] is None
     assert result["stale_closing_odds_bets"] == 1
     assert result["closing_provenance_missing_bets"] == 0
 
@@ -264,7 +284,7 @@ def test_fresh_closing_odds_count_as_evidence_with_provenance() -> None:
     assert result["closing_provenance_missing_bets"] == 0
 
 
-def test_legacy_closing_odds_without_provenance_still_counted() -> None:
+def test_legacy_closing_odds_without_provenance_are_not_closing_evidence() -> None:
     legacy = MatchPrediction(
         actual_result="HOME_WIN",
         prediction="HOME_WIN",
@@ -274,24 +294,35 @@ def test_legacy_closing_odds_without_provenance_still_counted() -> None:
 
     result = PredictionAuditor.audit_predictions([legacy])
 
-    assert result["closing_bets"] == 1
+    # Unverifiable legacy prices are missing evidence, never evidence: they
+    # must not inflate closing_bets/closing_roi_pct with a 0.0 or a fake value.
+    assert result["closing_bets"] == 0
+    assert result["closing_roi_pct"] is None
+    assert result["closing_vs_opening_roi_delta_pct"] is None
     assert result["stale_closing_odds_bets"] == 0
     assert result["closing_provenance_missing_bets"] == 1
 
 
 def test_audit_reports_opening_and_closing_roi_delta() -> None:
+    kickoff = datetime(2026, 8, 9, 18, tzinfo=UTC)
     predictions = [
         MatchPrediction(
             actual_result="HOME_WIN",
             prediction="HOME_WIN",
             odd=3.0,
             closing_odds=2.2,
+            kickoff=kickoff,
+            closing_odds_snapshot_at=kickoff - timedelta(hours=2),
+            closing_odds_snapshot_id=13,
         ),
         MatchPrediction(
             actual_result="AWAY_WIN",
             prediction="HOME_WIN",
             odd=3.0,
             closing_odds=2.2,
+            kickoff=kickoff,
+            closing_odds_snapshot_at=kickoff - timedelta(hours=1),
+            closing_odds_snapshot_id=14,
         ),
     ]
 

@@ -1,7 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import HistoryTable, { getResultVerificationBadge } from "./HistoryTable.jsx";
+import HistoryTable, {
+  getPredictionStatusBadge,
+  getResultVerificationBadge,
+} from "./HistoryTable.jsx";
 
 const defaultProps = {
   filters: {
@@ -147,6 +150,51 @@ describe("HistoryTable Türkçe arayüzü", () => {
 
     expect(screen.getByText("Sınırlı veri")).toBeInTheDocument();
     expect(screen.getByText("Eğitim dışı")).toBeInTheDocument();
+  });
+
+  it("yeterli veriye rağmen piyasa avantajı yoksa sınırlı veri demez", () => {
+    const badge = getPredictionStatusBadge({
+      eligibility_status: "abstain",
+      analysis_origin: "fixture_user",
+      data_quality: {
+        prediction_eligibility: { status: "eligible", reasons: [] },
+        decision_recommendation: {
+          status: "research",
+          reasons: ["market_edge_insufficient"],
+        },
+      },
+    });
+
+    expect(badge.text).toBe("Piyasa avantajı yok");
+  });
+
+  it("koşullu kararları eşik altında gibi göstermez", () => {
+    const badge = getPredictionStatusBadge({
+      eligibility_status: "abstain",
+      analysis_origin: "automatic",
+      data_quality: {
+        prediction_eligibility: { status: "eligible", reasons: [] },
+        decision_recommendation: { status: "conditional", reasons: [] },
+      },
+    });
+
+    expect(badge.text).toBe("Koşullu tahmin");
+  });
+
+  it("düşük olasılık farkının gerçek nedenini gösterir", () => {
+    const badge = getPredictionStatusBadge({
+      eligibility_status: "abstain",
+      analysis_origin: "automatic",
+      data_quality: {
+        prediction_eligibility: { status: "eligible", reasons: [] },
+        decision_recommendation: {
+          status: "abstain",
+          reasons: ["probability_margin_too_low"],
+        },
+      },
+    });
+
+    expect(badge.text).toBe("Olasılıklar birbirine çok yakın");
   });
 
   it("yükleme durumunu canlı bölge olarak bildirir", () => {

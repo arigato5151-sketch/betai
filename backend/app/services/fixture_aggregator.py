@@ -18,6 +18,8 @@ from app.providers.openligadb import OpenLigaDBClient
 from app.services.api_football import APIFootballClient
 from app.services.cache import cache
 from app.services.fixture_download import FixtureDownloadClient, UPCOMING_FEEDS
+from app.services.odds_api_io import OddsApiIoClient
+from app.services.the_odds_api import TheOddsApiClient
 
 logger = logging.getLogger("bet-ai-pro.fixture_aggregator")
 
@@ -65,6 +67,7 @@ LEAGUE_ALIASES: dict[tuple[str, str], int] = {
     ("liga portugal", "portugal"): 94,
     ("turkish super lig", ""): 203,
     ("super lig", "turkey"): 203,
+    ("turkish 1 lig", ""): 204,
     ("dutch eredivisie", ""): 88,
     ("eredivisie", "netherlands"): 88,
     ("belgian pro league", ""): 144,
@@ -285,6 +288,97 @@ class TheSportsDBFixtureSource(_HTTPFixtureSource):
             if isinstance(events, list):
                 rows.extend(self._normalize(event) for event in events)
         return [row for row in rows if row]
+
+    async def get_team_history(
+        self,
+        team_name: str,
+        *,
+        before: datetime,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Resolve one exact club and return its completed recent events."""
+        if not self.configured or not team_name.strip():
+            return []
+        search = await self._get("searchteams.php", params={"t": team_name.strip()})
+        teams = search.get("teams")
+        if not isinstance(teams, list):
+            return []
+        target = normalize_team_name(team_name)
+        matches = [
+            team
+            for team in teams
+            if isinstance(team, dict)
+            and normalize_team_name(str(team.get("strTeam") or "")) == target
+        ]
+        if len(matches) != 1:
+            return []
+        raw_team_id = matches[0].get("idTeam")
+        team_id = _positive_id(raw_team_id, "thesportsdb")
+        if team_id is None:
+            return []
+
+        payload = await self._get("eventslast.php", params={"id": str(raw_team_id)})
+        events = payload.get("results")
+        if not isinstance(events, list):
+            return []
+        rows = [
+            self._normalize_completed_event(event, before=before)
+            for event in events[: max(1, min(limit, 20))]
+        ]
+        return [row for row in rows if row]
+
+    @staticmethod
+    def _normalize_completed_event(
+        event: object, *, before: datetime
+    ) -> dict[str, Any]:
+        if not isinstance(event, dict):
+            return {}
+        fixture_id = _positive_id(event.get("idEvent"), "thesportsdb")
+        home_team_id = _positive_id(event.get("idHomeTeam"), "thesportsdb")
+        away_team_id = _positive_id(event.get("idAwayTeam"), "thesportsdb")
+        home = str(event.get("strHomeTeam") or "").strip()
+        away = str(event.get("strAwayTeam") or "").strip()
+        league_id = canonical_league_id(event.get("strLeague"), event.get("strCountry"))
+        kickoff = _parse_datetime(event.get("strTimestamp") or event.get("dateEvent"))
+        try:
+            home_goals = int(str(event.get("intHomeScore")))
+            away_goals = int(str(event.get("intAwayScore")))
+        except (TypeError, ValueError):
+            return {}
+        if (
+            fixture_id is None
+            or home_team_id is None
+            or away_team_id is None
+            or league_id is None
+            or kickoff is None
+            or kickoff >= before.astimezone(ISTANBUL)
+            or not home
+            or not away
+            or home_goals < 0
+            or away_goals < 0
+        ):
+            return {}
+        return {
+            "fixture_id": fixture_id,
+            "league_id": league_id,
+            "season": kickoff.year if kickoff.month >= 7 else kickoff.year - 1,
+            "kickoff": kickoff,
+            "home_team_id": home_team_id,
+            "away_team_id": away_team_id,
+            "home_team": home[:100],
+            "away_team": away[:100],
+            "home_goals": home_goals,
+            "away_goals": away_goals,
+            "home_starting_xi": None,
+            "away_starting_xi": None,
+            "actual_result": (
+                "HOME_WIN"
+                if home_goals > away_goals
+                else "AWAY_WIN" if away_goals > home_goals else "DRAW"
+            ),
+            "status": "FT",
+            "data_source": "thesportsdb",
+        }
 
     @staticmethod
     def _normalize(event: object) -> dict[str, Any]:
@@ -597,6 +691,8 @@ class FixtureAggregator:
         thesportsdb: TheSportsDBFixtureSource | None = None,
         fixture_download: FixtureDownloadFixtureSource | None = None,
         openligadb: OpenLigaDBClient | None = None,
+        the_odds_api: TheOddsApiClient | None = None,
+        odds_api_io: OddsApiIoClient | None = None,
     ) -> None:
         self.api_football = api_football or APIFootballClient()
         self.football_data = football_data or FootballDataOrgFixtureSource()
@@ -604,24 +700,23 @@ class FixtureAggregator:
         self.thesportsdb = thesportsdb or TheSportsDBFixtureSource()
         self.fixture_download = fixture_download or FixtureDownloadFixtureSource()
         self.openligadb = openligadb or OpenLigaDBClient()
+        self.the_odds_api = the_odds_api or TheOddsApiClient()
+        self.odds_api_io = odds_api_io or OddsApiIoClient()
 
     async def get_upcoming_fixtures(
         self, days: int = 7, limit: int = 100
     ) -> list[dict[str, Any]]:
         # Versioned cache prevents a stale pre-expansion league allowlist result.
-        cache_key = f"merged-upcoming:v7:{days}:{limit}"
+        cache_key = f"merged-upcoming:v11:{days}:{limit}"
         cached = await cache.get("fixtures", cache_key)
         if isinstance(cached, list):
             return cached
 
         today = datetime.now(ISTANBUL).date()
         end = today + timedelta(days=max(1, days) - 1)
-        tasks: list[tuple[str, Any]] = [
-            (
-                "api_football",
-                self.api_football.get_upcoming_fixtures(days=days, limit=200),
-            ),
-        ]
+        # Query unmetered/public sources first. API-Football is reserved for
+        # league gaps so its free-plan quota is not spent on duplicate fixtures.
+        tasks: list[tuple[str, Any]] = []
         if self.football_data.configured:
             tasks.append(
                 ("football_data_org", self.football_data.get_fixtures(today, end))
@@ -642,6 +737,25 @@ class FixtureAggregator:
         results = await asyncio.gather(
             *(task for _, task in tasks), return_exceptions=True
         )
+        offline_league_ids = {
+            row["league_id"]
+            for result in results
+            if not isinstance(result, BaseException)
+            for row in result
+            if isinstance(row, dict)
+            and isinstance(row.get("league_id"), int)
+            and row["league_id"] in ALLOWED_LEAGUE_IDS
+        }
+        if offline_league_ids != ALLOWED_LEAGUE_IDS:
+            tasks.append(("api_football", None))
+            try:
+                api_rows = await self.api_football.get_upcoming_fixtures(
+                    days=days, limit=200
+                )
+            except Exception as exc:
+                results.append(exc)
+            else:
+                results.append(api_rows)
         provider_rows: list[tuple[str, list[dict[str, Any]]]] = []
         demo_rows: list[dict[str, Any]] = []
         for (source, _), result in zip(tasks, results, strict=True):
@@ -681,14 +795,25 @@ class FixtureAggregator:
                 ]
             provider_rows.append((source, rows))
 
+        # Fetch order controls quota use; merge order controls canonical
+        # identity. Prefer a verified API-Football id when the same fixture was
+        # already discovered through an unmetered source.
+        provider_rows.sort(key=lambda item: item[0] != "api_football")
         merged = self._merge(provider_rows, days=days)[:limit]
         if not merged:
             merged = demo_rows[:limit]
         await cache.set("fixtures", cache_key, merged, 900)
-        for fixture in merged:
-            await cache.set(
-                "fixtures", f"merged-fixture:{fixture['fixture_id']}", fixture, 86400
-            )
+        await asyncio.gather(
+            *[
+                cache.set(
+                    "fixtures",
+                    f"merged-fixture:{fixture['fixture_id']}",
+                    fixture,
+                    86400,
+                )
+                for fixture in merged
+            ]
+        )
         return merged
 
     async def get_fixture_prefill(self, fixture_id: int) -> dict[str, Any] | None:
@@ -708,7 +833,7 @@ class FixtureAggregator:
             "provider_fixture_id": fixture.get("provider_fixture_id")
             or _provider_fixture_id(fixture_id, fixture.get("source")),
         }
-        return {
+        payload = {
             "fixture": fixture,
             "home_team": fixture["home_team"],
             "away_team": fixture["away_team"],
@@ -724,6 +849,40 @@ class FixtureAggregator:
                 "model": "Poisson + Dixon-Coles + ML ensemble",
             },
         }
+        market_results = await asyncio.gather(
+            self.the_odds_api.get_fixture_market(fixture),
+            self.odds_api_io.get_fixture_market(fixture),
+            return_exceptions=True,
+        )
+        market = next((r for r in market_results if isinstance(r, dict)), None)
+        if not isinstance(market, dict):
+            return payload
+
+        raw_odds = market.get("raw_odds")
+        captured_at = market.get("captured_at")
+        if not isinstance(raw_odds, dict) or not isinstance(captured_at, str):
+            return payload
+        payload.update(
+            odd=raw_odds.get("HOME_WIN", 2.0),
+            market_1x2=market,
+            current_odds_1x2=dict(raw_odds),
+            current_odds_at=captured_at,
+            data_quality=f"{market.get('source', 'external')}_market_fallback",
+        )
+        source_label = (
+            "The Odds API"
+            if market.get("source") == "the_odds_api"
+            else (
+                "Odds-API.io"
+                if market.get("source") == "odds_api_io"
+                else "Harici oran sağlayıcısı"
+            )
+        )
+        payload["data_methodology"] = {
+            **payload["data_methodology"],
+            "odds": f"{source_label} zaman damgalı 1X2 piyasa oranları",
+        }
+        return payload
 
     async def _api_football_prefill(self, fixture_id: int) -> dict[str, Any] | None:
         payload = await self.api_football.get_fixture_prefill(fixture_id)

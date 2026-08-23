@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, Mock
 
 import redis
 
+from app.core.config import settings
 from app.tasks import health
 from app.tasks.celery_app import celery_app
 
@@ -71,13 +72,14 @@ def test_celery_connection_recovery_and_delivery_guards_are_enabled() -> None:
         "sync-completed-matches-daily",
         "retrain-ml-model-weekly",
         "monitor-model-drift-daily",
-        "sync-current-season-primary-weekly",
+        "sync-current-season-primary-daily",
         "sync-uefa-fixtures-daily",
         "sync-statsbomb-open-daily",
         "sync-open-meteo-weather-daily",
         "sync-openfootball-fixtures-daily",
         "sync-wikidata-team-locations-weekly",
         "sync-free-team-locations-weekly",
+        "sync-cloudflare-odds-snapshots",
     }
 
 
@@ -101,25 +103,23 @@ def test_retraining_task_calibrates_ensemble_before_training(monkeypatch) -> Non
     repository = Mock()
     repository.get_all_labeled.return_value = labeled_rows
     historical_repository = Mock()
-    historical_repository.get_all.return_value = historical_fixtures
+    historical_repository.get_recent.return_value = historical_fixtures
     player_context_repository = Mock()
-    player_context_repository.get_all_performances.return_value = player_performances
+    player_context_repository.get_performances_for_fixture_ids.return_value = player_performances
     player_context_repository.get_all_team_locations.return_value = team_locations
     calibrate = Mock(return_value={"status": "insufficient_data"})
     train = Mock(return_value=True)
     build = Mock(return_value=[])
-    monkeypatch.setattr(jobs, "SessionLocal", Mock(return_value=session_context))
+    monkeypatch.setattr("app.tasks.ml_tasks.SessionLocal", Mock(return_value=session_context))
     monkeypatch.setattr(
-        jobs, "MatchPredictionRepository", Mock(return_value=repository)
+        "app.tasks.ml_tasks.MatchPredictionRepository", Mock(return_value=repository)
     )
     monkeypatch.setattr(
-        jobs,
-        "HistoricalFixtureRepository",
+        "app.tasks.ml_tasks.HistoricalFixtureRepository",
         Mock(return_value=historical_repository),
     )
     monkeypatch.setattr(
-        jobs,
-        "PlayerContextRepository",
+        "app.tasks.ml_tasks.PlayerContextRepository",
         Mock(return_value=player_context_repository),
     )
     monkeypatch.setattr(
@@ -127,8 +127,7 @@ def test_retraining_task_calibrates_ensemble_before_training(monkeypatch) -> Non
     )
     monkeypatch.setattr(jobs.ml_pipeline, "train_pipeline", train)
     monkeypatch.setattr(
-        jobs.HistoricalTrainingDataBuilder,
-        "build",
+        "app.tasks.ml_tasks.HistoricalTrainingDataBuilder.build",
         build,
     )
 
@@ -145,7 +144,7 @@ def test_retraining_task_calibrates_ensemble_before_training(monkeypatch) -> Non
         def __exit__(self, *args) -> None:
             return None
 
-    monkeypatch.setattr(jobs, "DistributedTaskLock", AcquiredLock)
+    monkeypatch.setattr("app.tasks.ml_tasks.DistributedTaskLock", AcquiredLock)
 
     result = jobs.retrain_ml_model_task.run()
 
@@ -155,8 +154,30 @@ def test_retraining_task_calibrates_ensemble_before_training(monkeypatch) -> Non
         player_performances=player_performances,
         team_locations=team_locations,
     )
+    historical_repository.get_recent.assert_called_once()
+    performance_call = player_context_repository.get_performances_for_fixture_ids.call_args
+    assert performance_call is not None
+    assert list(performance_call.args[0]) == [fixture.fixture_id for fixture in historical_fixtures]
+    assert performance_call.kwargs == {
+        "max_results": settings.ML_TRAINING_MAX_PLAYER_PERFORMANCES
+    }
     calibrate.assert_called_once_with(labeled_rows)
     train.assert_called_once_with(labeled_rows)
+
+
+def _fake_lock_factory(acquired: bool = True):
+    class _FakeLock:
+        def __init__(self):
+            self.acquired = acquired
+            self.available = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    return lambda name, ttl_seconds=900, **kw: _FakeLock()
 
 
 def test_drift_monitor_queues_once_and_sets_artifact_cooldown(monkeypatch) -> None:
@@ -177,8 +198,8 @@ def test_drift_monitor_queues_once_and_sets_artifact_cooldown(monkeypatch) -> No
     queue = Mock()
     cache_get = AsyncMock(return_value=None)
     cache_set = AsyncMock()
-    monkeypatch.setattr(jobs, "SessionLocal", Mock(return_value=session_context))
-    monkeypatch.setattr(jobs, "ModelMonitoringService", Mock(return_value=monitor))
+    monkeypatch.setattr("app.tasks.ml_tasks.SessionLocal", Mock(return_value=session_context))
+    monkeypatch.setattr("app.tasks.ml_tasks.ModelMonitoringService", Mock(return_value=monitor))
     monkeypatch.setattr(
         jobs.ml_pipeline,
         "status",
@@ -187,6 +208,7 @@ def test_drift_monitor_queues_once_and_sets_artifact_cooldown(monkeypatch) -> No
     monkeypatch.setattr(jobs.retrain_ml_model_task, "delay", queue)
     monkeypatch.setattr(jobs.cache, "get", cache_get)
     monkeypatch.setattr(jobs.cache, "set", cache_set)
+    monkeypatch.setattr("app.tasks.ml_tasks.DistributedTaskLock", _fake_lock_factory(acquired=True))
 
     result = jobs.monitor_model_drift_task.run()
 
@@ -206,8 +228,8 @@ def test_drift_monitor_suppresses_repeated_queue_during_cooldown(monkeypatch) ->
         snapshot=Mock(return_value={"status": "drift", "drift_detected": True})
     )
     queue = Mock()
-    monkeypatch.setattr(jobs, "SessionLocal", Mock(return_value=MagicMock()))
-    monkeypatch.setattr(jobs, "ModelMonitoringService", Mock(return_value=monitor))
+    monkeypatch.setattr("app.tasks.ml_tasks.SessionLocal", Mock(return_value=MagicMock()))
+    monkeypatch.setattr("app.tasks.ml_tasks.ModelMonitoringService", Mock(return_value=monitor))
     monkeypatch.setattr(
         jobs.ml_pipeline,
         "status",

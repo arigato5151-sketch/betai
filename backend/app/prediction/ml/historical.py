@@ -70,12 +70,36 @@ class HistoricalFeatureService:
         league_matches = self.repository.get_league_history(
             league_id=league_id, before=before
         )
-        home_team_id = self._resolve_team_id(
+        resolved_home_team_id = self._resolve_team_id(
             league_matches, home_team_id, home_team_name
         )
-        away_team_id = self._resolve_team_id(
+        resolved_away_team_id = self._resolve_team_id(
             league_matches, away_team_id, away_team_name
         )
+        cross_competition_matches: list[HistoricalFixture] = []
+        home_needs_cross_competition_resolution = (
+            resolved_home_team_id == home_team_id
+            and home_team_id not in self._known_team_ids(league_matches)
+        )
+        away_needs_cross_competition_resolution = (
+            resolved_away_team_id == away_team_id
+            and away_team_id not in self._known_team_ids(league_matches)
+        )
+        if (
+            home_needs_cross_competition_resolution
+            or away_needs_cross_competition_resolution
+        ):
+            cross_competition_matches = self.repository.get_recent_before(before=before)
+            if home_needs_cross_competition_resolution:
+                resolved_home_team_id = self._resolve_team_id(
+                    cross_competition_matches, resolved_home_team_id, home_team_name
+                )
+            if away_needs_cross_competition_resolution:
+                resolved_away_team_id = self._resolve_team_id(
+                    cross_competition_matches, resolved_away_team_id, away_team_name
+                )
+        home_team_id = resolved_home_team_id
+        away_team_id = resolved_away_team_id
         elo_rows = [self._elo_row(fixture) for fixture in league_matches]
         ratings = FeatureEngine.calculate_elo_ratings(
             elo_rows,
@@ -106,6 +130,39 @@ class HistoricalFeatureService:
             before=before,
             limit=recent_match_count,
         )
+        # Fixture readiness merges the same club across provider IDs by its
+        # canonical name. Apply that policy here as well, otherwise the fixture
+        # card can report 5/5 while analysis sees only one provider's rows.
+        if (
+            len(home_matches) < recent_match_count
+            or len(away_matches) < recent_match_count
+        ):
+            if not cross_competition_matches:
+                cross_competition_matches = self.repository.get_recent_before(
+                    before=before
+                )
+            home_identity_matches = self._recent_team_fixtures_by_name(
+                cross_competition_matches,
+                home_team_name,
+                recent_match_count,
+            )
+            away_identity_matches = self._recent_team_fixtures_by_name(
+                cross_competition_matches,
+                away_team_name,
+                recent_match_count,
+            )
+            if len(home_identity_matches) >= recent_match_count:
+                home_matches = home_identity_matches
+            if len(away_identity_matches) >= recent_match_count:
+                away_matches = away_identity_matches
+        if not home_matches and cross_competition_matches:
+            home_matches = self._recent_team_fixtures(
+                cross_competition_matches, home_team_id, recent_match_count
+            )
+        if not away_matches and cross_competition_matches:
+            away_matches = self._recent_team_fixtures(
+                cross_competition_matches, away_team_id, recent_match_count
+            )
         home_previous_starting_xi = self.repository.get_last_starting_xi(
             team_id=home_team_id, before=before
         )
@@ -210,8 +267,12 @@ class HistoricalFeatureService:
             feature_provenance=feature_provenance,
             h2h_rates=h2h_rates,
             h2h_matches=h2h_matches,
-            home_matches_df=self._team_matches_frame(home_matches, home_team_id),
-            away_matches_df=self._team_matches_frame(away_matches, away_team_id),
+            home_matches_df=self._team_matches_frame(
+                home_matches, home_team_id, home_team_name
+            ),
+            away_matches_df=self._team_matches_frame(
+                away_matches, away_team_id, away_team_name
+            ),
             home_previous_starting_xi=home_previous_starting_xi,
             away_previous_starting_xi=away_previous_starting_xi,
             home_schedule_df=self._schedule_frame(
@@ -407,6 +468,53 @@ class HistoricalFeatureService:
         return number if math.isfinite(number) and number >= 0.0 else 0.0
 
     @staticmethod
+    def _known_team_ids(fixtures: list[HistoricalFixture]) -> set[int]:
+        return {
+            team_id
+            for fixture in fixtures
+            for team_id in (fixture.home_team_id, fixture.away_team_id)
+        }
+
+    @staticmethod
+    def _recent_team_fixtures(
+        fixtures: list[HistoricalFixture], team_id: int, limit: int
+    ) -> list[HistoricalFixture]:
+        return [
+            fixture
+            for fixture in fixtures
+            if team_id in (fixture.home_team_id, fixture.away_team_id)
+        ][:limit]
+
+    @staticmethod
+    def _recent_team_fixtures_by_name(
+        fixtures: list[HistoricalFixture],
+        team_name: str | None,
+        limit: int,
+    ) -> list[HistoricalFixture]:
+        """Return canonical-name history across provider IDs without duplicates."""
+        if not team_name:
+            return []
+        target = normalize_team_name(team_name)
+        if not target:
+            return []
+
+        matches: list[HistoricalFixture] = []
+        seen_kickoffs: set[pd.Timestamp] = set()
+        for fixture in fixtures:
+            is_home = normalize_team_name(fixture.home_team) == target
+            is_away = normalize_team_name(fixture.away_team) == target
+            if is_home == is_away:
+                continue
+            kickoff = HistoricalFeatureService._as_utc_timestamp(fixture.kickoff)
+            if kickoff is None or kickoff in seen_kickoffs:
+                continue
+            seen_kickoffs.add(kickoff)
+            matches.append(fixture)
+            if len(matches) >= limit:
+                break
+        return matches
+
+    @staticmethod
     def _resolve_team_id(
         fixtures: list[HistoricalFixture],
         requested_team_id: int,
@@ -484,11 +592,25 @@ class HistoricalFeatureService:
 
     @staticmethod
     def _team_matches_frame(
-        fixtures: list[HistoricalFixture], team_id: int
+        fixtures: list[HistoricalFixture],
+        team_id: int,
+        team_name: str | None = None,
     ) -> pd.DataFrame:
         rows: list[dict[str, object]] = []
+        target_name = normalize_team_name(team_name) if team_name else ""
         for fixture in fixtures:
-            is_home = fixture.home_team_id == team_id
+            home_name_matches = (
+                bool(target_name)
+                and normalize_team_name(fixture.home_team) == target_name
+            )
+            away_name_matches = (
+                bool(target_name)
+                and normalize_team_name(fixture.away_team) == target_name
+            )
+            if home_name_matches != away_name_matches:
+                is_home = home_name_matches
+            else:
+                is_home = fixture.home_team_id == team_id
             goals_for = fixture.home_goals if is_home else fixture.away_goals
             goals_against = fixture.away_goals if is_home else fixture.home_goals
             if goals_for > goals_against:

@@ -71,12 +71,42 @@ class PredictionEligibilityPolicy:
             and checks.get("market_available") is not True
         ):
             reasons.append("market_unavailable")
+        market_confirms_fixture = checks.get("market_available") is True
         if settings.AUTO_PREDICTION_REQUIRE_SUFFICIENT_HISTORY:
-            if checks.get("home_history_sufficient") is not True:
-                reasons.append("home_history_insufficient")
-            if checks.get("away_history_sufficient") is not True:
-                reasons.append("away_history_insufficient")
-        if quality_score < settings.AUTO_PREDICTION_MIN_DATA_QUALITY_SCORE:
+            # The fixture outcome is determined exclusively from local
+            # historical fixtures; a live market confirms the fixture is real
+            # but never substitutes for the local form/head-to-head evidence,
+            # so insufficient local data must block the forecast.
+            local_outcome_available = (
+                checks.get("h2h_available") is True
+                or (
+                    checks.get("home_history_sufficient") is True
+                    and checks.get("away_history_sufficient") is True
+                )
+            )
+            if not local_outcome_available:
+                if checks.get("h2h_available") is not True:
+                    reasons.append("local_h2h_unavailable")
+                if checks.get("home_history_sufficient") is not True:
+                    reasons.append("home_history_insufficient")
+                if checks.get("away_history_sufficient") is not True:
+                    reasons.append("away_history_insufficient")
+        min_score = settings.AUTO_PREDICTION_MIN_DATA_QUALITY_SCORE
+        if (
+            market_confirms_fixture
+            and not interactive
+            and checks.get("home_history_sufficient") is not True
+            and checks.get("away_history_sufficient") is not True
+        ):
+            # Early in a season the history checks (26 pts of the coverage
+            # score) are unachievable for market-confirmed fixtures; live odds
+            # are direct evidence, so lower the input-coverage floor instead of
+            # blocking the forecast on evidence that cannot exist yet.
+            min_score = min(
+                min_score,
+                settings.AUTO_PREDICTION_MIN_DATA_QUALITY_SCORE_WITH_MARKET,
+            )
+        if quality_score < min_score:
             reasons.append("data_quality_below_threshold")
         if data_quality.get("manual_feature_override_count", 0) != 0:
             reasons.append("manual_override_not_automatic")

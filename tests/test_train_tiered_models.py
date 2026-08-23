@@ -11,6 +11,7 @@ from app.prediction.ml.train_tiered_models import (
     ModelPromotionRejected,
     _champion_benchmark_metrics,
     _market_benchmark_metrics,
+    _temporal_split,
     normalize_pipeline_row,
     train_tiered_models,
 )
@@ -212,6 +213,32 @@ def test_training_rejects_insufficient_tier_data(tmp_path) -> None:
             artifact_store=TieredModelArtifactStore(artifacts_dir=tmp_path),
             backend="sklearn",
         )
+
+
+def test_temporal_split_reserves_promotion_holdout_when_possible() -> None:
+    features = pd.DataFrame({"value": range(60)})
+    target = pd.Series([index % 3 for index in range(60)])
+
+    train_x, test_x, train_y, test_y = _temporal_split(features, target)
+
+    # The promotion gate needs a 30-sample holdout; with 60 fixtures the split
+    # must reserve it instead of the naive 20% (12) split.
+    assert len(test_x) == 30
+    assert len(test_x) == len(test_y)
+    assert len(train_x) == 30
+    assert list(train_x["value"]) == list(range(30))
+
+
+def test_temporal_split_falls_back_to_proportional_on_small_datasets() -> None:
+    features = pd.DataFrame({"value": range(20)})
+    target = pd.Series([index % 3 for index in range(20)])
+
+    train_x, test_x, _, _ = _temporal_split(features, target)
+
+    # Too small to reserve a 30-sample holdout and still train; the proportional
+    # split is used and the gate must fail closed on sample sufficiency.
+    assert len(test_x) == 4
+    assert len(train_x) == 16
 
 
 def test_candidate_that_does_not_beat_market_is_not_promoted(

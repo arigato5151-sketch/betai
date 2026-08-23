@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,7 +19,7 @@ from sklearn.base import BaseEstimator  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
 from app.prediction.ml.features import FeatureEngine  # noqa: E402
-from app.prediction.ml.model import MLModelPipeline  # noqa: E402
+from app.prediction.ml.model import MLModelPipeline  # noqa: E402  # deprecated
 from app.prediction.ml.model_router import TieredModelArtifactStore  # noqa: E402
 from app.prediction.ml.walkforward_policy import walk_forward_gate  # noqa: E402
 
@@ -136,6 +137,86 @@ def _run_artifact_evaluation(
     }
 
 
+def _run_real_data_evaluation(
+    max_brier: float, max_log_loss: float, n_months: int = 3
+) -> dict[str, object]:
+    from app.db.models import MatchPrediction
+    from app.db.session import SessionLocal
+
+    cutoff = datetime.now(UTC) - timedelta(days=n_months * 30)
+    with SessionLocal() as db:
+        rows = (
+            db.query(MatchPrediction)
+            .filter(
+                MatchPrediction.kickoff >= cutoff,
+                MatchPrediction.actual_result.isnot(None),
+                MatchPrediction.training_eligible.is_(True),
+                MatchPrediction.result_verification_status == "verified",
+            )
+            .order_by(MatchPrediction.kickoff.desc())
+            .limit(500)
+            .all()
+        )
+    if not rows:
+        return {
+            "mode": "real_data",
+            "passed": False,
+            "failures": ["no resolved predictions in the last N months"],
+            "metrics": {},
+        }
+    forecasts = []
+    for row in rows:
+        snapshot = row.probability_components or {}
+        components = snapshot.get("components") if isinstance(snapshot, dict) else None
+        ml = components.get("ml") if isinstance(components, dict) else None
+        if not isinstance(ml, dict):
+            continue
+        probs = [ml.get(o) for o in _OUTCOMES]
+        if any(p is None for p in probs):
+            continue
+        total = sum(float(p) for p in probs)
+        if total <= 0:
+            continue
+        forecasts.append(
+            ({o: float(p) / total for o, p in zip(_OUTCOMES, probs)}, row.actual_result)
+        )
+    if len(forecasts) < 30:
+        return {
+            "mode": "real_data",
+            "passed": False,
+            "failures": [f"insufficient real data: {len(forecasts)} scored samples"],
+            "metrics": {},
+        }
+    brier_scores = []
+    log_losses = []
+    for probs, actual in forecasts:
+        target_idx = _OUTCOMES.index(actual)
+        brier_scores.append(
+            sum(
+                (probs[o] - (1.0 if i == target_idx else 0.0)) ** 2
+                for i, o in enumerate(_OUTCOMES)
+            )
+        )
+        log_losses.append(-math.log(max(1e-15, probs[actual])))
+    avg_brier = sum(brier_scores) / len(brier_scores)
+    avg_log_loss = sum(log_losses) / len(log_losses)
+    metrics = {
+        "evaluation_strategy": "real_data_walk_forward",
+        "walk_forward_brier_score": avg_brier,
+        "walk_forward_log_loss": avg_log_loss,
+        "training_samples": len(forecasts),
+    }
+    passed, failures = walk_forward_gate(
+        metrics, max_brier=max_brier, max_log_loss=max_log_loss
+    )
+    return {
+        "mode": "real_data",
+        "passed": bool(passed),
+        "failures": failures,
+        "metrics": metrics,
+    }
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Walk-forward evaluation and model promotion gate (P7)."
@@ -150,6 +231,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="validate the signed tiered model artifact instead of synthetic data",
     )
+    parser.add_argument(
+        "--real-data",
+        action="store_true",
+        help="evaluate against real resolved predictions from the database",
+    )
+    parser.add_argument(
+        "--real-data-months",
+        type=int,
+        default=3,
+        help="months of real data to evaluate (default: 3)",
+    )
     parser.add_argument("--max-brier", type=float, default=0.40)
     parser.add_argument("--max-log-loss", type=float, default=1.10)
     return parser.parse_args(argv)
@@ -157,15 +249,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    mode = "synthetic" if args.synthetic else "artifact" if args.artifact else "auto"
-    if mode == "auto":
-        bundle = TieredModelArtifactStore().load_active()
-        mode = "artifact" if bundle is not None else "synthetic"
-    report = (
-        _run_synthetic_evaluation(args.max_brier, args.max_log_loss)
-        if mode == "synthetic"
-        else _run_artifact_evaluation(args.max_brier, args.max_log_loss)
-    )
+    if args.real_data:
+        report = _run_real_data_evaluation(
+            args.max_brier, args.max_log_loss, args.real_data_months
+        )
+    else:
+        mode = (
+            "synthetic" if args.synthetic else "artifact" if args.artifact else "auto"
+        )
+        if mode == "auto":
+            bundle = TieredModelArtifactStore().load_active()
+            mode = "artifact" if bundle is not None else "synthetic"
+        report = (
+            _run_synthetic_evaluation(args.max_brier, args.max_log_loss)
+            if mode == "synthetic"
+            else _run_artifact_evaluation(args.max_brier, args.max_log_loss)
+        )
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0 if report["passed"] else 1
 

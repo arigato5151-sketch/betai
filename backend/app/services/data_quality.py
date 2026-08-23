@@ -130,6 +130,8 @@ class AnalysisQualityScorer:
 
 
 class DataQualityService:
+    _SCAN_BATCH_SIZE = 1_000
+
     def __init__(self, db: Session):
         self.db = db
 
@@ -141,7 +143,7 @@ class DataQualityService:
             for home_lineup, away_lineup in self.db.query(
                 HistoricalFixture.home_starting_xi,
                 HistoricalFixture.away_starting_xi,
-            ).all()
+            ).yield_per(self._SCAN_BATCH_SIZE)
         )
         oldest_kickoff, newest_kickoff, last_updated = self.db.query(
             func.min(HistoricalFixture.kickoff),
@@ -250,7 +252,7 @@ class DataQualityService:
             _complete_prediction_provenance(manifest)
             for (manifest,) in self.db.query(MatchPrediction.provenance_manifest)
             .filter(production_filter)
-            .all()
+            .yield_per(self._SCAN_BATCH_SIZE)
         )
 
         latest_run = (

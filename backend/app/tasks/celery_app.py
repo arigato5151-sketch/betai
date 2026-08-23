@@ -5,7 +5,14 @@ celery_app = Celery(
     "bet_ai_tasks",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.jobs"],
+    include=[
+        "app.tasks.fixtures_sync",
+        "app.tasks.predictions",
+        "app.tasks.enrichment",
+        "app.tasks.ml_tasks",
+        "app.tasks.results",
+        "app.tasks.jobs",
+    ],
 )
 
 # Custom Celery configurations
@@ -75,9 +82,9 @@ celery_app.conf.update(
             "task": "app.tasks.jobs.derive_historical_xg_task",
             "schedule": 86400.0,
         },
-        "sync-current-season-primary-weekly": {
+        "sync-current-season-primary-daily": {
             "task": "app.tasks.jobs.sync_historical_fixtures_task",
-            "schedule": 604800.0,
+            "schedule": 86400.0,
             # One fixture call per supported league; player calls run in a separate job.
             "kwargs": {"enrich_player_context": False},
         },
@@ -103,11 +110,15 @@ celery_app.conf.update(
         },
         "sync-completed-matches-daily": {
             "task": "app.tasks.jobs.sync_completed_matches_task",
-            "schedule": 86400.0,  # 24 hours
+            "schedule": 21600.0,  # 6 hours
         },
         "collect-upcoming-odds": {
             "task": "app.tasks.jobs.collect_upcoming_odds_task",
             "schedule": float(settings.ODDS_COLLECTOR_RUN_INTERVAL_SECONDS),
+        },
+        "sync-cloudflare-odds-snapshots": {
+            "task": "app.tasks.jobs.sync_cloudflare_odds_snapshots_task",
+            "schedule": float(settings.CLOUDFLARE_ODDS_SYNC_INTERVAL_SECONDS),
         },
         "collect-upcoming-lineups": {
             "task": "app.tasks.jobs.collect_upcoming_lineups_task",

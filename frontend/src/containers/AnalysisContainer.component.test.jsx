@@ -195,7 +195,7 @@ describe("AnalysisContainer lig entegrasyonu", () => {
           json: async () => featurePreviewResponse,
         };
       }
-      if (path === "/analyze") {
+      if (path === "/analyze/fixture/10") {
         return {
           ok: true,
           json: async () => analysisResponse,
@@ -222,26 +222,19 @@ describe("AnalysisContainer lig entegrasyonu", () => {
     fireEvent.click(screen.getByRole("button", { name: "Tahmin Oluştur" }));
     await waitFor(() => {
       expect(request).toHaveBeenCalledWith(
-        "/analyze",
+        "/analyze/fixture/10",
         expect.objectContaining({ method: "POST" }),
       );
     });
 
-    const analyzeCall = request.mock.calls.find(([path]) => path === "/analyze");
-    expect(JSON.parse(analyzeCall[1].body)).toMatchObject({
-      fixture_id: 10,
-      home_team_id: 101,
-      away_team_id: 202,
-      league_id: 848,
-      season: 2030,
-      kickoff: "2030-07-30T18:00:00+03:00",
-      market_1x2: prefillResponse.market_1x2,
-      opening_odds_1x2: prefillResponse.opening_odds_1x2,
-      current_odds_1x2: prefillResponse.current_odds_1x2,
-      opening_odds_at: prefillResponse.opening_odds_at,
-      current_odds_at: prefillResponse.current_odds_at,
-      feature_overrides: {},
-    });
+    const analyzeCall = request.mock.calls.find(
+      ([path]) => path === "/analyze/fixture/10",
+    );
+    expect(analyzeCall[1]).toEqual({ method: "POST" });
+    expect(request).not.toHaveBeenCalledWith(
+      "/analyze",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("ligleri yükler ve seçilen sayısal league_id değerini analize gönderir", async () => {

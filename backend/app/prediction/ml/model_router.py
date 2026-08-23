@@ -7,6 +7,7 @@ import hmac
 import os
 import shutil
 import threading
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -34,6 +35,7 @@ class TieredModelBundle:
     trained_at: str
     metadata: dict[str, object]
     tier2_gate: dict[str, object] | None = None
+    tier1_gate: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,7 @@ class TieredModelArtifactStore:
         version = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         trained_at = datetime.now(UTC).isoformat()
         raw_tier2_gate = tier2_metrics.get("tier2_gate")
+        raw_tier1_gate = tier1_metrics.get("tier1_gate")
         bundle_metadata = {
             **dict(metadata or {}),
             "tier1_features": list(tier1_model.FEATURES),
@@ -106,6 +109,9 @@ class TieredModelArtifactStore:
             "tier2_metrics": dict(tier2_metrics),
             "tier2_gate": (
                 dict(raw_tier2_gate) if isinstance(raw_tier2_gate, Mapping) else {}
+            ),
+            "tier1_gate": (
+                dict(raw_tier1_gate) if isinstance(raw_tier1_gate, Mapping) else {}
             ),
         }
         payload = {
@@ -116,9 +122,20 @@ class TieredModelArtifactStore:
             "tier2_model": tier2_model,
             "metadata": bundle_metadata,
         }
-        temporary_path = self.active_path.with_suffix(".tmp")
+        # A unique temporary name keeps concurrent trainers from clobbering
+        # each other's half-written files; fsync before publishing the swap.
+        temporary_path = self.active_path.with_name(
+            f"{self.active_path.name}.tmp.{uuid.uuid4().hex}"
+        )
         temporary_signature_path = self.signature_path(temporary_path)
-        joblib.dump(payload, temporary_path)
+        try:
+            with temporary_path.open("wb") as artifact_file:
+                joblib.dump(payload, artifact_file)
+                artifact_file.flush()
+                os.fsync(artifact_file.fileno())
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
         temporary_signature_path.write_text(
             self.artifact_signature(temporary_path), encoding="ascii"
         )
@@ -159,7 +176,7 @@ class TieredModelArtifactStore:
         return self._bundle_from_payload(payload)
 
     def rollback(self) -> bool:
-        """Atomically swap active/previous bundles only after both HMACs validate."""
+        """Swap active/previous bundles only after both HMACs validate."""
         required_paths = (
             self.active_path,
             self.signature_path(self.active_path),
@@ -171,22 +188,56 @@ class TieredModelArtifactStore:
         if not self.verify(self.active_path) or not self.verify(self.previous_path):
             return False
 
-        swap_path = self.active_path.with_suffix(".swap")
-        swap_signature_path = self.signature_path(swap_path)
+        backup_path = self.active_path.with_name(
+            f"{self.active_path.name}.rollback.bak"
+        )
+        backup_signature_path = self.signature_path(backup_path)
+        candidate_path = self.active_path.with_name(
+            f"{self.active_path.name}.rollback.candidate"
+        )
+        candidate_signature_path = self.signature_path(candidate_path)
+        temporary_paths = (
+            backup_path,
+            backup_signature_path,
+            candidate_path,
+            candidate_signature_path,
+        )
         try:
-            os.replace(self.active_path, swap_path)
-            os.replace(self.signature_path(self.active_path), swap_signature_path)
-            os.replace(self.previous_path, self.active_path)
-            os.replace(
-                self.signature_path(self.previous_path),
-                self.signature_path(self.active_path),
+            for path in temporary_paths:
+                path.unlink(missing_ok=True)
+            # Copy (never move) the champion and candidate aside so a failure at
+            # any point can restore the store to its pre-rollback state.
+            shutil.copy2(self.active_path, backup_path)
+            shutil.copy2(self.signature_path(self.active_path), backup_signature_path)
+            shutil.copy2(self.previous_path, candidate_path)
+            shutil.copy2(
+                self.signature_path(self.previous_path), candidate_signature_path
             )
-            os.replace(swap_path, self.previous_path)
-            os.replace(swap_signature_path, self.signature_path(self.previous_path))
+
+            os.replace(candidate_path, self.active_path)
+            os.replace(candidate_signature_path, self.signature_path(self.active_path))
             self.load_active()
+            # Promote the displaced champion as the next rollback candidate.
+            os.replace(backup_path, self.previous_path)
+            os.replace(backup_signature_path, self.signature_path(self.previous_path))
             return True
         except (OSError, TieredArtifactIntegrityError):
+            try:
+                if backup_path.is_file() and backup_signature_path.is_file():
+                    os.replace(backup_path, self.active_path)
+                    os.replace(
+                        backup_signature_path, self.signature_path(self.active_path)
+                    )
+                    self.load_active()
+            except (OSError, TieredArtifactIntegrityError):
+                pass
             return False
+        finally:
+            for path in temporary_paths:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     @classmethod
     def _bundle_from_payload(cls, payload: object) -> TieredModelBundle:
@@ -225,8 +276,20 @@ class TieredModelArtifactStore:
             # Empty or absent gate evidence means the bundle predates the Tier 2
             # evidence floor and must be treated conservatively, not trusted.
             tier2_gate = None
+        tier1_gate = metadata.get("tier1_gate")
+        if not isinstance(tier1_gate, dict) or not tier1_gate:
+            # Absent evidence means the bundle predates the closing-line gate or
+            # was exported without gate evidence; expose it as unknown rather
+            # than silently pretending the gate passed.
+            tier1_gate = None
         return TieredModelBundle(
-            tier1_model, tier2_model, version, trained_at, metadata, tier2_gate
+            tier1_model,
+            tier2_model,
+            version,
+            trained_at,
+            metadata,
+            tier2_gate,
+            tier1_gate,
         )
 
 
@@ -241,12 +304,14 @@ class Predictor:
         artifact_version: str | None = None,
         tier1_league_ids: frozenset[int] = FOOTBALL_DATA_LEAGUE_IDS,
         tier2_gate: Mapping[str, object] | None = None,
+        tier1_gate: Mapping[str, object] | None = None,
     ) -> None:
         self.tier1_model = tier1_model
         self.tier2_model = tier2_model
         self.artifact_version = artifact_version
         self.tier1_league_ids = tier1_league_ids
         self.tier2_gate = dict(tier2_gate) if tier2_gate else None
+        self.tier1_gate = dict(tier1_gate) if tier1_gate else None
 
     @classmethod
     def from_active_artifact(cls, store: TieredModelArtifactStore) -> "Predictor":
@@ -258,6 +323,7 @@ class Predictor:
             bundle.tier2_model,
             artifact_version=bundle.artifact_version,
             tier2_gate=bundle.tier2_gate,
+            tier1_gate=bundle.tier1_gate,
         )
 
     def predict(self, features: Mapping[str, object]) -> RoutedPrediction:

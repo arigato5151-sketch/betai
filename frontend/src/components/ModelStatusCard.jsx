@@ -16,6 +16,7 @@ function ModelStatusCard({ status, error, loading, onRefresh }) {
   const metrics = status?.metrics ?? {};
   const trainingData = status?.training_data ?? {};
   const monitoring = status?.monitoring ?? {};
+  const liveEvaluation = status?.live_evaluation ?? {};
 
   return (
     <section
@@ -64,6 +65,15 @@ function ModelStatusCard({ status, error, loading, onRefresh }) {
         </p>
       )}
       {status && (
+        <>
+        {!liveEvaluation.claims_enabled && (
+          <p
+            role="status"
+            className="mt-4 rounded border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-200"
+          >
+            Canlı performans ölçümü kapalı: aktif artifact için {liveEvaluation.verified_samples ?? 0}/{liveEvaluation.required_samples ?? "?"} doğrulanmış tahmin var. Gösterilen doğruluk zaman-temelli test setine aittir.
+          </p>
+        )}
         <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-8">
           <Value label="Model">{modelNameLabel(status.model_name)}</Value>
           <Value label="Artifact Sürümü">{status.artifact_version}</Value>
@@ -73,7 +83,12 @@ function ModelStatusCard({ status, error, loading, onRefresh }) {
           <Value label="Brier">{metrics.brier_score?.toFixed?.(4)}</Value>
           <Value label="Referans Brier">{metrics.baseline_brier_score?.toFixed?.(4)}</Value>
           <Value label="Kalibrasyon">{metrics.calibration_error?.toFixed?.(4)}</Value>
-          <Value label="Doğruluk">{metrics.accuracy !== undefined ? `%${(metrics.accuracy * 100).toFixed(1)}` : "-"}</Value>
+          <Value label="Test Doğruluğu">{metrics.accuracy !== undefined ? `%${(metrics.accuracy * 100).toFixed(1)}` : "-"}</Value>
+          <Value label="Canlı Doğrulama">
+            {liveEvaluation.claims_enabled
+              ? `${liveEvaluation.verified_samples}/${liveEvaluation.required_samples}`
+              : "Ölçüm kapalı"}
+          </Value>
           <Value label="Lig">{metrics.league_count ?? 0}</Value>
           <Value label="Drift">{modelMonitoringStatusLabel(monitoring.status)}</Value>
           <Value label="Drift Örneği">
@@ -94,6 +109,7 @@ function ModelStatusCard({ status, error, loading, onRefresh }) {
             {status.rollback_available ? "Hazır" : "Yok"}
           </Value>
         </div>
+        </>
       )}
     </section>
   );

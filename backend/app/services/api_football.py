@@ -2,8 +2,10 @@ import asyncio
 import logging
 import math
 import random
+import time as _time
+from collections import deque
 from datetime import date, datetime, time, timedelta
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Mapping, Optional, cast
 from zoneinfo import ZoneInfo
 import pandas as pd
 import httpx
@@ -29,6 +31,79 @@ from app.services.api_provider_health import api_football_health
 from app.prediction.stats_engine import build_team_profile
 
 logger = logging.getLogger("bet-ai-pro.api_football")
+
+# API-Football uses small sequential ids for fixtures, teams and players.
+# Aggregator namespaced ids from other providers start at 500M+; a request
+# with such an id can never match a real API-Football resource, so it would
+# only burn daily/minute quota and trip the circuit breaker.
+_API_FOOTBALL_ID_LIMIT = 100_000_000
+
+_API_FOOTBALL_FREE_MAX_ACCESSIBLE_SEASON = 2024
+
+
+def _latest_accessible_season() -> int:
+    """Return the newest season exposed by the configured subscription."""
+    if settings.API_FOOTBALL_PLAN == "free":
+        return _API_FOOTBALL_FREE_MAX_ACCESSIBLE_SEASON
+    today = date.today()
+    return today.year if today.month >= 7 else today.year - 1
+
+
+def _is_api_football_id(value: object) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        numeric = int(str(value))
+    except (TypeError, ValueError):
+        return False
+    return 0 < numeric < _API_FOOTBALL_ID_LIMIT
+
+
+class _MinuteRateLimiter:
+    """Sliding-window throttle shared by every caller in this process.
+
+    The free plan allows a small number of requests per minute; bursts from
+    concurrent analysis collect only trip the provider's 429 circuit breaker.
+    """
+
+    def __init__(self, rate_per_minute: int = 10) -> None:
+        self._rate = rate_per_minute
+        self._lock = asyncio.Lock()
+        self._slots: deque[float] = deque()
+
+    def set_rate(self, rate_per_minute: int) -> None:
+        if (
+            isinstance(rate_per_minute, int)
+            and not isinstance(rate_per_minute, bool)
+            and rate_per_minute > 0
+        ):
+            self._rate = rate_per_minute
+
+    async def acquire(self) -> None:
+        while True:
+            async with self._lock:
+                now = _time.monotonic()
+                while self._slots and now - self._slots[0] >= 60.0:
+                    self._slots.popleft()
+                if len(self._slots) < self._rate:
+                    self._slots.append(now)
+                    return
+                wait = 60.0 - (now - self._slots[0])
+            await asyncio.sleep(max(0.05, wait))
+
+
+_rate_limiter = _MinuteRateLimiter(settings.API_FOOTBALL_MINUTE_LIMIT)
+
+
+def _rate_limit_header(headers: Mapping[str, str] | None) -> int | None:
+    if headers is None:
+        return None
+    raw = headers.get("x-ratelimit-limit")
+    try:
+        value = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+    return value if value is not None and value > 0 else None
 
 
 class APIFootballClient:
@@ -60,15 +135,29 @@ class APIFootballClient:
             logger.warning("API-Football circuit is open; request skipped: %s", path)
             return None
 
-        for attempt in range(retries):
-            try:
-                async with httpx.AsyncClient(
-                    headers=self.headers, timeout=10.0
-                ) as client:
+        health = await api_football_health.snapshot()
+        daily_remaining = health.get("daily_remaining")
+        if isinstance(daily_remaining, int) and daily_remaining <= 0:
+            logger.warning(
+                "API-Football daily quota exhausted (%s remaining); request skipped: %s",
+                daily_remaining,
+                path,
+            )
+            return None
+
+        await _rate_limiter.acquire()
+
+        # One pool is shared by every retry in this logical provider request.
+        async with httpx.AsyncClient(headers=self.headers, timeout=10.0) as client:
+            for attempt in range(retries):
+                try:
                     response = await client.get(url, params=params)
 
                     if response.status_code == 200:
                         await api_football_health.record_response(200, response.headers)
+                        minute_limit = _rate_limit_header(response.headers)
+                        if minute_limit is not None:
+                            _rate_limiter.set_rate(minute_limit)
                         logger.info(
                             f"✓ API request successful: {path} (attempt {attempt + 1})"
                         )
@@ -113,31 +202,31 @@ class APIFootballClient:
                     if 400 <= response.status_code < 500:
                         break
 
-            except httpx.TimeoutException as e:
-                logger.warning(
-                    f"⚠ Timeout on {path} (attempt {attempt + 1}/{retries}): {str(e)}"
-                )
-                last_error = APITimeoutError(path, retries)
-                await api_football_health.record_transport_failure("timeout")
-            except httpx.RequestError as e:
-                logger.warning(
-                    f"⚠ Request failed on {path} (attempt {attempt + 1}/{retries}): {str(e)}"
-                )
-                last_error = APIDataError(path, 0, str(e))
-                await api_football_health.record_transport_failure("request_error")
+                except httpx.TimeoutException as e:
+                    logger.warning(
+                        f"⚠ Timeout on {path} (attempt {attempt + 1}/{retries}): {str(e)}"
+                    )
+                    last_error = APITimeoutError(path, retries)
+                    await api_football_health.record_transport_failure("timeout")
+                except httpx.RequestError as e:
+                    logger.warning(
+                        f"⚠ Request failed on {path} (attempt {attempt + 1}/{retries}): {str(e)}"
+                    )
+                    last_error = APIDataError(path, 0, str(e))
+                    await api_football_health.record_transport_failure("request_error")
 
-            # Exponential backoff between retries
-            if attempt < retries - 1:
-                base_wait = base_backoff * (2**attempt)
-                jitter = random.uniform(
-                    0,
-                    base_wait * settings.API_FOOTBALL_BACKOFF_JITTER_RATIO,
-                )
-                wait_time = base_wait + jitter
-                logger.debug(
-                    f"Sleeping {wait_time}s before retry {attempt + 2}/{retries}"
-                )
-                await asyncio.sleep(wait_time)
+                # Exponential backoff between retries
+                if attempt < retries - 1:
+                    base_wait = base_backoff * (2**attempt)
+                    jitter = random.uniform(
+                        0,
+                        base_wait * settings.API_FOOTBALL_BACKOFF_JITTER_RATIO,
+                    )
+                    wait_time = base_wait + jitter
+                    logger.debug(
+                        f"Sleeping {wait_time}s before retry {attempt + 2}/{retries}"
+                    )
+                    await asyncio.sleep(wait_time)
 
         logger.error(
             f"✗ Failed to fetch {path} after {retries} attempts. Last error: {last_error}"
@@ -161,7 +250,9 @@ class APIFootballClient:
             params["league"] = str(league_id)
 
         data = await self._request_with_retry("fixtures", params)
-        if data:
+        # A 200 with a provider error payload is a failure, not evidence of an
+        # empty league: do not cache an empty list as "no live fixtures".
+        if data and not data.get("errors"):
             raw = data.get("response", [])
             fixtures = [
                 self._normalize_fixture(item, is_live=True) for item in raw[:12]
@@ -169,7 +260,9 @@ class APIFootballClient:
             await cache.set("fixtures", cache_key, fixtures, 900)  # 15 min TTL
             return fixtures
 
-        return DEMO_LIVE_FIXTURES
+        # Fail closed: a live key that errored must not silently present demo
+        # rows as real fixtures.
+        return []
 
     async def get_upcoming_fixtures(
         self, days: int = 7, limit: int = 100
@@ -178,10 +271,7 @@ class APIFootballClient:
             return self._demo_upcoming_fixtures(days=days, limit=limit)
 
         # Lig kapsamını anahtara katarak allowlist değişikliklerinde eski cache'i atla.
-        league_scope = ",".join(
-            str(league_id) for league_id in sorted(cast(set[int], ALLOWED_LEAGUE_IDS))
-        )
-        cache_key = f"upcoming:v2:{league_scope}:{days}:{limit}"
+        cache_key = self._upcoming_cache_key(days, limit)
         cached = await cache.get("fixtures", cache_key)
         if cached:
             return cached
@@ -207,15 +297,21 @@ class APIFootballClient:
                     continue
                 fixtures.append(self._normalize_fixture(item, is_live=False))
 
-        fixtures = self._sort_upcoming_fixtures(self._filter_allowed_leagues(fixtures))
+        fixtures = self._sort_upcoming_fixtures(fixtures)
 
-        result = (
-            fixtures[:limit]
-            if fixtures
-            else self._demo_upcoming_fixtures(days=days, limit=limit)
-        )
+        # A configured live key must never turn an empty provider response into
+        # synthetic fixtures. Demo rows are only valid in explicit demo mode.
+        result = fixtures[:limit]
         await cache.set("fixtures", cache_key, result, 900)  # 15 min TTL
         return result
+
+    @staticmethod
+    def _upcoming_cache_key(days: int, limit: int) -> str:
+        # Lig kapsamını anahtara katarak allowlist değişikliklerinde eski cache'i atla.
+        league_scope = ",".join(
+            str(league_id) for league_id in sorted(cast(set[int], ALLOWED_LEAGUE_IDS))
+        )
+        return f"upcoming:v2:{league_scope}:{days}:{limit}"
 
     @staticmethod
     def _filter_allowed_leagues(fixtures: List[Dict]) -> List[Dict]:
@@ -270,13 +366,14 @@ class APIFootballClient:
         return cls._sort_upcoming_fixtures(fixtures)[:limit]
 
     async def get_fixture_by_id(self, fixture_id: int) -> Optional[Dict]:
+        if not _is_api_football_id(fixture_id):
+            return None
         if self._is_demo_key():
             return next(
                 (f for f in DEMO_UPCOMING_FIXTURES if f["fixture_id"] == fixture_id),
                 None,
             )
 
-        # Check in upcoming fixtures cache or live fixtures
         data = await self._request_with_retry("fixtures", {"id": str(fixture_id)})
         if data:
             items = data.get("response", [])
@@ -284,15 +381,23 @@ class APIFootballClient:
                 status = items[0].get("fixture", {}).get("status", {}).get("short", "")
                 is_live = status in {"1H", "2H", "HT", "ET", "BT", "P", "LIVE"}
                 return self._normalize_fixture(items[0], is_live=is_live)
+            # Provider answered definitively: the fixture is unknown. Do not
+            # spend more quota hunting through a multi-day fetch.
+            return None
 
-        fixtures = await self.get_upcoming_fixtures(days=14, limit=200)
-        return next((f for f in fixtures if f["fixture_id"] == fixture_id), None)
+        # The direct lookup failed at the transport/circuit level. Reuse a warm
+        # upcoming cache only; never fan out into per-day network calls after a
+        # failure (that would compound quota burn on the exact path that broke).
+        cached = await cache.get("fixtures", self._upcoming_cache_key(14, 200))
+        if cached:
+            return next((f for f in cached if f["fixture_id"] == fixture_id), None)
+        return None
 
     async def get_fixture_availability(
         self, fixture_id: int, home_team_id: int, away_team_id: int
     ) -> Optional[Dict[str, object]]:
         """Return pre-match availability while preserving player identities."""
-        if self._is_demo_key():
+        if self._is_demo_key() or not _is_api_football_id(fixture_id):
             return None
 
         cache_key = f"availability:{fixture_id}:{home_team_id}:{away_team_id}"
@@ -301,7 +406,9 @@ class APIFootballClient:
             return cached
 
         data = await self._request_with_retry("injuries", {"fixture": str(fixture_id)})
-        if data is None:
+        if data is None or data.get("errors"):
+            # Transport failures and provider errors must not cache a
+            # false-negative "nobody is missing" report for 4 hours.
             return None
 
         counts: Dict[str, int] = {
@@ -386,7 +493,8 @@ class APIFootballClient:
         if league_id is not None:
             params["league"] = str(league_id)
         first_page = await self._request_with_retry("players", params)
-        if not first_page:
+        if not first_page or first_page.get("errors"):
+            # Never cache an empty ratings map over a provider error.
             return {}
 
         responses: list[object] = list(first_page.get("response", []))
@@ -503,7 +611,7 @@ class APIFootballClient:
     async def get_fixture_lineups(
         self, fixture_id: int, home_team_id: int, away_team_id: int
     ) -> Optional[Dict[str, object]]:
-        if self._is_demo_key():
+        if self._is_demo_key() or not _is_api_football_id(fixture_id):
             return None
 
         cache_key = f"lineups:{fixture_id}:{home_team_id}:{away_team_id}"
@@ -514,7 +622,8 @@ class APIFootballClient:
         data = await self._request_with_retry(
             "fixtures/lineups", {"fixture": str(fixture_id)}
         )
-        if data is None:
+        if data is None or data.get("errors"):
+            # Provider errors must not cache an empty "no lineups" report.
             return None
         lineups = self._starting_xi_by_team(data.get("response", []))
         result: Dict[str, object] = {
@@ -743,6 +852,42 @@ class APIFootballClient:
                 fixtures.append(normalized)
         return fixtures
 
+    async def get_team_recent_completed_fixtures(
+        self, team_id: int, *, last: int = 5
+    ) -> List[Dict]:
+        """Fetch recent final fixtures across seasons and competitions."""
+        if not _is_api_football_id(team_id):
+            raise ValueError("team_id must be an API-Football team ID")
+        if isinstance(last, bool) or not isinstance(last, int) or not 1 <= last <= 20:
+            raise ValueError("last must be an integer between 1 and 20")
+        if self._is_demo_key():
+            return []
+
+        data = await self._request_with_retry(
+            "fixtures",
+            {
+                "team": str(team_id),
+                "last": str(last),
+                "status": "FT-AET-PEN",
+                "timezone": "UTC",
+            },
+        )
+        if not data:
+            return []
+        provider_errors = data.get("errors")
+        if provider_errors:
+            raise APIDataError("fixtures", 200, str(provider_errors))
+
+        fixtures: List[Dict] = []
+        for item in data.get("response", []):
+            normalized = self._normalize_completed_fixture(item)
+            if normalized is not None and team_id in {
+                normalized["home_team_id"],
+                normalized["away_team_id"],
+            }:
+                fixtures.append(normalized)
+        return fixtures
+
     @staticmethod
     def _normalize_completed_fixture(item: Dict) -> Optional[Dict]:
         fixture = item.get("fixture", {})
@@ -821,7 +966,11 @@ class APIFootballClient:
     async def get_h2h(
         self, home_team_id: int, away_team_id: int, last: int = 5
     ) -> Dict[str, float | str]:
-        if self._is_demo_key() or not home_team_id or not away_team_id:
+        if (
+            self._is_demo_key()
+            or not _is_api_football_id(home_team_id)
+            or not _is_api_football_id(away_team_id)
+        ):
             return {
                 "home_win_rate": 0.33,
                 "draw_rate": 0.33,
@@ -836,15 +985,13 @@ class APIFootballClient:
 
         data = await self._request_with_retry(
             "fixtures/headtohead",
-            {"h2h": f"{home_team_id}-{away_team_id}", "last": str(last)},
+            {"h2h": f"{home_team_id}-{away_team_id}"},
         )
         if not data:
-            return {
-                "home_win_rate": 0.33,
-                "draw_rate": 0.33,
-                "home_loss_rate": 0.34,
-                "source": "fallback",
-            }
+            # Fail closed: a broken upstream must not fabricate a balanced
+            # prior. Consumers apply their own explicit neutral default when
+            # the rates are absent.
+            return {"source": "fallback"}
 
         wins = draws = losses = 0
         for item in data.get("response", [])[:last]:
@@ -867,14 +1014,17 @@ class APIFootballClient:
         return result
 
     async def get_team_last_matches_df(
-        self, team_id: int, last: int = 5
+        self, team_id: int, last: int = 5, *, season: int | None = None
     ) -> pd.DataFrame:
-        if self._is_demo_key() or not team_id:
+        if self._is_demo_key() or not _is_api_football_id(team_id):
+            return pd.DataFrame()
+        latest_accessible_season = _latest_accessible_season()
+        if season is not None and season > latest_accessible_season:
+            # Do not spend quota on a season unavailable to this subscription.
             return pd.DataFrame()
 
-        cache_key = f"last:{team_id}:{last}"
+        cache_key = f"last:{team_id}:{last}:{season or 'any'}"
         cached = await cache.get("stats", cache_key)
-
         if cached:
             # Reconstruct DataFrame from dict representation
             df = pd.read_json(cached)
@@ -882,10 +1032,13 @@ class APIFootballClient:
                 df["match_date"] = pd.to_datetime(df["match_date"])
             return df
 
-        data = await self._request_with_retry(
-            "fixtures",
-            {"team": str(team_id), "last": str(last), "status": "FT"},
-        )
+        params: Dict[str, str] = {"team": str(team_id), "status": "FT-AET-PEN"}
+        if season is not None or settings.API_FOOTBALL_PLAN == "free":
+            params["season"] = str(season or latest_accessible_season)
+        else:
+            # Paid plans can request actual recent form across season boundaries.
+            params["last"] = str(last)
+        data = await self._request_with_retry("fixtures", params)
         rows: List[Dict] = []
         if data:
             for item in data.get("response", []):
@@ -895,7 +1048,16 @@ class APIFootballClient:
 
         df = pd.DataFrame(rows)
         if not df.empty:
+            # Only matches young enough to describe current form are usable;
+            # older accessible-season rows are dropped so stale form is never
+            # presented as live team strength.
+            cutoff = pd.Timestamp(
+                date.today() - timedelta(days=settings.HISTORICAL_FORM_MAX_AGE_DAYS)
+            )
+            df = df[pd.to_datetime(df["match_date"]) >= cutoff]
             df = df.sort_values("match_date", ascending=True).reset_index(drop=True)
+            if len(df) > last:
+                df = df.tail(last).reset_index(drop=True)
             # Store in cache as JSON string
             # We serialize timestamps to isoformat for storage
             df_to_cache = df.copy()
@@ -943,21 +1105,15 @@ class APIFootballClient:
         gf = int(hg) if is_home else int(ag)
         ga = int(ag) if is_home else int(hg)
 
-        if gf > ga:
-            result = "W"
-            points = 3.0
-        elif gf == ga:
-            result = "D"
-            points = 1.0
-        else:
-            result = "L"
-            points = 0.0
+        result = self._result_for_team(item, team_id)
+        points = {"W": 3.0, "D": 1.0, "L": 0.0}[result]
 
         kickoff = fixture.get("date")
         try:
             match_date = pd.Timestamp(kickoff.replace("Z", "+00:00")).normalize()
-        except Exception:
-            match_date = pd.Timestamp.today().normalize()
+        except (AttributeError, TypeError, ValueError):
+            logger.warning("Skipping completed fixture with invalid kickoff date")
+            return None
 
         return {
             "match_date": match_date,
@@ -972,6 +1128,11 @@ class APIFootballClient:
     async def get_team_statistics(
         self, league_id: int, season: int, team_id: int, venue: str = "total"
     ) -> Dict:
+        if not _is_api_football_id(team_id):
+            return build_team_profile(None, venue=venue)
+        if season > _latest_accessible_season():
+            # Fail closed when the configured subscription cannot read a season.
+            return build_team_profile(None, venue=venue)
         if self._is_demo_key():
             if team_id in DEMO_TEAM_STATS:
                 profile = dict(DEMO_TEAM_STATS[team_id])
@@ -996,9 +1157,9 @@ class APIFootballClient:
                 await cache.set("stats", cache_key, profile, 21600)  # 6 hours TTL
                 return profile
 
-        profile = build_team_profile(None, venue=venue)
-        await cache.set("stats", cache_key, profile, 21600)
-        return profile
+        # A failed/empty upstream call must not poison the cache with a hollow
+        # profile: return the neutral fallback once, never cache it.
+        return build_team_profile(None, venue=venue)
 
     async def get_team_venue_context(self, team_id: int) -> Optional[Dict[str, Any]]:
         """Return validated team and venue city metadata for offline geocoding."""
@@ -1091,7 +1252,11 @@ class APIFootballClient:
         }
 
     async def get_fixture_market(self, fixture_id: int) -> Optional[Dict]:
-        if self._is_demo_key() and fixture_id in DEMO_FIXTURE_ODDS:
+        if not _is_api_football_id(fixture_id):
+            return None
+        if self._is_demo_key():
+            if fixture_id not in DEMO_FIXTURE_ODDS:
+                return None
             # Fallback to devigged synthetic
             from app.prediction.value_calc import ValueCalc
 
@@ -1117,13 +1282,15 @@ class APIFootballClient:
                     return market
         return None
 
-    async def get_fixture_odds(self, fixture_id: int) -> float:
+    async def get_fixture_odds(self, fixture_id: int) -> Optional[float]:
         market = await self.get_fixture_market(fixture_id)
         if market:
             return market["raw_odds"]["HOME_WIN"]
         if self._is_demo_key() and fixture_id in DEMO_FIXTURE_ODDS:
             return DEMO_FIXTURE_ODDS[fixture_id]
-        return 1.85
+        # Fail closed: never fabricate a plausible-looking price for a market we
+        # could not obtain. None signals absence to the caller.
+        return None
 
     def _normalize_fixture(self, item: Dict, is_live: bool = False) -> Dict:
         fixture = item.get("fixture", {})
@@ -1181,6 +1348,8 @@ class APIFootballClient:
             return iso_date[:16]
 
     async def get_fixture_prefill(self, fixture_id: int) -> Optional[Dict]:
+        if not _is_api_football_id(fixture_id):
+            return None
         fixture = await self.get_fixture_by_id(fixture_id)
         if not fixture:
             return None

@@ -133,7 +133,7 @@ def test_historical_training_requires_prior_history_for_both_teams() -> None:
     assert rows == []
 
 
-def test_historical_training_uses_fixture_opening_and_closing_odds() -> None:
+def test_historical_training_ignores_closing_odds_in_features() -> None:
     start = datetime(2025, 8, 1, tzinfo=UTC)
     fixtures = [
         fixture(1, start, 1, 2, 2, 0),
@@ -144,17 +144,19 @@ def test_historical_training_uses_fixture_opening_and_closing_odds() -> None:
     target.opening_home_odd = 2.0
     target.opening_draw_odd = 3.0
     target.opening_away_odd = 4.0
-    target.closing_home_odd = 1.8
-    target.closing_draw_odd = 3.3
-    target.closing_away_odd = 4.4
+    # Closing prices encode the settlement outcome and must never influence
+    # pre-match features (train/serve skew + future leakage).
+    target.closing_home_odd = 1.05
+    target.closing_draw_odd = 1.1
+    target.closing_away_odd = 21.0
 
     rows = HistoricalTrainingDataBuilder(minimum_team_history=1).build(fixtures)
 
     assert len(rows) == 1
     snapshot = rows[0].feature_snapshot
-    assert snapshot["odds_movement_home"] == -10.0
-    assert snapshot["odds_movement_draw"] == 10.0
-    assert snapshot["odds_movement_away"] == 10.0
+    assert snapshot["odds_movement_home"] == 0.0
+    assert snapshot["odds_movement_draw"] == 0.0
+    assert snapshot["odds_movement_away"] == 0.0
 
 
 def test_historical_training_prefers_prior_observed_xg() -> None:

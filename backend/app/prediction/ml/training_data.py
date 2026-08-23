@@ -520,10 +520,16 @@ class HistoricalTrainingDataBuilder:
                         "DRAW": fixture.opening_draw_odd,
                         "AWAY_WIN": fixture.opening_away_odd,
                     },
+                    # NEVER feed closing prices as `current_odds`: the
+                    # `odds_movement_*` features would then encode the settlement
+                    # price (future leakage), while serving computes movement from
+                    # an analysis-time price, producing train/serve skew. Pre-match
+                    # opening odds are the only settlement-independent reference
+                    # available for historical rows; movement is therefore 0 here.
                     current_odds={
-                        "HOME_WIN": fixture.closing_home_odd,
-                        "DRAW": fixture.closing_draw_odd,
-                        "AWAY_WIN": fixture.closing_away_odd,
+                        "HOME_WIN": fixture.opening_home_odd,
+                        "DRAW": fixture.opening_draw_odd,
+                        "AWAY_WIN": fixture.opening_away_odd,
                     },
                     home_player_impact=home_player_impact,
                     away_player_impact=away_player_impact,

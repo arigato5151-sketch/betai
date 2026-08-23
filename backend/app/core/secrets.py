@@ -18,6 +18,7 @@ VAULT_SECRET_KEYS = frozenset(
         "JWT_SECRET_KEY",
         "JWT_REFRESH_SECRET_KEY",
         "MODEL_SIGNING_KEY",
+        "METRICS_TOKEN",
         "SPORTMONKS_API_TOKEN",
         "FOOTBALL_DATA_ORG_API_KEY",
         "ADMIN_PASSWORD",

@@ -19,7 +19,9 @@ const addCsrfHeader = (headers, method = "GET") => {
   if (token) headers.set(CSRF_HEADER_NAME, decodeURIComponent(token));
 };
 
-const refreshAccessToken = async () => {
+let refreshInFlight = null;
+
+const performAccessTokenRefresh = async () => {
   const headers = new Headers({ "Content-Type": "application/json" });
   addCsrfHeader(headers, "POST");
   const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
@@ -28,6 +30,16 @@ const refreshAccessToken = async () => {
     headers,
   });
   return response.ok;
+};
+
+const refreshAccessToken = () => {
+  if (!refreshInFlight) {
+    // Refresh tokens are single-use; all concurrent 401 responses share one rotation.
+    refreshInFlight = performAccessTokenRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
 };
 
 export const apiFetch = async (path, options = {}, allowRefresh = true) => {

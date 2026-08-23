@@ -240,14 +240,22 @@ class PredictionAuditor:
             for prediction in closing_candidates
             if cls.closing_snapshot_age_hours(prediction) is None
         ]
+        # Only prices captured inside the freshness window AND carrying a
+        # verifiable snapshot timestamp are genuine closing evidence. Legacy
+        # prices without provenance are missing evidence, never evidence.
+        closing_evidence = [
+            prediction
+            for prediction in closing_candidates
+            if cls.closing_snapshot_age_hours(prediction) is not None
+            and cls._is_fresh_closing_evidence(prediction)
+        ]
         closing_profits = [
             cls.calculate_bet_roi(
                 prediction.prediction,
                 prediction.actual_result,
                 prediction.closing_odds,
             )
-            for prediction in closing_candidates
-            if cls._is_fresh_closing_evidence(prediction)
+            for prediction in closing_evidence
         ]
         total_profit = sum(profits)
         reliable_sample = len(resolved) >= settings.AUDIT_MIN_RELIABLE_SAMPLES
@@ -288,7 +296,7 @@ class PredictionAuditor:
             "closing_roi_pct": (
                 round(sum(closing_profits) / len(closing_profits) * 100.0, 2)
                 if closing_profits
-                else 0.0
+                else None
             ),
             "opening_roi_pct": (
                 round((total_profit / len(valid_bets)) * 100.0, 2)
@@ -302,7 +310,7 @@ class PredictionAuditor:
                     2,
                 )
                 if closing_profits and valid_bets
-                else 0.0
+                else None
             ),
             "closing_roi_confidence_interval_95_pct": (
                 round(closing_roi_lower, 2) if closing_profits else None

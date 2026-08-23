@@ -40,7 +40,7 @@ def _prefill(kickoff: datetime) -> dict[str, object]:
     }
 
 
-def test_odds_history_requires_two_time_separated_observations() -> None:
+def test_odds_history_preserves_current_before_movement_is_ready() -> None:
     service, factory = _service()
     kickoff = datetime(2030, 7, 30, 18, tzinfo=UTC)
     opening_at = kickoff - timedelta(hours=8)
@@ -57,6 +57,8 @@ def test_odds_history_requires_two_time_separated_observations() -> None:
 
     assert first["odds_history"]["status"] == "collecting"
     assert "opening_odds_1x2" not in first
+    assert first["current_odds_1x2"]["HOME_WIN"] == 2.25
+    assert first["current_odds_at"] == opening_at.isoformat()
     assert second["odds_history"]["status"] == "ready"
     assert second["opening_odds_1x2"]["HOME_WIN"] == 2.25
     assert second["current_odds_1x2"]["AWAY_WIN"] == 3.10

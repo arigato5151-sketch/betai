@@ -113,6 +113,7 @@ const ELIGIBILITY_REASON_LABELS = Object.freeze({
   missing_league_identified: "Lig bilgisi eksik",
   missing_kickoff_known: "Maç başlangıç zamanı eksik",
   market_unavailable: "Güncel 1X2 oranları bulunamadı",
+  local_h2h_unavailable: "İki takımın doğrulanmış geçmiş karşılaşması bulunamadı",
   home_history_insufficient: "Ev sahibinin yakın dönem maç geçmişi yetersiz",
   away_history_insufficient: "Deplasman takımının yakın dönem maç geçmişi yetersiz",
   data_quality_below_threshold: "Genel veri kalite skoru eşik altında",

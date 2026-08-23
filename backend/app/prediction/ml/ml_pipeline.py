@@ -59,6 +59,8 @@ class _TeamState:
     form: deque[int] = field(default_factory=lambda: deque(maxlen=5))
     totals: dict[str, float] = field(default_factory=lambda: defaultdict(float))
     counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    goal_history: deque[int] = field(default_factory=lambda: deque(maxlen=20))
+    last_kickoff_ns: int | None = None
 
     def average(self, name: str) -> float:
         count = self.counts[name]
@@ -71,6 +73,24 @@ class _TeamState:
     @property
     def form_average(self) -> float:
         return sum(self.form) / len(self.form) if self.form else 0.0
+
+    def clean_sheet_streak(self, max_len: int = 5) -> int:
+        streak = 0
+        for goals in reversed(self.goal_history):
+            if goals == 0:
+                streak += 1
+            else:
+                break
+        return min(streak, max_len)
+
+    def scoring_streak(self, max_len: int = 5) -> int:
+        streak = 0
+        for goals in reversed(self.goal_history):
+            if goals > 0:
+                streak += 1
+            else:
+                break
+        return min(streak, max_len)
 
 
 class MultiTierDatasetBuilder:
@@ -87,6 +107,9 @@ class MultiTierDatasetBuilder:
     def build(self, fixtures: Sequence[object]) -> TierDatasets:
         """Split completed fixtures by data richness and build pre-match features."""
         states: dict[tuple[int, str], _TeamState] = defaultdict(_TeamState)
+        h2h: dict[tuple[str, str], dict[str, int]] = defaultdict(
+            lambda: {"w": 0, "d": 0, "l": 0}
+        )
         tier1_rows: list[dict[str, object]] = []
         tier1_targets: list[Outcome] = []
         tier2_rows: list[dict[str, object]] = []
@@ -119,7 +142,7 @@ class MultiTierDatasetBuilder:
                 home = states[(league_id, home_team)]
                 away = states[(league_id, away_team)]
                 common = self._common_features(
-                    league_id, home_team, away_team, home, away
+                    league_id, home_team, away_team, home, away, h2h
                 )
                 if self._has_rich_data(fixture):
                     tier1_rows.append(
@@ -139,6 +162,16 @@ class MultiTierDatasetBuilder:
             # Results at the same kickoff are not observable to one another.
             for fixture, home, away in pending_updates:
                 self._update_states(fixture, home, away)
+                home_team = self._team_name(fixture, "home_team")
+                away_team = self._team_name(fixture, "away_team")
+                result = str(self._value(fixture, "actual_result") or "").upper()
+                h2h_key = (home_team, away_team)
+                if result == "HOME_WIN":
+                    h2h[h2h_key]["w"] += 1
+                elif result == "DRAW":
+                    h2h[h2h_key]["d"] += 1
+                elif result == "AWAY_WIN":
+                    h2h[h2h_key]["l"] += 1
 
         return TierDatasets(
             tier1_features=pd.DataFrame(tier1_rows, columns=Tier1Model.FEATURES),
@@ -196,7 +229,21 @@ class MultiTierDatasetBuilder:
         away_team: str,
         home: _TeamState,
         away: _TeamState,
+        h2h: dict[tuple[str, str], dict[str, int]],
     ) -> dict[str, object]:
+        h2h_key = (home_team, away_team)
+        h2h_record = h2h.get(h2h_key, {"w": 0, "d": 0, "l": 0})
+        h2h_total = h2h_record["w"] + h2h_record["d"] + h2h_record["l"]
+        h2h_home_wr = h2h_record["w"] / h2h_total if h2h_total > 0 else 0.33
+
+        rest_diff = 0.0
+        if home.last_kickoff_ns is not None and away.last_kickoff_ns is not None:
+            rest_diff = (
+                home.last_kickoff_ns - away.last_kickoff_ns
+            ) / 86_400_000_000_000
+
+        fatigue_home = max(0.0, min(1.0, 1.0 - abs(rest_diff) / 7.0))
+
         return {
             "league_id": str(league_id),
             "home_team": home_team,
@@ -207,6 +254,14 @@ class MultiTierDatasetBuilder:
             "away_avg_goals": away.goals_for_average,
             "home_elo": home.elo,
             "away_elo": away.elo,
+            "home_clean_sheet_streak": float(home.clean_sheet_streak()),
+            "away_clean_sheet_streak": float(away.clean_sheet_streak()),
+            "home_scoring_streak": float(home.scoring_streak()),
+            "away_scoring_streak": float(away.scoring_streak()),
+            "rest_days_diff": round(rest_diff, 2),
+            "fatigue_index": round(fatigue_home, 4),
+            "home_advantage_coeff": round(0.95 + (home.form_average / 100.0) * 0.20, 4),
+            "h2h_home_win_rate": round(h2h_home_wr, 4),
         }
 
     @classmethod
@@ -277,6 +332,18 @@ class MultiTierDatasetBuilder:
             away, goals_for=away_goals, goals_against=home_goals, points=away_points
         )
 
+        home.goal_history.append(home_goals)
+        away.goal_history.append(away_goals)
+
+        kickoff_value = cls._value(fixture, "kickoff")
+        if kickoff_value is not None:
+            try:
+                kickoff_ns = int(pd.Timestamp(kickoff_value).value)
+                home.last_kickoff_ns = kickoff_ns
+                away.last_kickoff_ns = kickoff_ns
+            except (TypeError, ValueError):
+                pass
+
         expected_home = 1.0 / (1.0 + 10.0 ** ((away.elo - home.elo) / 400.0))
         adjustment = 24.0 * (score - expected_home)
         home.elo += adjustment
@@ -328,6 +395,7 @@ class _BaseTierModel:
         self._calibrator: Any | None = None
         self.calibration_applied: bool = False
         self.calibration_samples: int = 0
+        self._classifier_params: dict[str, Any] = {}
 
     def train(self, X: pd.DataFrame, y: Sequence[int] | pd.Series) -> "_BaseTierModel":
         frame, target = self._validate_training_data(X, y)
@@ -496,18 +564,20 @@ class _BaseTierModel:
 
     def _classifier(self) -> LGBMClassifier | HistGradientBoostingClassifier:
         if self.backend == "lightgbm":
-            return LGBMClassifier(
-                objective="multiclass",
-                num_class=3,
-                n_estimators=250,
-                learning_rate=0.04,
-                max_depth=-1,
-                num_leaves=24,
-                class_weight="balanced",
-                random_state=self.random_state,
-                n_jobs=2,
-                verbosity=-1,
-            )
+            params: dict[str, Any] = {
+                "objective": "multiclass",
+                "num_class": 3,
+                "n_estimators": 250,
+                "learning_rate": 0.04,
+                "max_depth": -1,
+                "num_leaves": 24,
+                "class_weight": "balanced",
+                "random_state": self.random_state,
+                "n_jobs": 2,
+                "verbosity": -1,
+            }
+            params.update(self._classifier_params)
+            return LGBMClassifier(**params)
         return HistGradientBoostingClassifier(
             learning_rate=0.06,
             max_iter=200,
@@ -562,6 +632,14 @@ class Tier1Model(_BaseTierModel):
         "opening_home_odd",
         "opening_draw_odd",
         "opening_away_odd",
+        "home_clean_sheet_streak",
+        "away_clean_sheet_streak",
+        "home_scoring_streak",
+        "away_scoring_streak",
+        "rest_days_diff",
+        "fatigue_index",
+        "home_advantage_coeff",
+        "h2h_home_win_rate",
     )
 
 
@@ -582,4 +660,12 @@ class Tier2Model(_BaseTierModel):
         "away_league_position",
         "home_elo",
         "away_elo",
+        "home_clean_sheet_streak",
+        "away_clean_sheet_streak",
+        "home_scoring_streak",
+        "away_scoring_streak",
+        "rest_days_diff",
+        "fatigue_index",
+        "home_advantage_coeff",
+        "h2h_home_win_rate",
     )

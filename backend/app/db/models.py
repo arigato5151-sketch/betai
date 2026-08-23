@@ -31,11 +31,6 @@ def utc_now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def utc_now_naive() -> datetime.datetime:
-    """Return UTC without tzinfo for the legacy timezone-naive prediction column."""
-    return utc_now().replace(tzinfo=None)
-
-
 user_roles = Table(
     "user_roles",
     Base.metadata,
@@ -186,7 +181,7 @@ class MatchPrediction(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     fixture_id: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, unique=True, index=True
+        BigInteger, nullable=True, unique=True, index=True
     )
     fixture_source: Mapped[str | None] = mapped_column(
         String(50), nullable=True, index=True
@@ -194,8 +189,8 @@ class MatchPrediction(Base):
     provider_fixture_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     home_team: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     away_team: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
-    home_team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    away_team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    home_team_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    away_team_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     league_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     analysis_origin: Mapped[str] = mapped_column(
         String(32), nullable=False, default="legacy", server_default="legacy"
@@ -291,7 +286,7 @@ class MatchPrediction(Base):
     clv: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     created_at: Mapped[datetime.datetime | None] = mapped_column(
-        DateTime, nullable=True, default=utc_now_naive, index=True
+        DateTime(timezone=True), nullable=True, default=utc_now, index=True
     )
 
 

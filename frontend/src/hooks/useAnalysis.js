@@ -21,10 +21,19 @@ export function useAnalysis({
     setLoading(true);
     setError("");
     try {
-      const response = await request("/analyze", {
+      const fixtureId = formData.fixture_id;
+      const isFixtureAnalysis = Number.isInteger(fixtureId) && fixtureId > 0;
+      const endpoint = isFixtureAnalysis
+        ? `/analyze/fixture/${fixtureId}`
+        : "/analyze";
+      const response = await request(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        ...(isFixtureAnalysis
+          ? {}
+          : {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(formData),
+            }),
       });
       if (!response.ok) {
         const errorBody = await response.json().catch(() => ({}));

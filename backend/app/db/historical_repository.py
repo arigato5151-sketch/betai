@@ -43,7 +43,7 @@ class HistoricalFixtureRepository:
 
         try:
             if dialect == "postgresql":
-                for batch in self._batches(normalized):
+                for batch in self._homogeneous_batches(normalized):
                     statement = pg_insert(HistoricalFixture).values(batch)
                     mutable_columns = {
                         column.name: getattr(statement.excluded, column.name)
@@ -56,7 +56,7 @@ class HistoricalFixtureRepository:
                         )
                     )
             elif dialect == "sqlite":
-                for batch in self._batches(normalized):
+                for batch in self._homogeneous_batches(normalized):
                     sqlite_statement = sqlite_insert(HistoricalFixture).values(batch)
                     sqlite_mutable_columns = {
                         column.name: getattr(sqlite_statement.excluded, column.name)
@@ -88,6 +88,15 @@ class HistoricalFixtureRepository:
         size = cls.UPSERT_BATCH_SIZE
         for start in range(0, len(rows), size):
             yield rows[start : start + size]
+
+    @classmethod
+    def _homogeneous_batches(cls, rows: list[dict]) -> Iterable[list[dict]]:
+        """Batch rows with identical columns for SQLAlchemy multi-row inserts."""
+        rows_by_shape: dict[frozenset[str], list[dict]] = {}
+        for row in rows:
+            rows_by_shape.setdefault(frozenset(row), []).append(row)
+        for same_shape_rows in rows_by_shape.values():
+            yield from cls._batches(same_shape_rows)
 
     def get_by_fixture_id(self, fixture_id: int) -> HistoricalFixture | None:
         return (
@@ -139,6 +148,64 @@ class HistoricalFixtureRepository:
                 HistoricalFixture.kickoff.asc(),
                 HistoricalFixture.fixture_id.asc(),
             )
+            .all()
+        )
+
+    def get_recent(self, limit: int) -> list[HistoricalFixture]:
+        """Return a bounded, chronologically ordered training window."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        fixtures = (
+            self.db.query(HistoricalFixture)
+            .order_by(
+                HistoricalFixture.kickoff.desc(),
+                HistoricalFixture.fixture_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        return sorted(
+            fixtures,
+            key=lambda fixture: (fixture.kickoff, fixture.fixture_id),
+        )
+
+    def get_recent_observed_xg(self, limit: int) -> list[HistoricalFixture]:
+        """Return a bounded chronological sample with provider-observed xG."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        fixtures = (
+            self.db.query(HistoricalFixture)
+            .filter(HistoricalFixture.xg_source == "understat")
+            .order_by(
+                HistoricalFixture.kickoff.desc(),
+                HistoricalFixture.fixture_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        return sorted(
+            fixtures,
+            key=lambda fixture: (fixture.kickoff, fixture.fixture_id),
+        )
+
+    def get_missing_xg(self, limit: int) -> list[HistoricalFixture]:
+        """Return the oldest incomplete fixtures for incremental xG backfill."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        return (
+            self.db.query(HistoricalFixture)
+            .filter(
+                HistoricalFixture.xg_source.is_(None),
+                or_(
+                    HistoricalFixture.home_xg.is_(None),
+                    HistoricalFixture.away_xg.is_(None),
+                ),
+            )
+            .order_by(
+                HistoricalFixture.kickoff.asc(),
+                HistoricalFixture.fixture_id.asc(),
+            )
+            .limit(limit)
             .all()
         )
 
@@ -272,6 +339,30 @@ class HistoricalFixtureRepository:
             HistoricalFixture.kickoff.asc(), HistoricalFixture.fixture_id.asc()
         ).all()
 
+    def get_recent_league_history(
+        self, *, league_id: int, before: datetime, limit: int
+    ) -> list[HistoricalFixture]:
+        """Return a bounded recent league window for history-availability checks."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        fixtures = (
+            self.db.query(HistoricalFixture)
+            .filter(
+                HistoricalFixture.league_id == league_id,
+                HistoricalFixture.kickoff < before,
+            )
+            .order_by(
+                HistoricalFixture.kickoff.desc(),
+                HistoricalFixture.fixture_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        return sorted(
+            fixtures,
+            key=lambda fixture: (fixture.kickoff, fixture.fixture_id),
+        )
+
     def get_h2h(
         self, *, home_team_id: int, away_team_id: int, before: datetime, limit: int = 10
     ) -> list[HistoricalFixture]:
@@ -312,6 +403,21 @@ class HistoricalFixtureRepository:
                 HistoricalFixture.kickoff < before,
             )
             .order_by(HistoricalFixture.kickoff.desc())
+            .limit(limit)
+            .all()
+        )
+
+    def get_recent_before(
+        self, *, before: datetime, limit: int = 10_000
+    ) -> list[HistoricalFixture]:
+        """Return a bounded cross-competition pool for promoted-team fallback."""
+        return (
+            self.db.query(HistoricalFixture)
+            .filter(HistoricalFixture.kickoff < before)
+            .order_by(
+                HistoricalFixture.kickoff.desc(),
+                HistoricalFixture.fixture_id.desc(),
+            )
             .limit(limit)
             .all()
         )

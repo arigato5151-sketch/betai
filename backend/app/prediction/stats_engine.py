@@ -1,14 +1,20 @@
+import hashlib
+import json
 import math
 from datetime import datetime
 from typing import Dict, List, Optional
 
 import pandas as pd
+from cachetools import TTLCache
 
 from app.core.config import settings
 from app.prediction.player_impact import TeamStrengthImpact
 
 MAX_GOALS = 7
 MODEL_VERSION = "poisson_dixon_coles_v5"
+BTTS_DIRECTIONAL_MIN_CONFIDENCE_PCT = 65.0
+
+_ensemble_cache: TTLCache = TTLCache(maxsize=256, ttl=900)
 
 
 def time_weighted_goal_averages(
@@ -340,6 +346,29 @@ class StatsEngine:
         home_player_impact: TeamStrengthImpact | None = None,
         away_player_impact: TeamStrengthImpact | None = None,
     ) -> dict:
+        cache_key_data = {
+            "h": home_stats,
+            "a": away_stats,
+            "lid": league_id,
+            "hm": (
+                str(home_match_history.to_dict())
+                if home_match_history is not None
+                else None
+            ),
+            "am": (
+                str(away_match_history.to_dict())
+                if away_match_history is not None
+                else None
+            ),
+            "as": str(as_of),
+            "hi": home_player_impact.xg_multiplier if home_player_impact else None,
+            "ai": away_player_impact.xg_multiplier if away_player_impact else None,
+        }
+        cache_key = hashlib.md5(
+            json.dumps(cache_key_data, sort_keys=True, default=str).encode()
+        ).hexdigest()
+        if cache_key in _ensemble_cache:
+            return _ensemble_cache[cache_key]
         home_stats = _apply_time_weighted_goal_profile(
             home_stats,
             home_match_history,
@@ -382,6 +411,7 @@ class StatsEngine:
         result_probs = StatsEngine._result_probabilities(matrix)
         over_under = StatsEngine._over_under_probs(matrix)
         btts = StatsEngine._btts_probs(matrix)
+        double_chance = StatsEngine._double_chance_probs(matrix)
         expected_score = StatsEngine._most_likely_score(matrix)
         score_band = StatsEngine._score_band(matrix)
 
@@ -406,7 +436,7 @@ class StatsEngine:
 
         confidence_gap = sorted_outcomes[0][1] - sorted_outcomes[1][1]
 
-        return {
+        result = {
             "model": MODEL_VERSION,
             "prediction": final_prediction,
             "probability": result_probs[final_prediction],
@@ -426,8 +456,11 @@ class StatsEngine:
             "score_band": score_band,
             "alternate_picks": alternate_picks,
             "secondary_markets": secondary_markets,
+            "double_chance": double_chance,
             "match_profile": match_profile,
         }
+        _ensemble_cache[cache_key] = result
+        return result
 
     @staticmethod
     def _expected_goals(
@@ -625,6 +658,23 @@ class StatsEngine:
         return {"yes": round(yes * 100, 2), "no": round(no * 100, 2)}
 
     @staticmethod
+    def _double_chance_probs(matrix: List[List[float]]) -> Dict[str, float]:
+        home_or_draw = draw_or_away = home_or_away = 0.0
+        for home_goals, row in enumerate(matrix):
+            for away_goals, prob in enumerate(row):
+                if home_goals >= away_goals:
+                    home_or_draw += prob
+                if away_goals >= home_goals:
+                    draw_or_away += prob
+                if home_goals != away_goals:
+                    home_or_away += prob
+        return {
+            "home_or_draw": round(home_or_draw * 100, 2),
+            "draw_or_away": round(draw_or_away * 100, 2),
+            "home_or_away": round(home_or_away * 100, 2),
+        }
+
+    @staticmethod
     def _most_likely_score(matrix: List[List[float]]) -> Dict[str, object]:
         best_prob = -1.0
         best_home = best_away = 0
@@ -665,6 +715,12 @@ class StatsEngine:
         home_lambda: float,
         away_lambda: float,
     ) -> List[Dict[str, object]]:
+        btts_probability = max(btts["yes"], btts["no"])
+        btts_pick = (
+            "VAR" if btts["yes"] >= btts["no"] else "YOK"
+        )
+        btts_actionable = btts_probability >= BTTS_DIRECTIONAL_MIN_CONFIDENCE_PCT
+
         markets = [
             {
                 "market": "OVER_2_5",
@@ -675,8 +731,11 @@ class StatsEngine:
             {
                 "market": "BTTS",
                 "label": "Karşılıklı Gol (KG)",
-                "pick": "VAR" if btts["yes"] >= 50 else "YOK",
-                "probability": max(btts["yes"], btts["no"]),
+                # BTTS is not forced into a direction inside its calibration dead zone.
+                "pick": btts_pick if btts_actionable else "BELIRSIZ",
+                "probability": btts_probability,
+                "actionable": btts_actionable,
+                "minimum_confidence": BTTS_DIRECTIONAL_MIN_CONFIDENCE_PCT,
             },
             {
                 "market": "OVER_1_5",

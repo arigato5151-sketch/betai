@@ -236,6 +236,46 @@ def test_secondary_market_pairs_are_complementary() -> None:
     )
 
 
+def test_btts_market_abstains_below_directional_confidence_threshold() -> None:
+    markets = StatsEngine._build_secondary_markets(
+        {
+            "over_2_5": 55.0,
+            "under_2_5": 45.0,
+            "over_1_5": 70.0,
+        },
+        {"yes": 52.3, "no": 47.7},
+        1.8,
+        1.1,
+    )
+
+    btts = next(market for market in markets if market["market"] == "BTTS")
+    assert btts == {
+        "market": "BTTS",
+        "label": "Karşılıklı Gol (KG)",
+        "pick": "BELIRSIZ",
+        "probability": 52.3,
+        "actionable": False,
+        "minimum_confidence": 65.0,
+    }
+
+
+def test_btts_market_keeps_high_confidence_direction() -> None:
+    markets = StatsEngine._build_secondary_markets(
+        {
+            "over_2_5": 55.0,
+            "under_2_5": 45.0,
+            "over_1_5": 70.0,
+        },
+        {"yes": 31.0, "no": 69.0},
+        0.6,
+        1.4,
+    )
+
+    btts = next(market for market in markets if market["market"] == "BTTS")
+    assert btts["pick"] == "YOK"
+    assert btts["actionable"] is True
+
+
 def test_analysis_clamps_extreme_inputs_and_returns_consistent_markets() -> None:
     weak_team = {"form": 0, "attack": 0, "defense": 0, "xg": 0}
     strong_team = {"form": 100, "attack": 100, "defense": 100, "xg": 5}
@@ -299,6 +339,39 @@ def test_invalid_player_multiplier_is_neutral() -> None:
         is_home=True,
         player_xg_multiplier=float("nan"),
     ) == pytest.approx(baseline)
+
+
+def test_ensemble_cache_returns_identical_result() -> None:
+    from app.prediction.stats_engine import _ensemble_cache
+
+    profile = {
+        "form": 60,
+        "attack_strength": 1.2,
+        "defense_strength": 0.8,
+        "goals_for_avg": 1.5,
+        "goals_against_avg": 1.1,
+    }
+    initial_size = len(_ensemble_cache)
+    first = StatsEngine.analyze_match(profile, profile, league_id=39)
+    second = StatsEngine.analyze_match(profile, profile, league_id=39)
+    assert first["prediction"] == second["prediction"]
+    assert first["probability"] == second["probability"]
+    assert len(_ensemble_cache) >= initial_size
+
+
+def test_ensemble_cache_evicts_old_entries() -> None:
+    from app.prediction.stats_engine import _ensemble_cache
+
+    _ensemble_cache.clear()
+    profile = {
+        "form": 55,
+        "attack_strength": 1.0,
+        "defense_strength": 1.0,
+        "goals_for_avg": 1.32,
+        "goals_against_avg": 1.32,
+    }
+    StatsEngine.analyze_match(profile, profile, league_id=39)
+    assert len(_ensemble_cache) == 1
 
 
 @pytest.mark.parametrize("rho", [float("nan"), 1.0])

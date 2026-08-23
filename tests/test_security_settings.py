@@ -17,6 +17,7 @@ def production_settings(**overrides) -> Settings:
         "JWT_SECRET_KEY": "a" * 32,
         "JWT_REFRESH_SECRET_KEY": "b" * 32,
         "MODEL_SIGNING_KEY": "c" * 32,
+        "METRICS_TOKEN": "d" * 32,
         "COOKIE_SECURE": True,
         "REQUIRE_ORIGIN_HEADER": True,
         "ADMIN_PASSWORD": "strong-admin-password",
@@ -70,6 +71,7 @@ def test_model_signing_key_must_differ_from_jwt_secrets() -> None:
             {"BOOTSTRAP_ADMIN_SECRET": None},
             "BOOTSTRAP_ADMIN_SECRET must be set",
         ),
+        ({"METRICS_TOKEN": "short"}, "METRICS_TOKEN must be set"),
         (
             {"ADMIN_PASSWORD": "change-this-password"},
             "ADMIN_PASSWORD must be non-default",
@@ -288,6 +290,14 @@ def make_origin_client(require_origin_header: bool = True) -> TestClient:
 def test_origin_middleware_allows_trusted_origin() -> None:
     response = make_origin_client().post(
         "/change", headers={"Origin": "https://bets.example.com"}
+    )
+
+    assert response.status_code == 200
+
+
+def test_origin_middleware_allows_backend_bundled_ui_same_origin() -> None:
+    response = make_origin_client().post(
+        "/change", headers={"Origin": "http://testserver"}
     )
 
     assert response.status_code == 200

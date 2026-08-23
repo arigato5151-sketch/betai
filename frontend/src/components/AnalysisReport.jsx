@@ -69,10 +69,12 @@ export function buildAlternativeResults(analysis) {
 
   const btts = secondaryMarket(analysis, "BTTS");
   if (btts && asProbability(btts.probability) !== null) {
+    const bttsLabel =
+      btts.pick === "VAR" ? "Var" : btts.pick === "YOK" ? "Yok" : "Belirsiz";
     results.push({
       key: "btts",
       title: "Karşılıklı Gol",
-      value: btts.pick === "VAR" ? "Var" : "Yok",
+      value: bttsLabel,
       probability: asProbability(btts.probability),
     });
   }
@@ -104,6 +106,75 @@ export function buildAlternativeResults(analysis) {
   return results;
 }
 
+export function settleAlternativeResult(result, actual) {
+  const home = actual?.home;
+  const away = actual?.away;
+  const scoreKnown =
+    Number.isInteger(home) && home >= 0 && Number.isInteger(away) && away >= 0;
+  const actualResult = actual?.result;
+
+  if (result?.key === "double_chance") {
+    const settledResult =
+      actualResult ??
+      (scoreKnown
+        ? home > away
+          ? "HOME_WIN"
+          : home < away
+            ? "AWAY_WIN"
+            : "DRAW"
+        : null);
+    if (!settledResult) return null;
+    return result.value === "1-X"
+      ? settledResult !== "AWAY_WIN"
+      : result.value === "X-2"
+        ? settledResult !== "HOME_WIN"
+        : settledResult !== "DRAW";
+  }
+
+  if (!scoreKnown) return null;
+  const totalGoals = home + away;
+  if (result?.key === "over_2_5") {
+    return result.value === "Üst" ? totalGoals >= 3 : totalGoals <= 2;
+  }
+  if (result?.key === "over_1_5") return totalGoals >= 2;
+  if (result?.key === "btts") {
+    if (result.value === "Belirsiz") return null;
+    const bothScored = home > 0 && away > 0;
+    return result.value === "Var" ? bothScored : !bothScored;
+  }
+  if (result?.key === "score") return result.value === `${home}-${away}`;
+  return null;
+}
+
+export function settleScoreBand(scoreBand, actualScoreHome, actualScoreAway) {
+  if (
+    !Number.isInteger(actualScoreHome) ||
+    actualScoreHome < 0 ||
+    !Number.isInteger(actualScoreAway) ||
+    actualScoreAway < 0
+  ) {
+    return null;
+  }
+  const total = actualScoreHome + actualScoreAway;
+  const actualBand = total <= 2 ? "0-2 Gol" : total <= 4 ? "3-4 Gol" : "5+ Gol";
+  return scoreBand === actualBand;
+}
+
+const SettlementBadge = ({ settled }) => {
+  if (settled === null) return null;
+  return (
+    <span
+      className={`mt-2 inline-block rounded border px-2 py-0.5 text-[10px] font-bold ${
+        settled
+          ? "border-emerald-800 bg-emerald-950/60 text-emerald-400"
+          : "border-red-800 bg-red-950/60 text-red-400"
+      }`}
+    >
+      {settled ? "Doğru ✓" : "Yanlış ✗"}
+    </span>
+  );
+};
+
 function AnalysisReport({
   canUpdateResult,
   match,
@@ -125,6 +196,19 @@ function AnalysisReport({
   const limitedAnalysis = abstained && !automaticAbstain && !scenario;
   const predictionSource = predictionSourceLabel(match);
   const predictionGiven = !abstained && Boolean(match.analysis?.prediction);
+  const eligibilityReasonText = (reason) => {
+    const label = eligibilityReasonLabel(reason);
+    const required = match.data_quality?.required_history_matches;
+    const count =
+      reason === "home_history_insufficient"
+        ? match.data_quality?.home_history_matches
+        : reason === "away_history_insufficient"
+          ? match.data_quality?.away_history_matches
+          : null;
+    return Number.isInteger(count) && Number.isInteger(required)
+      ? `${label} (${count}/${required} maç)`
+      : label;
+  };
   const predictionTone =
     predictionSource.tone === "model"
       ? "text-emerald-400"
@@ -188,7 +272,7 @@ function AnalysisReport({
             </span>
             {dataAbstained && eligibility.reasons?.length > 0 && (
               <span className="mt-1 block text-xs text-slate-400">
-                Nedenler: {eligibility.reasons.map(eligibilityReasonLabel).join(", ")}
+                Nedenler: {eligibility.reasons.map(eligibilityReasonText).join(", ")}
               </span>
             )}
             {uncertaintyAbstained && decision.reasons?.length > 0 && (
@@ -408,19 +492,34 @@ function AnalysisReport({
                 <p className="mt-1 font-black text-slate-200">
                   {match.analysis.score_band}
                 </p>
+                <SettlementBadge
+                  settled={settleScoreBand(
+                    match.analysis.score_band,
+                    match.actual_score_home,
+                    match.actual_score_away,
+                  )}
+                />
               </div>
             )}
-            {alternativeResults.map((result) => (
-              <div
-                key={result.key}
-                className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"
-              >
-                <span className="text-[11px] text-slate-500">{result.title}</span>
-                <p className="mt-1 font-black text-emerald-300">
-                  {result.value} · %{result.probability}
-                </p>
-              </div>
-            ))}
+            {alternativeResults.map((result) => {
+              const settled = settleAlternativeResult(result, {
+                home: match.actual_score_home,
+                away: match.actual_score_away,
+                result: match.actual_result,
+              });
+              return (
+                <div
+                  key={result.key}
+                  className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"
+                >
+                  <span className="text-[11px] text-slate-500">{result.title}</span>
+                  <p className="mt-1 font-black text-emerald-300">
+                    {result.value} · %{result.probability}
+                  </p>
+                  <SettlementBadge settled={settled} />
+                </div>
+              );
+            })}
           </div>
           <p className="mt-3 text-[10px] text-slate-500">
             Gol ve skor seçenekleri Poisson/Dixon-Coles dağılımından; çifte şans

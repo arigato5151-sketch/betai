@@ -157,6 +157,26 @@ def test_self_registration_is_gated_and_creates_viewer_session(monkeypatch) -> N
     assert len(registered.headers.get_list("set-cookie")) == 3
 
 
+def test_self_registration_uses_its_own_ip_quota(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ALLOW_SELF_REGISTRATION", True)
+    monkeypatch.setattr(
+        "app.api.endpoints.auth_endpoints.registration_rate_limiter.consume",
+        lambda _ip_address: (False, 321),
+    )
+
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "username": "rate-limited-user",
+            "email": "rate-limited-user@example.test",
+            "password": "self-password-123",
+        },
+    )
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "321"
+
+
 def test_user_can_list_and_revoke_own_refresh_sessions() -> None:
     test_client = TestClient(app, base_url="https://testserver")
     assert _login("viewer", "viewer-password-123", test_client).status_code == 200

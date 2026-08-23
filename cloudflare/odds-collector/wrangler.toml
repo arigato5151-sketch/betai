@@ -1,0 +1,20 @@
+name = "betai"
+main = "src/index.ts"
+compatibility_date = "2026-08-13"
+workers_dev = true
+preview_urls = false
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bet-ai-odds"
+database_id = "a3d040d4-bc87-4c7c-b4df-f7ca9b6587cc"
+migrations_dir = "migrations"
+
+[vars]
+DAILY_API_BUDGET = "60"
+CLOSING_RESERVE = "30"
+CLOSING_FIRST_WINDOW_MINUTES = "45"
+CLOSING_RETRY_WINDOW_MINUTES = "15"

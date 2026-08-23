@@ -16,12 +16,21 @@ __pycache__/
 .coverage
 coverage.xml
 *.db
+*.db-shm
+*.db-wal
+backups/
 
 # Frontend generated files
 frontend/node_modules/
+cloudflare/**/node_modules/
+cloudflare/**/.wrangler/
 frontend/dist/
 frontend/test-results/
 frontend/playwright-report/
+node_modules/
+
+# Local agent configuration (contains machine-specific paths)
+.opencode/
 
 # Local runtime logs
 *.log

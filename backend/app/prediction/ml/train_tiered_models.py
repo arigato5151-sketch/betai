@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -217,12 +217,24 @@ def load_fixtures_from_pipeline(
 def _temporal_split(
     features, target, *, minimum_samples: int = MINIMUM_SAMPLES_PER_TIER
 ):
-    if len(features) < minimum_samples:
+    total = len(features)
+    if total < minimum_samples:
         raise ValueError(
             f"At least {minimum_samples} completed fixtures are required per tier"
         )
-    test_size = max(3, int(len(features) * 0.2))
-    if len(features) - test_size < 3:
+    # The market-superiority promotion gate needs a statistically meaningful
+    # holdout. Prefer the configured minimum whenever the dataset can still
+    # reserve one and keep a usable training set; smaller datasets fall back to
+    # a proportional split and the gate correctly fails closed on
+    # ``promotion_sample_sufficient`` instead of minting weak evidence.
+    proportional_test_size = max(3, int(total * 0.2))
+    if total - settings.TIERED_PROMOTION_MIN_HOLDOUT_SAMPLES >= minimum_samples:
+        test_size = max(
+            settings.TIERED_PROMOTION_MIN_HOLDOUT_SAMPLES, proportional_test_size
+        )
+    else:
+        test_size = proportional_test_size
+    if total - test_size < 3:
         raise ValueError("Not enough fixtures remain for tier model training")
     return (
         features.iloc[:-test_size].reset_index(drop=True),
@@ -424,6 +436,51 @@ def _tier2_gate(target: pd.Series) -> dict[str, object]:
     }
 
 
+def _hyperparameter_search(
+    train_x: pd.DataFrame,
+    train_y: pd.Series,
+    *,
+    n_iter: int = 20,
+    random_state: int = 42,
+) -> dict[str, object]:
+    """RandomizedSearchCV over LightGBM hyperparameters with temporal split."""
+    from sklearn.model_selection import RandomizedSearchCV
+
+    from app.prediction.ml.ml_pipeline import _BaseTierModel
+
+    param_distributions = {
+        "classifier__num_leaves": [16, 24, 32, 48, 64],
+        "classifier__min_child_samples": [10, 20, 30, 50],
+        "classifier__learning_rate": [0.01, 0.02, 0.04, 0.06, 0.1],
+        "classifier__n_estimators": [150, 250, 350, 500],
+    }
+    base = _BaseTierModel(backend="lightgbm", random_state=random_state)
+    base._train_pipeline(train_x, train_y)
+    search = RandomizedSearchCV(
+        base.pipeline,
+        param_distributions=param_distributions,
+        n_iter=min(n_iter, 20),
+        scoring="neg_log_loss",
+        cv=3,
+        random_state=random_state,
+        n_jobs=1,
+        refit=True,
+    )
+    search.fit(train_x, train_y)
+    best_params = {
+        k.replace("classifier__", ""): v for k, v in search.best_params_.items()
+    }
+    return {
+        "best_params": best_params,
+        "best_score": float(search.best_score_),
+        "cv_results": {
+            "mean_test_score": [
+                float(s) for s in search.cv_results_["mean_test_score"]
+            ],
+        },
+    }
+
+
 def train_tiered_models(
     fixtures: Sequence[object] | None = None,
     *,
@@ -435,6 +492,7 @@ def train_tiered_models(
     pipeline_fetcher: object | None = None,
     enrich_odds: object | None = None,
     require_market_superiority: bool = True,
+    optimize_hyperparameters: bool = False,
 ) -> dict[str, object]:
     """Build, evaluate, sign, and promote a Tier 1/Tier 2 model bundle."""
     if fixtures is None:
@@ -455,8 +513,23 @@ def train_tiered_models(
         datasets.tier2_features, datasets.tier2_target
     )
 
+    hyperparam_results: dict[str, object] | None = None
     tier1 = Tier1Model(backend=backend)
     tier2 = Tier2Model(backend=backend)
+    if optimize_hyperparameters and backend == "lightgbm":
+        try:
+            hyperparam_results = _hyperparameter_search(tier1_train_x, tier1_train_y)
+            best = hyperparam_results["best_params"]
+            if not isinstance(best, Mapping):
+                raise TypeError("hyperparameter search returned invalid best_params")
+            tier1._classifier_params = {
+                "n_estimators": int(best.get("n_estimators", 250)),
+                "learning_rate": float(best.get("learning_rate", 0.04)),
+                "num_leaves": int(best.get("num_leaves", 24)),
+                "min_child_samples": int(best.get("min_child_samples", 20)),
+            }
+        except Exception:
+            hyperparam_results = None
     if calibration_method in ("isotonic", "platt", "auto", "none"):
         tier1.calibration_method = calibration_method
         tier2.calibration_method = calibration_method
@@ -493,6 +566,24 @@ def train_tiered_models(
     if tier1_metrics.get("market_line") == "opening":
         promotion_failures.append("opening_only_benchmark")
     tier1_metrics["promotion_failures"] = promotion_failures
+    # Persist the promotion gate as first-class manifest evidence so consumers
+    # can verify the served bundle proved superiority against the closing line.
+    tier1_metrics["tier1_gate"] = {
+        "passed": not promotion_failures,
+        "market_line": tier1_metrics.get("market_line"),
+        "beats_opening_market": tier1_metrics.get("beats_opening_market"),
+        "promotion_failures": list(promotion_failures),
+        "holdout_samples": tier1_metrics.get("promotion_holdout_samples"),
+        "sample_sufficient": tier1_metrics.get("promotion_sample_sufficient"),
+        "log_loss_improvement_vs_market": tier1_metrics.get(
+            "log_loss_improvement_vs_market"
+        ),
+        "brier_improvement_vs_market": tier1_metrics.get("brier_improvement_vs_market"),
+        "log_loss_lower_bound": tier1_metrics.get(
+            "market_log_loss_improvement_lower_bound"
+        ),
+        "brier_lower_bound": tier1_metrics.get("market_brier_improvement_lower_bound"),
+    }
     if require_market_superiority and promotion_failures:
         raise ModelPromotionRejected(tier1_metrics)
     source = "pipeline" if seasons else "historical_fixtures"
@@ -509,6 +600,7 @@ def train_tiered_models(
             "tier2_training_samples": len(tier2_train_x),
             "tier1_test_samples": len(tier1_test_x),
             "tier2_test_samples": len(tier2_test_x),
+            "hyperparameter_search": hyperparam_results,
         },
     )
     return {
@@ -563,6 +655,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Override the tiered artifact storage directory.",
     )
+    parser.add_argument(
+        "--optimize-hyperparameters",
+        action="store_true",
+        help="Run randomized hyperparameter search before training.",
+    )
     return parser.parse_args(argv)
 
 
@@ -581,12 +678,14 @@ def main(argv: Sequence[str] | None = None) -> None:
             seasons=args.seasons,
             leagues=args.leagues,
             enrich_odds=None if args.no_odds else build_odds_provider_from_database(),
+            optimize_hyperparameters=args.optimize_hyperparameters,
         )
     else:
         result = train_tiered_models(
             artifact_store=store,
             backend=args.backend,
             calibration_method=args.calibration_method,
+            optimize_hyperparameters=args.optimize_hyperparameters,
         )
     print(json.dumps(result, ensure_ascii=False, default=str))
 

@@ -4,6 +4,7 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 
+from sqlalchemy import or_, select, union_all
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import SQLAlchemyError
@@ -270,6 +271,51 @@ class PlayerContextRepository:
             .all()
         )
 
+    def get_performances_for_fixture_ids(
+        self,
+        fixture_ids: Iterable[int],
+        *,
+        max_results: int,
+    ) -> list[HistoricalPlayerPerformance]:
+        """Load selected-fixture context without exceeding SQL bind or RAM limits."""
+        normalized_ids = list(
+            dict.fromkeys(
+                _positive_identifier(fixture_id, "fixture_id")
+                for fixture_id in fixture_ids
+            )
+        )
+        max_results = self._validated_limit(max_results)
+        if not normalized_ids:
+            return []
+
+        results: list[HistoricalPlayerPerformance] = []
+        # SQLite permits only 999 bind variables; keeping chunks below that also
+        # works unchanged on PostgreSQL and bounds each ORM result set.
+        for offset in range(0, len(normalized_ids), 500):
+            remaining = max_results - len(results)
+            if remaining <= 0:
+                break
+            batch = normalized_ids[offset : offset + 500]
+            results.extend(
+                self.db.query(HistoricalPlayerPerformance)
+                .filter(HistoricalPlayerPerformance.fixture_id.in_(batch))
+                .order_by(
+                    HistoricalPlayerPerformance.kickoff.asc(),
+                    HistoricalPlayerPerformance.fixture_id.asc(),
+                    HistoricalPlayerPerformance.player_id.asc(),
+                )
+                .limit(remaining)
+                .all()
+            )
+        return sorted(
+            results,
+            key=lambda performance: (
+                performance.kickoff,
+                performance.fixture_id,
+                performance.player_id,
+            ),
+        )
+
     def get_fixture_ids_with_complete_player_context(
         self,
         fixture_ids: Iterable[int],
@@ -421,6 +467,86 @@ class PlayerContextRepository:
             .order_by(TeamLocation.data_source.asc(), TeamLocation.team_id.asc())
             .all()
         )
+
+    def list_missing_team_location_targets(
+        self,
+        *,
+        seasons: Iterable[int],
+        limit: int,
+        offset: int = 0,
+    ) -> list[dict[str, object]]:
+        """Return one recent identity per team lacking usable coordinates."""
+        normalized_seasons = sorted(
+            {_positive_identifier(season, "season") for season in seasons}
+        )
+        limit = self._validated_limit(limit)
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
+        if not normalized_seasons:
+            return []
+
+        home = select(
+            HistoricalFixture.data_source.label("data_source"),
+            HistoricalFixture.home_team_id.label("team_id"),
+            HistoricalFixture.home_team.label("team_name"),
+            HistoricalFixture.league_id.label("league_id"),
+            HistoricalFixture.kickoff.label("kickoff"),
+            HistoricalFixture.fixture_id.label("fixture_id"),
+        ).where(HistoricalFixture.season.in_(normalized_seasons))
+        away = select(
+            HistoricalFixture.data_source.label("data_source"),
+            HistoricalFixture.away_team_id.label("team_id"),
+            HistoricalFixture.away_team.label("team_name"),
+            HistoricalFixture.league_id.label("league_id"),
+            HistoricalFixture.kickoff.label("kickoff"),
+            HistoricalFixture.fixture_id.label("fixture_id"),
+        ).where(HistoricalFixture.season.in_(normalized_seasons))
+        fixture_teams = union_all(home, away).subquery()
+        ranked = select(
+            fixture_teams,
+            func.row_number()
+            .over(
+                partition_by=(fixture_teams.c.data_source, fixture_teams.c.team_id),
+                order_by=(
+                    fixture_teams.c.kickoff.desc(),
+                    fixture_teams.c.fixture_id.desc(),
+                ),
+            )
+            .label("team_rank"),
+        ).subquery()
+        rows = self.db.execute(
+            select(
+                ranked.c.data_source,
+                ranked.c.team_id,
+                ranked.c.team_name,
+                ranked.c.league_id,
+            )
+            .outerjoin(
+                TeamLocation,
+                (TeamLocation.data_source == ranked.c.data_source)
+                & (TeamLocation.team_id == ranked.c.team_id),
+            )
+            .where(
+                ranked.c.team_rank == 1,
+                or_(
+                    TeamLocation.id.is_(None),
+                    TeamLocation.latitude.is_(None),
+                    TeamLocation.longitude.is_(None),
+                ),
+            )
+            .order_by(ranked.c.data_source.asc(), ranked.c.team_name.asc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return [
+            {
+                "data_source": str(data_source),
+                "team_id": int(team_id),
+                "name": str(team_name),
+                "league_id": int(league_id),
+            }
+            for data_source, team_id, team_name, league_id in rows
+        ]
 
     def list_team_locations(
         self,

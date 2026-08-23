@@ -16,6 +16,13 @@ const unsortedFixtures = [
     is_demo: false,
     source: "openligadb",
     sources: ["openligadb"],
+    data_readiness: {
+      status: "sufficient",
+      home_history_matches: 5,
+      away_history_matches: 5,
+      required_history_matches: 5,
+      reasons: [],
+    },
   },
   {
     fixture_id: 10,
@@ -25,6 +32,13 @@ const unsortedFixtures = [
     away_team: "Rakip A",
     kickoff: "2030-07-30T18:00:00+03:00",
     is_demo: false,
+    data_readiness: {
+      status: "sufficient",
+      home_history_matches: 5,
+      away_history_matches: 5,
+      required_history_matches: 5,
+      reasons: [],
+    },
   },
   {
     fixture_id: 20,
@@ -34,6 +48,13 @@ const unsortedFixtures = [
     away_team: "Rakip B",
     kickoff: "2030-07-30T20:00:00+03:00",
     is_demo: true,
+    data_readiness: {
+      status: "insufficient",
+      home_history_matches: 5,
+      away_history_matches: 1,
+      required_history_matches: 5,
+      reasons: ["away_history_insufficient"],
+    },
   },
 ];
 
@@ -56,6 +77,10 @@ describe("UpcomingFixturesContainer", () => {
     await screen.findByText("Erken Takım");
     expect(request).toHaveBeenCalledWith(
       "/fixtures/upcoming?days=7&limit=100",
+    );
+    expect(request).toHaveBeenCalledWith(
+      "/fixtures/history/sync-missing",
+      { method: "POST" },
     );
     const cards = screen.getAllByRole("article");
     expect(cards.map((card) => card.textContent)).toEqual([
@@ -90,7 +115,7 @@ describe("UpcomingFixturesContainer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Fikstürü Yenile" }));
 
-    await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(4));
   });
 
   it("istek başarısızlığını erişilebilir biçimde gösterir", async () => {

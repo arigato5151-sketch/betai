@@ -60,3 +60,35 @@ def test_postgres_failure_is_fatal_when_fallback_is_disabled(monkeypatch) -> Non
 def test_unsupported_database_scheme_is_fatal_when_fallback_is_disabled() -> None:
     with pytest.raises(session.DatabaseInitializationError, match="Unsupported"):
         session.initialize_database("mysql://localhost/test", allow_fallback=False)
+
+
+def test_unsupported_database_scheme_never_falls_back_to_sqlite() -> None:
+    with pytest.raises(session.DatabaseInitializationError, match="refusing to fall back"):
+        session.initialize_database("mysql://localhost/test", allow_fallback=True)
+
+
+def test_non_transient_postgres_failure_is_fatal_even_with_fallback(monkeypatch) -> None:
+    failed_engine = Mock()
+    failed_engine.connect.side_effect = ValueError("driver mismatch")
+    monkeypatch.setattr(session, "create_engine", Mock(return_value=failed_engine))
+
+    with pytest.raises(
+        session.DatabaseInitializationError, match="cannot fall back"
+    ):
+        session.initialize_database(
+            "postgresql://user:password@localhost/test", allow_fallback=True
+        )
+
+
+def test_engine_creation_failure_is_fatal(monkeypatch) -> None:
+    def explode(url, *args, **kwargs):
+        raise ValueError("no such driver")
+
+    monkeypatch.setattr(session, "create_engine", explode)
+
+    with pytest.raises(
+        session.DatabaseInitializationError, match="could not be created"
+    ):
+        session.initialize_database(
+            "postgresql://user:password@localhost/test", allow_fallback=True
+        )

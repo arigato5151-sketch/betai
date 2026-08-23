@@ -1,11 +1,27 @@
-from datetime import datetime, timezone
-from typing import List, Literal, Optional
+from datetime import datetime, timedelta, timezone
+from typing import List, Literal, Mapping, Optional
 
 from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.db.models import MatchPrediction
+from app.core.team_identity import normalize_team_name
+
+NON_MUTABLE_UPSERT_COLUMNS = frozenset(
+    {"id", "created_at", "fixture_id", "analysis_origin"}
+)
+FIXTURE_IDENTITY_COLUMNS = (
+    "fixture_id",
+    "fixture_source",
+    "provider_fixture_id",
+    "home_team",
+    "away_team",
+    "home_team_id",
+    "away_team_id",
+    "league_id",
+    "kickoff",
+)
 
 
 class MatchPredictionRepository:
@@ -26,6 +42,72 @@ class MatchPredictionRepository:
             .first()
         )
 
+    def get_equivalent_fixture(
+        self, data: Mapping[str, object]
+    ) -> Optional[MatchPrediction]:
+        """Resolve the same real fixture across provider-specific identifiers."""
+        league_id = data.get("league_id")
+        kickoff = data.get("kickoff")
+        home_team = data.get("home_team")
+        away_team = data.get("away_team")
+        if (
+            not isinstance(league_id, int)
+            or not isinstance(kickoff, datetime)
+            or not isinstance(home_team, str)
+            or not isinstance(away_team, str)
+        ):
+            return None
+
+        home_key = normalize_team_name(home_team)
+        away_key = normalize_team_name(away_team)
+        if not home_key or not away_key:
+            return None
+        candidates = (
+            self.db.query(MatchPrediction)
+            .filter(
+                MatchPrediction.league_id == league_id,
+                MatchPrediction.kickoff >= kickoff - timedelta(hours=2),
+                MatchPrediction.kickoff <= kickoff + timedelta(hours=2),
+            )
+            .order_by(MatchPrediction.id.asc())
+            .all()
+        )
+        return next(
+            (
+                candidate
+                for candidate in candidates
+                if normalize_team_name(candidate.home_team or "") == home_key
+                and normalize_team_name(candidate.away_team or "") == away_key
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _reuse_fixture_identity(
+        data: dict[str, object], existing: MatchPrediction
+    ) -> dict[str, object]:
+        merged = dict(data)
+        for column in FIXTURE_IDENTITY_COLUMNS:
+            value = getattr(existing, column)
+            if value is not None:
+                merged[column] = value
+        manifest = merged.get("provenance_manifest")
+        if isinstance(manifest, dict):
+            manifest = dict(manifest)
+            fixture = dict(manifest.get("fixture") or {})
+            fixture.update(
+                fixture_id=existing.fixture_id,
+                fixture_source=existing.fixture_source or "composite_identity",
+                provider_fixture_id=existing.provider_fixture_id,
+                league_id=existing.league_id,
+                kickoff=(
+                    existing.kickoff.isoformat() if existing.kickoff else None
+                ),
+            )
+            manifest["fixture"] = fixture
+            merged["provenance_manifest"] = manifest
+        return merged
+
     def _commit(self) -> None:
         try:
             self.db.commit()
@@ -33,22 +115,47 @@ class MatchPredictionRepository:
             self.db.rollback()
             raise
 
+    @classmethod
+    def _upsert_update_columns(cls, data: Mapping[str, object]) -> dict[str, object]:
+        """Map the incoming fields to PostgreSQL ``excluded`` references.
+
+        Only columns actually present in ``data`` are included. Adding every
+        table column here would make PostgreSQL resolve missing columns to their
+        DEFAULT (NULL), silently wiping verified labels, ROI and closing-odds
+        provenance on every partial re-analysis.
+        """
+        return {
+            col.name: getattr(pg_insert(MatchPrediction).excluded, col.name)
+            for col in MatchPrediction.__table__.columns
+            if col.name in data and col.name not in NON_MUTABLE_UPSERT_COLUMNS
+        }
+
     def upsert_prediction(self, data: dict) -> MatchPrediction:
         """
         Upsert a prediction.
         Uses high-performance PostgreSQL-native upsert in production.
         Falls back to standard transaction check-and-update on SQLite for local environments.
         """
+        data = dict(data)
+        fixture_id = data.get("fixture_id")
+        existing = (
+            self.get_by_fixture_id(fixture_id) if isinstance(fixture_id, int) else None
+        )
+        equivalent_provider_fixture = existing is None
+        if existing is None:
+            existing = self.get_equivalent_fixture(data)
+        if existing is not None and existing.actual_result is not None:
+            # Never rewrite a forecast after its result became known.
+            return existing
+        if existing is not None and equivalent_provider_fixture:
+            data = self._reuse_fixture_identity(data, existing)
+
         if self.db.bind is None:
             raise RuntimeError("Database session is not bound to an engine")
         dialect = self.db.bind.dialect.name
 
         if dialect == "sqlite":
             # Dialect-agnostic SQLite fallback
-            fixture_id = data.get("fixture_id")
-            existing = (
-                self.get_by_fixture_id(fixture_id) if fixture_id is not None else None
-            )
             if existing:
                 for k, v in data.items():
                     setattr(existing, k, v)
@@ -63,11 +170,7 @@ class MatchPredictionRepository:
 
         # PostgreSQL native execution
         stmt = pg_insert(MatchPrediction).values(**data)
-        update_cols = {
-            col.name: getattr(stmt.excluded, col.name)
-            for col in MatchPrediction.__table__.columns
-            if col.name not in ["id", "created_at"]
-        }
+        update_cols = self._upsert_update_columns(data)
 
         upsert_stmt = stmt.on_conflict_do_update(
             index_elements=["fixture_id"], set_=update_cols
@@ -198,9 +301,14 @@ class MatchPredictionRepository:
             .count()
         )
 
-    def get_all_auditable(self) -> List[MatchPrediction]:
+    def get_all_auditable(
+        self,
+        limit: int = 5000,
+        *,
+        model_artifact_version: str | None = None,
+    ) -> List[MatchPrediction]:
         """Return only forecasts admitted by the production eligibility policy."""
-        return (
+        query = (
             self.db.query(MatchPrediction)
             .filter(
                 MatchPrediction.training_eligible.is_(True),
@@ -209,9 +317,12 @@ class MatchPredictionRepository:
                     MatchPrediction.result_verification_status == "verified",
                 ),
             )
-            .order_by(MatchPrediction.id.asc())
-            .all()
         )
+        if model_artifact_version is not None:
+            query = query.filter(
+                MatchPrediction.model_artifact_version == model_artifact_version
+            )
+        return query.order_by(MatchPrediction.id.asc()).limit(limit).all()
 
     def update_result(
         self,

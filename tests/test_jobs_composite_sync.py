@@ -44,7 +44,7 @@ def test_composite_prediction_without_provider_id_stays_pending(monkeypatch) -> 
         db.add(_prediction())
         db.commit()
 
-    monkeypatch.setattr("app.tasks.jobs.SessionLocal", session_factory)
+    monkeypatch.setattr("app.tasks.results.SessionLocal", session_factory)
 
     result = _sync_completed_matches(Mock(), Mock())
 
@@ -83,8 +83,8 @@ def test_composite_prediction_verified_against_local_history(monkeypatch) -> Non
         )
         db.commit()
 
-    monkeypatch.setattr("app.tasks.jobs.SessionLocal", session_factory)
-    monkeypatch.setattr("app.tasks.jobs.retrain_ml_model_task.delay", Mock())
+    monkeypatch.setattr("app.tasks.results.SessionLocal", session_factory)
+    monkeypatch.setattr("app.tasks.results.retrain_ml_model_task.delay", Mock())
 
     result = _sync_completed_matches(Mock(), Mock())
 
@@ -145,8 +145,8 @@ def test_verified_result_uses_timestamped_pre_kickoff_closing_snapshot(
         )
         db.commit()
 
-    monkeypatch.setattr("app.tasks.jobs.SessionLocal", session_factory)
-    monkeypatch.setattr("app.tasks.jobs.retrain_ml_model_task.delay", Mock())
+    monkeypatch.setattr("app.tasks.results.SessionLocal", session_factory)
+    monkeypatch.setattr("app.tasks.results.retrain_ml_model_task.delay", Mock())
     api_client = Mock()
 
     result = _sync_completed_matches(api_client, Mock())
@@ -184,7 +184,7 @@ def test_composite_matching_ignores_shifted_kickoff(monkeypatch) -> None:
         )
         db.commit()
 
-    monkeypatch.setattr("app.tasks.jobs.SessionLocal", session_factory)
+    monkeypatch.setattr("app.tasks.results.SessionLocal", session_factory)
 
     result = _sync_completed_matches(Mock(), Mock())
 
@@ -241,7 +241,7 @@ def test_composite_requires_single_unambiguous_row(monkeypatch) -> None:
         )
         db.commit()
 
-    monkeypatch.setattr("app.tasks.jobs.SessionLocal", session_factory)
+    monkeypatch.setattr("app.tasks.results.SessionLocal", session_factory)
 
     result = _sync_completed_matches(Mock(), Mock())
 

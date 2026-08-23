@@ -75,11 +75,11 @@ class OddsHistoryService:
         try:
             with self.session_factory() as db:
                 repository = OddsSnapshotRepository(db)
-                repository.record(
+                current_snapshot = repository.record(
                     fixture_id=fixture_id,
                     raw_odds=raw_odds,
                     captured_at=observed_at,
-                    source="api_football_odds",
+                    source=str(market.get("source") or "api_football_odds")[:50],
                     bookmaker=(
                         str(market.get("bookmaker"))
                         if market.get("bookmaker")
@@ -108,6 +108,12 @@ class OddsHistoryService:
             )
             return enriched
 
+        # A single pre-kickoff observation is valid point-in-time market
+        # evidence even though two observations are required for movement.
+        enriched.update(
+            current_odds_1x2=OddsSnapshotWindow.outcome_dict(current_snapshot),
+            current_odds_at=_stored_utc(current_snapshot.captured_at).isoformat(),
+        )
         enriched["odds_history"] = self._history_metadata(window)
         if window is None:
             return enriched

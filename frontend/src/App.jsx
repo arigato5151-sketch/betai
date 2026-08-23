@@ -174,12 +174,9 @@ function App() {
           target="_blank"
           rel="noreferrer"
           aria-label="StatsBomb Open Data kaynağını aç"
+          className="font-bold text-sky-400 hover:text-sky-300"
         >
-          <img
-            src="https://raw.githubusercontent.com/hudl/open-data/master/img/SB%20-%20Icon%20Lockup%20-%20Colour%20positive.png"
-            alt="StatsBomb"
-            className="h-7 w-auto opacity-80"
-          />
+          StatsBomb Open Data
         </a>
         <span>·</span>
         <a

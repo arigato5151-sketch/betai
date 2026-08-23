@@ -757,7 +757,8 @@ Yerel ve harici servis gerektirmeyen başlangıç için `backend/.env` dosyasın
 ENVIRONMENT=development
 DEBUG=true
 API_FOOTBALL_KEY=DEMO_KEY
-CLUBELO_ENABLED=true
+API_FOOTBALL_PLAN=free
+CLUBELO_ENABLED=false
 CLUBELO_BASE_URL=http://api.clubelo.com
 CLUBELO_TIMEOUT_SECONDS=15
 CLUBELO_CACHE_HOURS=24
@@ -820,7 +821,7 @@ LOG_LEVEL=INFO
 LOG_FORMAT=text
 ```
 
-`API_FOOTBALL_KEY=DEMO_KEY` uygulamanın gömülü demo verisini kullanmasını sağlar. Canlı fikstürler için değeri geçerli API-Football anahtarıyla değiştirin. Redis kapalıysa Memcached, Memcached de kapalıysa süreç içi TTL cache kullanılır.
+`API_FOOTBALL_KEY=DEMO_KEY` uygulamanın gömülü demo verisini kullanmasını sağlar. Canlı fikstürler için değeri geçerli API-Football anahtarıyla değiştirin. Ücretli aboneliklerde mevcut sezon formu ve takım istatistiklerini açmak için `API_FOOTBALL_PLAN` değerini `pro`, `ultra` veya `mega` olarak ayarlayın. Redis kapalıysa Memcached, Memcached de kapalıysa süreç içi TTL cache kullanılır.
 
 Yaklaşan fikstür akışı API-Football, FixtureDownload, OpenLigaDB, Sportmonks, football-data.org ve TheSportsDB
 sonuçlarını paralel toplar; aynı lig, takımlar ve tarihteki maçları tek kayıtta

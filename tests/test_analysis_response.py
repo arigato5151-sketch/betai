@@ -19,6 +19,10 @@ from app.api.endpoints import (
     _is_training_eligible,
     _market_settlement_price,
     _select_reference_lineup,
+    _build_payload_from_prefill,
+)
+from app.api.endpoints.prediction_helpers import (
+    StatsEngine,
 )
 from app.core.config import settings
 from app.prediction.ml.features import FeatureEngine
@@ -343,8 +347,6 @@ def test_ml_safety_marks_market_disagreement_risky_when_models_disagree() -> Non
 
 
 def test_prefill_payload_carries_automatic_odds_snapshots() -> None:
-    from app.api.endpoints import _build_payload_from_prefill
-
     prefill = {
         "fixture": {
             "fixture_id": 10,
@@ -403,22 +405,24 @@ async def test_analysis_collects_feature_snapshot_before_first_model(
     )
     away_matches = home_matches.assign(match_date=pd.Timestamp("2026-07-16T18:00:00Z"))
     monkeypatch.setattr(endpoints.ml_pipeline, "is_ready", False)
-    monkeypatch.setattr(
-        endpoints.football_api,
-        "get_team_last_matches_df",
-        AsyncMock(side_effect=[home_matches, away_matches]),
+    context = HistoricalFeatureContext(
+        h2h_rates={
+            "home_win_rate": 0.6,
+            "draw_rate": 0.2,
+            "home_loss_rate": 0.2,
+        },
+        h2h_matches=[{"home_goals": 2, "away_goals": 0}],
+        home_matches_df=home_matches,
+        away_matches_df=away_matches,
     )
     monkeypatch.setattr(
-        endpoints.football_api,
-        "get_h2h",
-        AsyncMock(
-            return_value={
-                "home_win_rate": 0.6,
-                "draw_rate": 0.2,
-                "home_loss_rate": 0.2,
-            }
-        ),
+        "app.api.endpoints.prediction_helpers._get_historical_feature_context",
+        lambda _payload: context,
     )
+    form_api = AsyncMock(side_effect=AssertionError("form API should not be called"))
+    h2h_api = AsyncMock(side_effect=AssertionError("H2H API should not be called"))
+    monkeypatch.setattr(endpoints.football_api, "get_team_last_matches_df", form_api)
+    monkeypatch.setattr(endpoints.football_api, "get_h2h", h2h_api)
     captured_stats_kwargs: dict[str, object] = {}
     original_analyze_match = endpoints.StatsEngine.analyze_match
 
@@ -426,11 +430,7 @@ async def test_analysis_collects_feature_snapshot_before_first_model(
         captured_stats_kwargs.update(kwargs)
         return original_analyze_match(*args, **kwargs)
 
-    monkeypatch.setattr(
-        endpoints.StatsEngine,
-        "analyze_match",
-        capture_stats_history,
-    )
+    monkeypatch.setattr(StatsEngine, "analyze_match", capture_stats_history)
     payload = AnalysisRequest(
         home_team="Home",
         away_team="Away",
@@ -462,6 +462,8 @@ async def test_analysis_collects_feature_snapshot_before_first_model(
         "secondary_markets": computed["analysis"]["secondary_markets"],
         "match_profile": computed["analysis"]["match_profile"],
     }
+    form_api.assert_not_awaited()
+    h2h_api.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -484,18 +486,24 @@ async def test_analysis_response_exposes_feature_snapshot(
         ]
     )
     monkeypatch.setattr(endpoints.ml_pipeline, "is_ready", False)
-    monkeypatch.setattr(
-        endpoints.football_api,
-        "get_team_last_matches_df",
-        AsyncMock(side_effect=[home_matches, home_matches]),
+    context = HistoricalFeatureContext(
+        h2h_rates={
+            "home_win_rate": 0.6,
+            "draw_rate": 0.2,
+            "home_loss_rate": 0.2,
+        },
+        h2h_matches=[{"home_goals": 2, "away_goals": 0}],
+        home_matches_df=home_matches,
+        away_matches_df=home_matches,
     )
     monkeypatch.setattr(
-        endpoints.football_api,
-        "get_h2h",
-        AsyncMock(
-            return_value={"home_win_rate": 0.6, "draw_rate": 0.2, "home_loss_rate": 0.2}
-        ),
+        "app.api.endpoints.prediction_helpers._get_historical_feature_context",
+        lambda _payload: context,
     )
+    form_api = AsyncMock(side_effect=AssertionError("form API should not be called"))
+    h2h_api = AsyncMock(side_effect=AssertionError("H2H API should not be called"))
+    monkeypatch.setattr(endpoints.football_api, "get_team_last_matches_df", form_api)
+    monkeypatch.setattr(endpoints.football_api, "get_h2h", h2h_api)
 
     record_stub = SimpleNamespace(
         id=1,
@@ -515,7 +523,9 @@ async def test_analysis_response_exposes_feature_snapshot(
         capture_persist["feature_snapshot"] = computed["feature_vector"]
         return record_stub, 0
 
-    monkeypatch.setattr(endpoints, "_persist_analysis", fake_persist)
+    monkeypatch.setattr(
+        "app.api.endpoints.prediction_helpers._persist_analysis", fake_persist
+    )
 
     payload = AnalysisRequest(
         home_team="Home",
@@ -524,7 +534,7 @@ async def test_analysis_response_exposes_feature_snapshot(
         away_team_id=2,
         kickoff="2026-07-20T18:00:00Z",
         home_stats={"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
-        away_stats={"form": 62, "attack": 65, "defense": 64, "xg": 1.3},
+        away_stats={"form": 70, "attack": 72, "defense": 68, "xg": 1.7},
         odd=2.1,
     )
 
@@ -534,6 +544,8 @@ async def test_analysis_response_exposes_feature_snapshot(
     assert response["feature_snapshot"]["home_form_ema"] == 100.0
     assert capture_persist["feature_snapshot"] is response["feature_snapshot"]
     assert response["provenance"]["model_artifact_version"] is None
+    form_api.assert_not_awaited()
+    h2h_api.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -585,9 +597,16 @@ async def test_interactive_relaxation_never_admits_sample_to_training(
             0,
         )
 
-    monkeypatch.setattr(endpoints, "_compute_analysis", fake_compute)
-    monkeypatch.setattr(endpoints, "_persist_analysis", fake_persist)
-    monkeypatch.setattr(endpoints, "_build_analysis_response", lambda *_args: {})
+    monkeypatch.setattr(
+        "app.api.endpoints.prediction_helpers._compute_analysis", fake_compute
+    )
+    monkeypatch.setattr(
+        "app.api.endpoints.prediction_helpers._persist_analysis", fake_persist
+    )
+    monkeypatch.setattr(
+        "app.api.endpoints.prediction_helpers._build_analysis_response",
+        lambda *_args: {},
+    )
 
     await endpoints._run_analysis(
         _base_payload(),
@@ -784,7 +803,10 @@ async def test_analysis_prefers_complete_point_in_time_history_over_api(
         },
         away_travel_distance_km=1200.0,
     )
-    monkeypatch.setattr(endpoints, "_get_historical_feature_context", lambda _: context)
+    monkeypatch.setattr(
+        "app.api.endpoints.prediction_helpers._get_historical_feature_context",
+        lambda _: context,
+    )
     monkeypatch.setattr(endpoints.ml_pipeline, "is_ready", False)
     home_api = AsyncMock(side_effect=AssertionError("form API should not be called"))
     h2h_api = AsyncMock(side_effect=AssertionError("H2H API should not be called"))
@@ -986,7 +1008,7 @@ async def test_current_season_roster_replaces_incomplete_stale_local_pool(
 
 
 @pytest.mark.asyncio
-async def test_stale_point_in_time_form_uses_api_fallback(
+async def test_stale_point_in_time_form_stays_local_without_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.api import endpoints
@@ -998,12 +1020,6 @@ async def test_stale_point_in_time_form_uses_api_fallback(
             "points": [3.0] * 5,
         }
     )
-    api_frame = pd.DataFrame(
-        {
-            "match_date": [pd.Timestamp("2026-07-17T18:00:00Z")],
-            "points": [1.0],
-        }
-    )
     context = HistoricalFeatureContext(
         h2h_rates={
             "home_win_rate": 0.4,
@@ -1013,7 +1029,7 @@ async def test_stale_point_in_time_form_uses_api_fallback(
         home_matches_df=stale_frame,
         away_matches_df=stale_frame,
     )
-    form_api = AsyncMock(return_value=api_frame)
+    form_api = AsyncMock(side_effect=AssertionError("form API should not be called"))
     h2h_api = AsyncMock(side_effect=AssertionError("local H2H should be used"))
     monkeypatch.setattr(endpoints.football_api, "get_team_last_matches_df", form_api)
     monkeypatch.setattr(endpoints.football_api, "get_h2h", h2h_api)
@@ -1036,12 +1052,12 @@ async def test_stale_point_in_time_form_uses_api_fallback(
         lineups,
     ) = await _fetch_ml_match_data(payload, context)
 
-    assert home_matches is api_frame
-    assert away_matches is api_frame
+    assert home_matches is stale_frame
+    assert away_matches is stale_frame
     assert h2h_rates is context.h2h_rates
     assert availability is None
     assert lineups is None
-    assert form_api.await_count == 2
+    form_api.assert_not_awaited()
     h2h_api.assert_not_awaited()
 
 
@@ -1211,6 +1227,9 @@ async def test_analysis_without_market_stays_research_only(
         "market_unavailable",
         "incomplete_1x2_market",
     }
+    assert computed["data_quality"]["decision_recommendation"] == computed[
+        "analysis"
+    ]["decision"]
 
 
 def _eligible_computed() -> dict:
@@ -1227,6 +1246,9 @@ def _base_payload() -> AnalysisRequest:
         away_team="Away",
         league_id=203,
         kickoff=datetime(2026, 8, 9, 18, tzinfo=UTC),
+        market_1x2={"raw_odds": {"HOME_WIN": 2.0, "DRAW": 3.2, "AWAY_WIN": 3.6}},
+        current_odds_1x2={"HOME_WIN": 2.0, "DRAW": 3.2, "AWAY_WIN": 3.6},
+        current_odds_at=datetime(2026, 8, 9, 16, tzinfo=UTC),
         home_stats={"form": 70, "attack": 70, "defense": 70, "xg": 1.5},
         away_stats={"form": 70, "attack": 70, "defense": 70, "xg": 1.5},
         odd=2.0,
@@ -1254,6 +1276,15 @@ def test_training_eligible_with_provider_fixture_id() -> None:
     payload = _base_payload()
     payload.provider_fixture_id = "1234567"
     assert _is_training_eligible(_eligible_computed(), payload, "fixture_user") is True
+
+
+def test_training_eligible_rejects_missing_market_evidence() -> None:
+    payload = _base_payload()
+    payload.market_1x2 = None
+    payload.current_odds_1x2 = None
+    payload.current_odds_at = None
+
+    assert _is_training_eligible(_eligible_computed(), payload, "automatic") is False
 
 
 def test_training_eligible_rejects_manual_analysis() -> None:
@@ -1301,9 +1332,7 @@ def test_settlement_price_none_without_market() -> None:
     assert _market_settlement_price(None, {"prediction": "home"}) is None
     assert _market_settlement_price({}, {"prediction": "home"}) is None
     assert (
-        _market_settlement_price(
-            {"raw_odds": {"home": 0.9}}, {"prediction": "home"}
-        )
+        _market_settlement_price({"raw_odds": {"home": 0.9}}, {"prediction": "home"})
         is None
     )
 

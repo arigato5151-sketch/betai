@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -96,6 +97,7 @@ def test_endpoint_routes_data_rich_league_to_tier1() -> None:
         "confidence": 0.6,
         "decision_status": "eligible",
         "decision_reasons": [],
+        "confidence_tier": "high",
         "uncertainty": {
             "status": "eligible",
             "reasons": [],
@@ -231,3 +233,107 @@ def test_endpoint_marks_market_inferior_tier2_as_research_only() -> None:
         "min_per_class": 3,
         "minimum_per_class": 20,
     }
+
+
+class ConditionalTier1Model(Tier1Model):
+    def __init__(self) -> None:
+        super().__init__(backend="sklearn")
+
+    def predict_proba(self, features: pd.DataFrame) -> np.ndarray:
+        return np.array([[0.32, 0.33, 0.35]])
+
+
+def test_endpoint_returns_conditional_for_marginal_tier1() -> None:
+    tier1 = ConditionalTier1Model()
+    tier2 = StubTier2Model()
+    predictor = Predictor(tier1, tier2, tier1_league_ids=frozenset({39}))
+
+    response = _make_client(predictor).post(
+        "/predict/tiered",
+        json={"league_id": 39, "features": _tier1_features()},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision_status"] == "conditional"
+    assert body["confidence_tier"] == "conditional"
+    assert body["decision_use"] == "research_only"
+    assert body["used_tier"] == "Tier 1"
+
+
+def test_tier2_gate_passed_enables_conditional_band() -> None:
+    tier1 = StubTier1Model()
+    tier2 = StubTier2Model()
+    predictor = Predictor(
+        tier1,
+        tier2,
+        tier1_league_ids=frozenset({39}),
+        tier2_gate={"passed": True, "reasons": []},
+    )
+
+    response = _make_client(predictor).post(
+        "/predict/tiered",
+        json={"league_id": 39, "features": _tier2_features()},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["used_tier"] == "Tier 2"
+    assert body["research_only"] is False
+    assert body["decision_status"] == "eligible"
+
+
+@pytest.mark.asyncio
+async def test_batch_endpoint_builds_fixture_specific_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded_fixture_ids: list[int] = []
+
+    async def get_or_create(fixture_id: int, **_kwargs: object) -> dict[str, object]:
+        loaded_fixture_ids.append(fixture_id)
+        return {"fixture_id": fixture_id}
+
+    def build_payload(prefill: dict[str, object]) -> object:
+        return prefill
+
+    async def compute(payload: dict[str, object], **_kwargs: object) -> dict[str, object]:
+        fixture_id = int(payload["fixture_id"])
+        return {
+            "analysis": {
+                "prediction": "HOME_WIN" if fixture_id == 42 else "AWAY_WIN",
+                "all_probabilities": {
+                    "HOME_WIN": 0.6 if fixture_id == 42 else 0.2,
+                    "DRAW": 0.2,
+                    "AWAY_WIN": 0.2 if fixture_id == 42 else 0.6,
+                },
+                "model": "test-model",
+            },
+            "ml_result": {"ready": fixture_id == 42},
+        }
+
+    monkeypatch.setattr(endpoints.fixture_context_service, "get_or_create", get_or_create)
+    monkeypatch.setattr(endpoints, "_build_payload_from_prefill", build_payload)
+    monkeypatch.setattr(endpoints, "_compute_analysis", compute)
+    result = await endpoints.batch_predict(
+        fixture_ids=[42],
+        user=type("User", (), {"id": "batch-test-user"})(),
+    )
+
+    assert result == {
+        "predictions": [
+            {
+                "fixture_id": 42,
+                "status": "ok",
+                "prediction": "HOME_WIN",
+                "probabilities": {
+                    "AWAY_WIN": 0.2,
+                    "DRAW": 0.2,
+                    "HOME_WIN": 0.6,
+                },
+                "model": "test-model",
+                "ml_ready": True,
+            }
+        ],
+        "count": 1,
+    }
+    assert loaded_fixture_ids == [42]

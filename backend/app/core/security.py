@@ -37,7 +37,11 @@ class OriginValidationMiddleware(BaseHTTPMiddleware):
 
         origin = request.headers.get("origin")
         normalized_origin = origin.rstrip("/") if origin else None
-        if normalized_origin and normalized_origin not in self.allowed_origins:
+        request_origin = str(request.base_url).rstrip("/")
+        origin_is_trusted = normalized_origin in self.allowed_origins or secrets.compare_digest(
+            normalized_origin or "", request_origin
+        )
+        if normalized_origin and not origin_is_trusted:
             return JSONResponse(
                 status_code=403, content={"detail": "İstek kaynağına güvenilmiyor."}
             )

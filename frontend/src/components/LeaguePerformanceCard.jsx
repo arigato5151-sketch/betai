@@ -18,6 +18,11 @@ function LeaguePerformanceCard({ data, error, loading, onRefresh }) {
           <p className="mt-1 text-xs text-slate-500">
             Sonuçlanmış tahminlerde doğruluk, kalibrasyon ve oran değeri
           </p>
+          {data?.artifact_version && (
+            <p className="mt-1 text-[11px] text-slate-400">
+              Aktif model artifact: {data.artifact_version}
+            </p>
+          )}
         </div>
         <button
           type="button"
@@ -105,7 +110,7 @@ function LeaguePerformanceCard({ data, error, loading, onRefresh }) {
           </table>
           {(data.leagues?.length ?? 0) === 0 && (
             <p className="py-6 text-center text-sm text-slate-500">
-              Henüz lig bazında sonuçlanmış tahmin yok.
+              Bu model artifact’ına ait sonuçlanmış tahmin henüz yok.
             </p>
           )}
         </div>

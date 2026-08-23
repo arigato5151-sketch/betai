@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock, call
 from zoneinfo import ZoneInfo
 
@@ -8,7 +8,7 @@ import pytest
 
 from app.core.demo_data import DEMO_UPCOMING_FIXTURES
 from app.core.exceptions import APIDataError
-from app.services.api_football import APIFootballClient
+from app.services.api_football import APIFootballClient, _latest_accessible_season
 from app.services.api_provider_health import api_football_health
 
 
@@ -35,12 +35,28 @@ class FakeResponse:
         return self._payload
 
 
+def test_latest_accessible_season_respects_subscription_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import api_football
+
+    monkeypatch.setattr(api_football.settings, "API_FOOTBALL_PLAN", "free")
+    assert _latest_accessible_season() == 2024
+
+    monkeypatch.setattr(api_football.settings, "API_FOOTBALL_PLAN", "pro")
+    today = date.today()
+    expected = today.year if today.month >= 7 else today.year - 1
+    assert _latest_accessible_season() == expected
+
+
 class FakeAsyncClient:
     def __init__(self, responses: list[FakeResponse]) -> None:
         self.responses = responses
         self.get_calls = 0
+        self.enter_calls = 0
 
     async def __aenter__(self) -> "FakeAsyncClient":
+        self.enter_calls += 1
         return self
 
     async def __aexit__(self, *args: object) -> None:
@@ -82,6 +98,7 @@ async def test_retry_recovers_from_server_error(
 
     assert result == {"response": [1]}
     assert fake_client.get_calls == 2
+    assert fake_client.enter_calls == 1
     sleep.assert_awaited_once_with(0.01)
 
 
@@ -132,6 +149,37 @@ async def test_rate_limit_opens_circuit_and_skips_next_request(
     assert await client._request_with_retry("fixtures", {}, retries=1) is None
     assert fake_client.get_calls == 1
     assert (await api_football_health.snapshot())["status"] == "circuit_open"
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_exhausted_skips_without_calling_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.api_provider_health import api_football_health
+
+    api_football_health.reset_for_test()
+    client = APIFootballClient()
+    fake_client = install_fake_http_client(
+        monkeypatch,
+        [
+            FakeResponse(
+                200,
+                headers={
+                    "x-ratelimit-requests-remaining": "0",
+                    "x-ratelimit-requests-limit": "100",
+                },
+            )
+        ],
+    )
+
+    await api_football_health.record_response(
+        200,
+        {"x-ratelimit-requests-remaining": "0", "x-ratelimit-requests-limit": "100"},
+    )
+
+    assert await client._request_with_retry("fixtures", {}, retries=3) is None
+    assert fake_client.get_calls == 0
+    assert (await api_football_health.snapshot())["daily_remaining"] == 0
 
 
 @pytest.mark.asyncio
@@ -197,6 +245,154 @@ async def test_demo_upcoming_and_prefill_never_require_network() -> None:
     assert prefill["data_quality"] == "demo"
     assert prefill["auto_filled"] is True
     assert prefill["market_1x2"]["overround_pct"] > 0
+    client._request_with_retry.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_live_upcoming_does_not_fall_back_to_demo_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(return_value={"response": []})
+    monkeypatch.setattr(
+        "app.services.api_football.cache.get", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr("app.services.api_football.cache.set", AsyncMock())
+
+    assert await client.get_upcoming_fixtures(days=2, limit=10) == []
+
+
+@pytest.mark.asyncio
+async def test_live_key_failure_does_not_fall_back_to_demo_fixtures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "app.services.api_football.cache.get", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr("app.services.api_football.cache.set", AsyncMock())
+
+    assert await client.get_live_fixtures() == []
+    assert await client.get_live_fixtures(league_id=39) == []
+
+
+@pytest.mark.asyncio
+async def test_fixture_odds_never_fabricates_a_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    monkeypatch.setattr(
+        "app.services.api_football.cache.get", AsyncMock(return_value=None)
+    )
+    client.get_fixture_market = AsyncMock(return_value=None)
+
+    assert await client.get_fixture_odds(500) is None
+
+
+@pytest.mark.asyncio
+async def test_fixture_by_id_failure_reuses_warm_cache_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(return_value=None)
+    warm_fixture = {"fixture_id": 500, "home_team": "Home", "away_team": "Away"}
+    monkeypatch.setattr(
+        "app.services.api_football.cache.get",
+        AsyncMock(return_value=[warm_fixture]),
+    )
+    network_calls = 0
+    original_upcoming = client.get_upcoming_fixtures
+
+    async def guarded_upcoming(*args, **kwargs) -> list:
+        nonlocal network_calls
+        network_calls += 1
+        return await original_upcoming(*args, **kwargs)
+
+    client.get_upcoming_fixtures = guarded_upcoming
+
+    hit = await client.get_fixture_by_id(500)
+    miss = await client.get_fixture_by_id(501)
+
+    assert hit == warm_fixture
+    assert miss is None
+    assert network_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_fixture_by_id_empty_response_is_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(return_value={"response": []})
+    monkeypatch.setattr(
+        "app.services.api_football.cache.get", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr("app.services.api_football.cache.set", AsyncMock())
+
+    assert await client.get_fixture_by_id(999_999_999) is None
+
+
+@pytest.mark.asyncio
+async def test_h2h_failure_does_not_fabricate_balanced_rates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "app.services.api_football.cache.get", AsyncMock(return_value=None)
+    )
+
+    result = await client.get_h2h(1, 2, last=5)
+
+    assert "home_win_rate" not in result
+    assert "draw_rate" not in result
+    assert "home_loss_rate" not in result
+    assert result["source"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_provider_error_payload_is_not_cached_as_empty_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    cache_set = AsyncMock()
+    monkeypatch.setattr(
+        "app.services.api_football.cache.get", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr("app.services.api_football.cache.set", cache_set)
+    error_payload = {"errors": {"plan": "Access denied"}, "response": []}
+
+    client._request_with_retry = AsyncMock(return_value=error_payload)
+
+    assert await client.get_live_fixtures() == []
+    assert await client.get_fixture_availability(500, 1, 2) is None
+    assert await client.get_fixture_lineups(500, 1, 2) is None
+    assert await client.get_team_player_ratings(1, 2024) == {}
+
+    cache_set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_demo_market_never_reaches_network_for_unknown_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = APIFootballClient()
+    client.api_key = "DEMO_KEY"
+    client._request_with_retry = AsyncMock(side_effect=AssertionError("network called"))
+    monkeypatch.setattr(
+        "app.services.api_football.cache.get", AsyncMock(return_value=None)
+    )
+
+    assert await client.get_fixture_market(999_999_999) is None
+    assert await client.get_fixture_odds(999_999_999) is None
     client._request_with_retry.assert_not_awaited()
 
 
@@ -457,6 +653,30 @@ async def test_unknown_demo_team_uses_local_fallback_without_network() -> None:
     client._request_with_retry.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_failed_stats_upstream_is_not_cached_as_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(return_value=None)
+    cache_set = AsyncMock()
+    monkeypatch.setattr(
+        "app.services.api_football.cache.get", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr("app.services.api_football.cache.set", cache_set)
+
+    profile = await client.get_team_statistics(203, 2024, 194, venue="away")
+
+    assert profile["source"] == "fallback_default"
+    cache_set.assert_not_awaited()
+
+    empty = await client.get_team_statistics(203, 2024, 195, venue="home")
+
+    assert empty["source"] == "fallback_default"
+    cache_set.assert_not_awaited()
+
+
 def test_fixture_normalization_handles_live_score_and_invalid_date() -> None:
     client = APIFootballClient()
     client.api_key = "live-key"
@@ -528,6 +748,21 @@ def test_team_match_row_builds_model_features() -> None:
     assert row["goals_against"] == 0
     assert row["clean_sheet"] == 1
     assert isinstance(row["match_date"], pd.Timestamp)
+
+
+def test_team_match_row_rejects_invalid_kickoff_instead_of_fabricating_today() -> None:
+    client = APIFootballClient()
+
+    row = client._team_match_row(
+        {
+            "fixture": {"date": "not-a-date"},
+            "teams": {"home": {"id": 1}},
+            "goals": {"home": 2, "away": 1},
+        },
+        team_id=1,
+    )
+
+    assert row is None
 
 
 @pytest.mark.asyncio
@@ -709,6 +944,85 @@ def test_completed_cup_fixture_uses_regulation_score_for_1x2(
     assert normalized["home_goals"] == fulltime["home"]
     assert normalized["away_goals"] == fulltime["away"]
     assert normalized["actual_result"] == expected_result
+
+
+@pytest.mark.asyncio
+async def test_paid_plan_recent_form_crosses_season_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import api_football
+
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(return_value={"response": []})
+    monkeypatch.setattr(api_football.settings, "API_FOOTBALL_PLAN", "pro")
+    monkeypatch.setattr(api_football.cache, "get", AsyncMock(return_value=None))
+
+    await client.get_team_last_matches_df(994, last=5)
+
+    client._request_with_retry.assert_awaited_once_with(
+        "fixtures",
+        {"team": "994", "status": "FT-AET-PEN", "last": "5"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_free_plan_recent_form_remains_accessible_season_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import api_football
+
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(return_value={"response": []})
+    monkeypatch.setattr(api_football.settings, "API_FOOTBALL_PLAN", "free")
+    monkeypatch.setattr(api_football.cache, "get", AsyncMock(return_value=None))
+
+    await client.get_team_last_matches_df(994, last=5)
+
+    client._request_with_retry.assert_awaited_once_with(
+        "fixtures",
+        {"team": "994", "status": "FT-AET-PEN", "season": "2024"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_recent_completed_team_fixtures_are_normalized() -> None:
+    client = APIFootballClient()
+    client.api_key = "live-key"
+    client._request_with_retry = AsyncMock(
+        return_value={
+            "response": [
+                {
+                    "fixture": {
+                        "id": 700,
+                        "date": "2026-08-20T18:00:00Z",
+                        "status": {"short": "FT"},
+                    },
+                    "league": {"id": 203, "season": 2026},
+                    "teams": {
+                        "home": {"id": 994, "name": "Goztepe"},
+                        "away": {"id": 611, "name": "Fenerbahce"},
+                    },
+                    "goals": {"home": 1, "away": 0},
+                    "score": {"fulltime": {"home": 1, "away": 0}},
+                }
+            ]
+        }
+    )
+
+    rows = await client.get_team_recent_completed_fixtures(994, last=5)
+
+    assert [row["fixture_id"] for row in rows] == [700]
+    client._request_with_retry.assert_awaited_once_with(
+        "fixtures",
+        {
+            "team": "994",
+            "last": "5",
+            "status": "FT-AET-PEN",
+            "timezone": "UTC",
+        },
+    )
 
 
 @pytest.mark.asyncio

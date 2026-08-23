@@ -1,7 +1,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import AnalysisReport, { buildAlternativeResults } from "./AnalysisReport.jsx";
+import AnalysisReport, {
+  buildAlternativeResults,
+  settleAlternativeResult,
+  settleScoreBand,
+} from "./AnalysisReport.jsx";
 
 vi.mock("react-chartjs-2", () => ({
   Doughnut: () => <div data-testid="olasılık-grafiği" />,
@@ -79,6 +83,60 @@ describe("AnalysisReport Türkçe gösterim katmanı", () => {
     ).toEqual([]);
   });
 
+  it("düşük güvenli BTTS sonucunu zorla Yok olarak göstermez", () => {
+    expect(
+      buildAlternativeResults({
+        secondary_markets: [
+          { market: "BTTS", pick: "BELIRSIZ", probability: 54.2 },
+        ],
+      }),
+    ).toEqual([
+      {
+        key: "btts",
+        title: "Karşılıklı Gol",
+        value: "Belirsiz",
+        probability: 54.2,
+      },
+    ]);
+  });
+
+  it("alternatif pazarları gerçek skorla güvenli biçimde sonuçlandırır", () => {
+    const actual = { home: 2, away: 1, result: "HOME_WIN" };
+
+    expect(
+      settleAlternativeResult(
+        { key: "double_chance", value: "1-X" },
+        actual,
+      ),
+    ).toBe(true);
+    expect(
+      settleAlternativeResult({ key: "over_2_5", value: "Üst" }, actual),
+    ).toBe(true);
+    expect(
+      settleAlternativeResult({ key: "btts", value: "Var" }, actual),
+    ).toBe(true);
+    expect(
+      settleAlternativeResult({ key: "score", value: "1-0" }, actual),
+    ).toBe(false);
+    expect(settleScoreBand("3-4 Gol", 2, 1)).toBe(true);
+  });
+
+  it("sonuçlanan maçta alternatiflerin doğru yanlış durumunu gösterir", () => {
+    render(
+      <AnalysisReport
+        match={{
+          ...match,
+          actual_result: "HOME_WIN",
+          actual_score_home: 2,
+          actual_score_away: 1,
+        }}
+      />,
+    );
+
+    expect(screen.getAllByText("Doğru ✓").length).toBeGreaterThanOrEqual(4);
+    expect(screen.getAllByText("Yanlış ✗").length).toBeGreaterThanOrEqual(1);
+  });
+
   it("ML güven yüzdesini ve olasılık farkını gösterir", () => {
     render(
       <AnalysisReport
@@ -103,6 +161,8 @@ describe("AnalysisReport Türkçe gösterim katmanı", () => {
         match={{
           ...match,
           data_quality: {
+            home_history_matches: 2,
+            required_history_matches: 5,
             prediction_eligibility: {
               status: "abstain",
               reasons: ["market_unavailable", "home_history_insufficient"],
@@ -116,6 +176,7 @@ describe("AnalysisReport Türkçe gösterim katmanı", () => {
     expect(
       screen.getByText(/Güncel 1X2 oranları bulunamadı/),
     ).toBeInTheDocument();
+    expect(screen.getByText(/2\/5 maç/)).toBeInTheDocument();
     expect(
       screen.getByText("VERİ YETERSİZ — DEĞER HESABI KULLANILMAMALI"),
     ).toBeInTheDocument();

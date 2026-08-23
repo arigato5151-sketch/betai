@@ -60,6 +60,35 @@ class PredictionDecisionPolicy:
         )
 
     @classmethod
+    def _effective_thresholds(
+        cls,
+        *,
+        data_quality_score: float | None = None,
+        market_confirmed: bool = False,
+    ) -> tuple[float, float]:
+        """Return (top_prob, margin) thresholds for the conditional tier.
+
+        The conditional tier sits between abstain and eligible.  Contextual
+        signals (market confirmation, high data quality) relax the conditional
+        thresholds further, letting more borderline predictions reach
+        "conditional" instead of "abstain".
+        """
+        cond_top = settings.DECISION_CONDITIONAL_TOP_PROBABILITY_PCT
+        cond_margin = settings.DECISION_CONDITIONAL_MARGIN_PCT
+
+        if (
+            market_confirmed
+            and data_quality_score is not None
+            and data_quality_score >= 70
+        ):
+            return (max(25.0, cond_top * 0.85), max(1.0, cond_margin * 0.6))
+        if market_confirmed:
+            return (max(27.0, cond_top * 0.90), max(1.0, cond_margin * 0.7))
+        if data_quality_score is not None and data_quality_score >= 70:
+            return (max(28.0, cond_top * 0.90), max(1.2, cond_margin * 0.8))
+        return cond_top, cond_margin
+
+    @classmethod
     def evaluate(
         cls,
         analysis: Mapping[str, object],
@@ -68,6 +97,8 @@ class PredictionDecisionPolicy:
         market_implied_pct: float | None = None,
         market_min_edge_pct: float | None = None,
         require_market: bool = False,
+        market_confirmed: bool = False,
+        data_quality_score: float | None = None,
     ) -> dict[str, object]:
         """Separate a probability forecast from a decision-grade recommendation.
 
@@ -76,6 +107,11 @@ class PredictionDecisionPolicy:
         a live market clears the requested edge; otherwise it is demoted to
         research-only. Callers that only need a forecast grade skip the market
         requirement and keep the pure probability decision.
+
+        ``market_confirmed`` and ``data_quality_score`` enable contextual
+        threshold relaxation: when the market agrees with the model or data
+        quality is high, borderline predictions reach "conditional" instead of
+        "abstain".
         """
         probabilities = cls._normalize(analysis.get("all_probabilities"))
         if probabilities is None:
@@ -111,13 +147,16 @@ class PredictionDecisionPolicy:
             default=0.0,
         )
 
+        cond_top, cond_margin = cls._effective_thresholds(
+            data_quality_score=data_quality_score,
+            market_confirmed=market_confirmed,
+        )
+
         reasons: list[str] = []
-        if top_probability_pct < settings.DECISION_MIN_TOP_PROBABILITY_PCT:
+        if top_probability_pct < cond_top:
             reasons.append("top_probability_too_low")
-        if margin_pct < settings.DECISION_MIN_MARGIN_PCT:
+        if margin_pct < cond_margin:
             reasons.append("probability_margin_too_low")
-        if entropy > settings.DECISION_MAX_NORMALIZED_ENTROPY:
-            reasons.append("predictive_entropy_too_high")
         if (
             max_source_jsd > settings.DECISION_MAX_SOURCE_JSD
             and margin_pct < settings.DECISION_SOURCE_DIVERGENCE_MAX_MARGIN_PCT
@@ -130,8 +169,21 @@ class PredictionDecisionPolicy:
             market_min_edge_pct=market_min_edge_pct,
             top_probability_pct=top_probability_pct,
         )
+
+        base_top = settings.DECISION_MIN_TOP_PROBABILITY_PCT
+        base_margin = settings.DECISION_MIN_MARGIN_PCT
+
+        eligible_prob = top_probability_pct >= base_top and margin_pct >= base_margin
+        in_conditional_band = (
+            top_probability_pct >= cond_top
+            and margin_pct >= cond_margin
+            and not eligible_prob
+        )
+
         if reasons:
             status = "abstain"
+        elif in_conditional_band:
+            status = "conditional"
         elif (
             require_market
             and market_validation["present"]
@@ -148,15 +200,16 @@ class PredictionDecisionPolicy:
         else:
             status = "eligible"
 
-        confidence_tier = (
-            "low"
-            if reasons
-            else (
-                "high"
-                if top_probability_pct >= 60.0 and margin_pct >= 15.0
-                else "medium"
-            )
-        )
+        high_entropy = entropy > settings.DECISION_MAX_NORMALIZED_ENTROPY
+        if reasons:
+            confidence_tier = "low"
+        elif status == "conditional" or high_entropy:
+            confidence_tier = "conditional"
+        elif top_probability_pct >= 60.0 and margin_pct >= 15.0:
+            confidence_tier = "high"
+        else:
+            confidence_tier = "medium"
+
         return {
             "status": status,
             "reasons": reasons,

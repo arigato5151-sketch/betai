@@ -66,6 +66,10 @@ test("ABSTAIN nedenlerini kullanıcıya Türkçe açıklar", () => {
     "Güncel 1X2 oranları bulunamadı",
   );
   assert.equal(
+    eligibilityReasonLabel("local_h2h_unavailable"),
+    "İki takımın doğrulanmış geçmiş karşılaşması bulunamadı",
+  );
+  assert.equal(
     decisionReasonLabel("probability_margin_too_low"),
     "En olası iki sonuç arasındaki fark yetersiz",
   );

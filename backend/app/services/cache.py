@@ -34,17 +34,24 @@ class TieredCache:
             )
 
     async def _connect_redis(self) -> None:
+        client: aioredis.Redis | None = None
         try:
-            client = aioredis.from_url(
+            connected_client = aioredis.from_url(
                 settings.REDIS_URL,
                 encoding="utf-8",
                 decode_responses=True,
                 socket_timeout=2.0,
             )
-            await client.ping()
-            self.redis_client = client
+            client = connected_client
+            await connected_client.ping()
+            self.redis_client = connected_client
             logger.info("Connected successfully to Redis caching layer.")
         except Exception as exc:
+            if client is not None:
+                try:
+                    await client.aclose()
+                except Exception:
+                    logger.debug("Redis client close failed.", exc_info=True)
             self.redis_client = None
             logger.warning("Redis cache connection failed: %s", exc)
 
@@ -52,6 +59,7 @@ class TieredCache:
         if not settings.MEMCACHED_HOST:
             self.memcached_client = None
             return
+        client: aiomcache.Client | None = None
         try:
             client = aiomcache.Client(
                 settings.MEMCACHED_HOST,
@@ -65,6 +73,11 @@ class TieredCache:
             self.memcached_client = client
             logger.info("Connected successfully to Memcached fallback layer.")
         except Exception as exc:
+            if client is not None:
+                try:
+                    await client.close()
+                except Exception:
+                    logger.debug("Memcached client close failed.", exc_info=True)
             self.memcached_client = None
             logger.warning("Memcached cache connection failed: %s", exc)
 

@@ -10,6 +10,7 @@ from app.prediction.ml.historical import HistoricalFeatureService
 from app.tasks.jobs import (
     _current_football_season,
     _enrich_historical_player_context,
+    _missing_fixture_history_scopes,
     sync_football_data_fixtures_task,
     sync_historical_fixtures_task,
 )
@@ -119,6 +120,29 @@ def test_historical_upsert_is_idempotent_and_updates_scores(
     assert stored.home_starting_xi == list(range(1, 12))
     assert stored.away_starting_xi == list(range(20, 31))
     assert historical_repository.db.query(stored.__class__).count() == 1
+
+
+def test_xg_training_and_backfill_queries_are_bounded(
+    historical_repository: HistoricalFixtureRepository,
+) -> None:
+    kickoff = datetime(2026, 8, 1, 18, tzinfo=UTC)
+    historical_repository.upsert_many(
+        [
+            {
+                **fixture_row(300 + index, kickoff + timedelta(days=index)),
+                "xg_source": "understat" if index < 2 else None,
+                "home_xg": 1.2 if index < 2 else None,
+                "away_xg": 0.8 if index < 2 else None,
+            }
+            for index in range(4)
+        ]
+    )
+
+    observed = historical_repository.get_recent_observed_xg(1)
+    pending = historical_repository.get_missing_xg(1)
+
+    assert [fixture.fixture_id for fixture in observed] == [301]
+    assert [fixture.fixture_id for fixture in pending] == [302]
 
 
 def test_get_by_composite_key_requires_single_row(
@@ -403,6 +427,123 @@ def test_historical_context_resolves_external_team_ids_by_name(
     assert context.away_matches_df["goals_for"].tolist() == [1]
 
 
+def test_historical_context_uses_promoted_team_history_from_another_league(
+    historical_repository: HistoricalFixtureRepository,
+) -> None:
+    cutoff = datetime(2026, 8, 14, tzinfo=UTC)
+    row = fixture_row(
+        -(1 << 52),
+        cutoff - timedelta(days=30),
+        home_team_id=1_000_138_951,
+        away_team_id=1_000_138_974,
+        league_id=204,
+        season=2025,
+    )
+    row["home_team"] = "Çorum FK"
+    row["away_team"] = "Bodrum"
+    row["data_source"] = "thesportsdb"
+    historical_repository.upsert_many([row])
+
+    context = HistoricalFeatureService(historical_repository).build_context(
+        home_team_id=2_373_329_775,
+        away_team_id=2_285_755_108,
+        home_team_name="Galatasaray",
+        away_team_name="Çorum",
+        league_id=203,
+        before=cutoff,
+    )
+
+    assert context.away_matches_df is not None
+    assert context.away_matches_df["goals_for"].tolist() == [2]
+    assert context.away_elo_available is False
+
+
+def test_historical_context_merges_recent_form_across_provider_team_ids(
+    historical_repository: HistoricalFixtureRepository,
+) -> None:
+    cutoff = datetime(2026, 8, 23, tzinfo=UTC)
+    rows: list[dict[str, object]] = []
+    for index in range(5):
+        row = fixture_row(
+            10_000 + index,
+            cutoff - timedelta(days=index + 1),
+            home_team_id=700 + index,
+            away_team_id=100 if index < 2 else 200,
+            home_goals=0,
+            away_goals=index + 1,
+            league_id=135,
+        )
+        row["home_team"] = f"Rakip {index}"
+        row["away_team"] = "Juventus"
+        rows.append(row)
+    historical_repository.upsert_many(rows)
+
+    context = HistoricalFeatureService(historical_repository).build_context(
+        home_team_id=999,
+        away_team_id=625,
+        home_team_name="Frosinone",
+        away_team_name="Juventus",
+        league_id=135,
+        before=cutoff,
+        recent_match_count=5,
+    )
+
+    assert context.away_matches_df is not None
+    assert len(context.away_matches_df) == 5
+    assert context.away_matches_df["goals_for"].tolist() == [5, 4, 3, 2, 1]
+
+
+def test_cross_competition_fallback_keeps_other_sides_league_resolution(
+    historical_repository: HistoricalFixtureRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cutoff = datetime(2026, 8, 23, tzinfo=UTC)
+    league_rows: list[dict[str, object]] = []
+    for index in range(5):
+        row = fixture_row(
+            11_000 + index,
+            cutoff - timedelta(days=30 + index),
+            home_team_id=700 + index,
+            away_team_id=900,
+            league_id=140,
+        )
+        row["away_team"] = "Racing Santander"
+        league_rows.append(row)
+
+    cross_row = fixture_row(
+        12_000,
+        cutoff - timedelta(days=1),
+        home_team_id=111,
+        away_team_id=999,
+        league_id=136,
+    )
+    cross_row["home_team"] = "Frosinone"
+    cross_row["away_team"] = "Racing Santander"
+    historical_repository.upsert_many([*league_rows, cross_row])
+    stored_cross_row = historical_repository.get_by_fixture_id(12_000)
+    assert stored_cross_row is not None
+    monkeypatch.setattr(
+        historical_repository,
+        "get_recent_before",
+        lambda **_kwargs: [stored_cross_row],
+    )
+
+    context = HistoricalFeatureService(historical_repository).build_context(
+        home_team_id=101,
+        away_team_id=202,
+        home_team_name="Frosinone",
+        away_team_name="Racing Santander",
+        league_id=140,
+        before=cutoff,
+        recent_match_count=5,
+    )
+
+    assert context.home_matches_df is not None
+    assert len(context.home_matches_df) == 1
+    assert context.away_matches_df is not None
+    assert len(context.away_matches_df) == 5
+
+
 def test_historical_context_resolves_conservative_provider_name_variants(
     historical_repository: HistoricalFixtureRepository,
 ) -> None:
@@ -539,9 +680,24 @@ def test_historical_sync_task_fetches_then_persists_without_duplicates(
                 "player_performances": player_context_rows(100, kickoff),
             }
 
-    monkeypatch.setattr(jobs, "ALLOWED_LEAGUE_IDS", {2, 3, 203, 848})
-    monkeypatch.setattr(jobs, "APIFootballClient", FakeClient)
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: Session(engine))
+    class _FakeLock:
+        acquired = True
+        available = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return None
+
+    monkeypatch.setattr("app.tasks.fixtures_sync.ALLOWED_LEAGUE_IDS", {2, 3, 203, 848})
+    monkeypatch.setattr(jobs.settings, "API_FOOTBALL_HISTORICAL_SYNC_ENABLED", True)
+    monkeypatch.setattr("app.tasks.fixtures_sync.APIFootballClient", FakeClient)
+    monkeypatch.setattr("app.tasks.fixtures_sync.SessionLocal", lambda: Session(engine))
+    monkeypatch.setattr(
+        "app.tasks.fixtures_sync.DistributedTaskLock",
+        lambda name, ttl_seconds=900, **kw: _FakeLock(),
+    )
 
     result = sync_historical_fixtures_task.run([2026], [203])
 
@@ -562,17 +718,44 @@ def test_historical_sync_rejects_unsupported_league_scope(
 ) -> None:
     from app.tasks import jobs
 
-    monkeypatch.setattr(jobs, "ALLOWED_LEAGUE_IDS", {2, 3, 848})
+    class _FakeLock:
+        acquired = True
+        available = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return None
+
+    monkeypatch.setattr("app.tasks.fixtures_sync.ALLOWED_LEAGUE_IDS", {2, 3, 848})
+    monkeypatch.setattr(jobs.settings, "API_FOOTBALL_HISTORICAL_SYNC_ENABLED", True)
+    monkeypatch.setattr(
+        "app.tasks.fixtures_sync.DistributedTaskLock",
+        lambda name, ttl_seconds=900, **kw: _FakeLock(),
+    )
 
     with pytest.raises(ValueError, match=r"Unsupported league_ids: \[999999\]"):
         sync_historical_fixtures_task.run([2026], [999999])
+
+
+def test_historical_sync_is_disabled_for_free_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.tasks import jobs
+
+    monkeypatch.setattr(jobs.settings, "API_FOOTBALL_HISTORICAL_SYNC_ENABLED", False)
+
+    assert sync_historical_fixtures_task.run([2026], [203]) == {
+        "status": "disabled",
+        "reason": "api_football_historical_sync_disabled",
+    }
 
 
 def test_football_data_sync_task_persists_source_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.services.football_data_csv import FootballDataImport
-    from app.tasks import jobs
 
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -596,8 +779,8 @@ def test_football_data_sync_task_persists_source_rows(
             assert (league_id, season) == (203, 2025)
             return FootballDataImport(fixtures=[row, row], skipped_rows=2)
 
-    monkeypatch.setattr(jobs, "FootballDataCSVClient", FakeClient)
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: Session(engine))
+    monkeypatch.setattr("app.tasks.fixtures_sync.FootballDataCSVClient", FakeClient)
+    monkeypatch.setattr("app.tasks.fixtures_sync.SessionLocal", lambda: Session(engine))
 
     result = sync_football_data_fixtures_task.run([2025])
 
@@ -624,7 +807,6 @@ def test_football_data_sync_falls_back_until_new_feed_is_published(
         FootballDataDownloadError,
         FootballDataImport,
     )
-    from app.tasks import jobs
 
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -662,9 +844,11 @@ def test_football_data_sync_falls_back_until_new_feed_is_published(
             assert season == 2026
             return FootballDataImport(fixtures=[current_row], skipped_rows=0)
 
-    monkeypatch.setattr(jobs, "_current_football_season", lambda: 2026)
-    monkeypatch.setattr(jobs, "FootballDataCSVClient", FakeClient)
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: Session(engine))
+    monkeypatch.setattr(
+        "app.tasks.fixtures_sync._current_football_season", lambda: 2026
+    )
+    monkeypatch.setattr("app.tasks.fixtures_sync.FootballDataCSVClient", FakeClient)
+    monkeypatch.setattr("app.tasks.fixtures_sync.SessionLocal", lambda: Session(engine))
 
     result = sync_football_data_fixtures_task.run()
 
@@ -684,3 +868,175 @@ def test_football_data_sync_falls_back_until_new_feed_is_published(
     assert calls == [(39, 2026), (39, 2025), (235, 2026)]
     with Session(engine) as session:
         assert session.query(HistoricalFixture).count() == 2
+
+
+def test_missing_fixture_history_scopes_use_names_across_provider_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    def session_factory() -> Session:
+        return Session(engine)
+
+    with session_factory() as db:
+        HistoricalFixtureRepository(db).upsert_many(
+            [
+                {
+                    **fixture_row(
+                        91,
+                        datetime(2026, 5, 1, tzinfo=UTC),
+                        home_team_id=11,
+                        away_team_id=12,
+                    ),
+                    "home_team": "Galatasaray",
+                    "away_team": "Çorum FK",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("app.tasks._helpers.SessionLocal", session_factory)
+    base = {
+        "league_id": 203,
+        "season": 2026,
+        "kickoff": "2026-08-14T21:30:00+03:00",
+        "home_team": "Galatasaray",
+    }
+
+    assert _missing_fixture_history_scopes([{**base, "away_team": "Çorum"}]) == []
+    assert _missing_fixture_history_scopes([{**base, "away_team": "Yeni Kulüp"}]) == [
+        (203, 2025),
+        (203, 2026),
+    ]
+
+
+def test_recent_league_history_is_bounded_and_chronological(
+    historical_repository: HistoricalFixtureRepository,
+) -> None:
+    kickoff = datetime(2026, 8, 1, 18, tzinfo=UTC)
+    historical_repository.upsert_many(
+        [
+            fixture_row(950 + index, kickoff + timedelta(days=index))
+            for index in range(3)
+        ]
+    )
+
+    fixtures = historical_repository.get_recent_league_history(
+        league_id=203,
+        before=kickoff + timedelta(days=10),
+        limit=2,
+    )
+
+    assert [fixture.fixture_id for fixture in fixtures] == [951, 952]
+
+
+def test_historical_upsert_accepts_rows_with_different_optional_columns() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    first = fixture_row(301, datetime(2026, 1, 1, tzinfo=UTC))
+    first["home_shots"] = 12
+    second = fixture_row(302, datetime(2026, 1, 2, tzinfo=UTC))
+
+    with Session(engine) as db:
+        processed = HistoricalFixtureRepository(db).upsert_many([first, second])
+        rows = db.query(HistoricalFixture).order_by(HistoricalFixture.fixture_id).all()
+
+    assert processed == 2
+    assert rows[0].home_shots == 12
+    assert rows[1].home_shots is None
+
+
+def test_missing_api_targets_only_include_insufficient_sides() -> None:
+    from app.tasks._helpers import _missing_api_team_targets
+
+    fixtures = [
+        {
+            "home_team_id": 994,
+            "home_team": "Goztepe",
+            "away_team_id": 611,
+            "away_team": "Fenerbahce",
+            "data_readiness": {
+                "reasons": ["home_history_insufficient"],
+            },
+        },
+        {
+            # Aggregated provider IDs must never be sent to API-Football.
+            "home_team_id": 500_000_001,
+            "home_team": "Synthetic Team",
+            "away_team_id": 611,
+            "away_team": "Fenerbahce",
+            "data_readiness": {
+                "reasons": ["home_history_insufficient"],
+            },
+        },
+    ]
+
+    assert _missing_api_team_targets(fixtures) == [(994, "Goztepe")]
+
+
+def test_missing_history_sync_classifies_unpublished_feed_as_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.football_data_csv import FootballDataDownloadError
+    from app.tasks.jobs import sync_missing_fixture_history_task
+
+    class FakeClient:
+        supported_league_ids = frozenset({39})
+
+        async def get_completed_fixtures(self, league_id: int, season: int):
+            assert (league_id, season) == (39, 2026)
+            raise FootballDataDownloadError("not published", status_code=404)
+
+    class FakeLock:
+        acquired = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeRepository:
+        def __init__(self, _db) -> None:
+            pass
+
+        def upsert_many(self, rows: list[dict[str, object]]) -> int:
+            assert rows == []
+            return 0
+
+    monkeypatch.setattr(
+        "app.tasks.fixtures_sync._missing_fixture_history_scopes",
+        lambda _fixtures: [(39, 2026)],
+    )
+    monkeypatch.setattr(
+        "app.tasks.fixtures_sync._missing_fixture_team_targets",
+        lambda _fixtures: [],
+    )
+    monkeypatch.setattr("app.tasks.fixtures_sync.FootballDataCSVClient", FakeClient)
+    monkeypatch.setattr(
+        "app.tasks.fixtures_sync.DistributedTaskLock",
+        lambda *args, **kwargs: FakeLock(),
+    )
+    monkeypatch.setattr("app.tasks.fixtures_sync.SessionLocal", FakeSession)
+    monkeypatch.setattr(
+        "app.tasks.fixtures_sync.HistoricalFixtureRepository", FakeRepository
+    )
+
+    result = sync_missing_fixture_history_task.run([])
+
+    assert result["status"] == "completed"
+    assert result["failures"] == []
+    assert result["pending_scopes"] == [
+        {
+            "league_id": 39,
+            "season": 2026,
+            "error": "FootballDataDownloadError",
+        }
+    ]

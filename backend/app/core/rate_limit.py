@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 import redis
+from cachetools import TTLCache
 
 from app.core.config import settings
 
@@ -23,6 +24,7 @@ class LoginRateLimiter:
         *,
         clock: Callable[[], float] | None = None,
         redis_recovery_seconds: float | None = None,
+        local_max_entries: int = 10_000,
     ) -> None:
         self.redis_client: Any = redis_client or redis.Redis.from_url(
             settings.REDIS_URL,
@@ -36,7 +38,14 @@ class LoginRateLimiter:
             if redis_recovery_seconds is not None
             else settings.LOGIN_REDIS_RECOVERY_SECONDS
         )
-        self._local: dict[str, tuple[int, float, float]] = {}
+        self._local: TTLCache[str, tuple[int, float, float]] = TTLCache(
+            maxsize=local_max_entries,
+            ttl=max(
+                settings.LOGIN_WINDOW_SECONDS,
+                settings.LOGIN_LOCKOUT_SECONDS,
+            ),
+            timer=self._clock,
+        )
         self._lock = threading.Lock()
         self._use_redis = True
         self._last_redis_retry = 0.0
@@ -145,4 +154,80 @@ class LoginRateLimiter:
             self._local[key] = (count, started_at, locked_until)
 
 
+class FixedWindowRateLimiter:
+    """Redis-authoritative request quota with a bounded local outage fallback."""
+
+    def __init__(
+        self,
+        namespace: str,
+        *,
+        redis_client: Any | None = None,
+        clock: Callable[[], float] | None = None,
+        local_max_entries: int = 10_000,
+        max_requests: int | None = None,
+        window_seconds: int | None = None,
+    ) -> None:
+        self.namespace = namespace
+        self._max_requests = max_requests
+        self._window_seconds = window_seconds
+        self.redis_client: Any = redis_client or redis.Redis.from_url(
+            settings.REDIS_URL,
+            socket_connect_timeout=0.5,
+            socket_timeout=0.5,
+            decode_responses=True,
+        )
+        self._clock = clock or time.monotonic
+        self._local: TTLCache[str, int] = TTLCache(
+            maxsize=local_max_entries,
+            ttl=self._request_window_seconds,
+            timer=self._clock,
+        )
+        self._lock = threading.Lock()
+
+    def consume(self, subject: str) -> tuple[bool, int]:
+        key = hashlib.sha256(subject.encode("utf-8")).hexdigest()
+        redis_key = f"bet_ai:{self.namespace}:{key}"
+        try:
+            count = int(self.redis_client.incr(redis_key))
+            if count == 1:
+                self.redis_client.expire(
+                    redis_key, self._request_window_seconds
+                )
+            if count <= self._max_request_count:
+                return True, 0
+            ttl = int(self.redis_client.ttl(redis_key))
+            return False, max(1, ttl)
+        except redis.RedisError as exc:
+            logger.warning("Redis quota unavailable; using local fallback: %s", exc)
+
+        with self._lock:
+            count = self._local.get(key, 0) + 1
+            self._local[key] = count
+        if count <= self._max_request_count:
+            return True, 0
+        return False, self._request_window_seconds
+
+    @property
+    def _max_request_count(self) -> int:
+        return (
+            self._max_requests
+            if self._max_requests is not None
+            else settings.BATCH_PREDICTION_MAX_REQUESTS
+        )
+
+    @property
+    def _request_window_seconds(self) -> int:
+        return (
+            self._window_seconds
+            if self._window_seconds is not None
+            else settings.BATCH_PREDICTION_WINDOW_SECONDS
+        )
+
+
 login_rate_limiter = LoginRateLimiter()
+batch_prediction_rate_limiter = FixedWindowRateLimiter("batch_prediction")
+registration_rate_limiter = FixedWindowRateLimiter(
+    "self_registration",
+    max_requests=settings.REGISTRATION_MAX_REQUESTS,
+    window_seconds=settings.REGISTRATION_WINDOW_SECONDS,
+)

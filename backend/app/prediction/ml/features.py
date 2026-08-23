@@ -261,17 +261,12 @@ class FeatureEngine:
         """Belirtilen sütuna göre streak sayısını hesapla (max 5)."""
         if matches_df.empty or col not in matches_df.columns:
             return 0
-        df = matches_df.sort_values("match_date", ascending=False).reset_index(
-            drop=True
+        values = pd.to_numeric(
+            matches_df.sort_values("match_date", ascending=False)[col].head(max_len),
+            errors="coerce",
         )
-        streak = 0
-        for i in range(min(max_len, len(df))):
-            value = pd.to_numeric(pd.Series([df.loc[i, col]]), errors="coerce").iloc[0]
-            if pd.notna(value) and int(value) == 1:
-                streak += 1
-            else:
-                break
-        return streak
+        mask = values.notna() & (values.astype(int) == 1)
+        return int(mask.cumprod().sum())
 
     @staticmethod
     def compute_goals_avg(
